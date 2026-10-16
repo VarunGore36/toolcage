@@ -204,3 +204,21 @@ pub struct FetchOutcome {
     pub rule_ids: Vec<String>,
     pub body: String,
 }
+
+/// Panic path: freeze audit with final checkpoint event, mark host tainted.
+/// Operator clears taint out-of-band. Sessions must be stopped by caller.
+pub fn panic_freeze(audit_path: &std::path::Path, reason: &str) -> anyhow::Result<String> {
+    let mut w = Writer::open(audit_path)?;
+    let e = w.append(Event {
+        seq: 0, ts_wall: now_wall(), session: "supervisor".into(),
+        actor: "operator".into(), action: "panic".into(),
+        request_hash: "panic".into(), decision: "deny-all".into(),
+        rule_ids: vec!["panic:freeze".into()], token_rev_id: String::new(),
+        result: format!("frozen: {reason}"),
+        bytes: 0, claimed_by: "host".into(),
+        prev_hash: String::new(), hash: String::new(),
+    })?;
+    let taint = audit_path.with_extension("tainted");
+    std::fs::write(&taint, format!("tainted at {} head {}\n", e.ts_wall, e.hash))?;
+    Ok(e.hash)
+}

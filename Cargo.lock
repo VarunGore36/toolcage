@@ -631,6 +631,7 @@ dependencies = [
  "toolcage-audit",
  "toolcage-broker",
  "toolcage-capability",
+ "toolcage-guest-agent",
  "toolcage-policy",
  "toolcage-proxy",
 ]

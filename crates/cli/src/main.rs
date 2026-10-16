@@ -68,7 +68,10 @@ enum Cmd {
         op: McpOp,
     },
     Doctor,
-    Panic,
+    Panic {
+        #[arg(long)] audit: PathBuf,
+        #[arg(long, default_value = "operator panic")] reason: String,
+    },
     Audit {
         #[command(subcommand)]
         op: AuditOp,
@@ -272,8 +275,9 @@ fn main() -> anyhow::Result<()> {
                 println!("run scripts/doctor.sh");
             }
         }
-        Cmd::Panic => {
-            println!("panic: stop all sessions (M6)");
+        Cmd::Panic { audit, reason } => {
+            let head = toolcage_supervisor::panic_freeze(&audit, &reason)?;
+            println!("frozen head {head}; taint file written; clear it out-of-band");
         }
         Cmd::Audit { op } => match op {
             Audit::Verify { log, pubkey } => {
