@@ -27,7 +27,7 @@ fn audit_write_failure_denies_action() {
     };
     let b = toolcage_broker::Broker::new();
     // open("not-a-dir/audit.jsonl") fails -> propagate as Err, caller must not act.
-    assert!(s.fetch_via_proxy(&b, "github", "GET", "/", None, false, true).is_err());
+    assert!(s.fetch_via_proxy(&b, "github", "GET", "/", None, &toolcage_capability::RevocationList::default(), true).is_err());
     let _ = std::fs::remove_file(&dir);
 }
 
@@ -43,14 +43,49 @@ fn proxy_down_means_closed() {
 fn broker_unreachable_denies_cred_use() {
     // Empty broker (unreachable store) -> inject returns None, body has no-auth, never literal.
     let b = toolcage_broker::Broker::new();
-    assert_eq!(b.inject("github_token", "github", "GET"), None);
+    assert_eq!(b.inject("github_token", "github", "GET", "/"), None);
     let dir = std::env::temp_dir().join("tc-chaos-broker");
     std::fs::create_dir_all(&dir).unwrap();
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
-    let o = sup_at(&audit).fetch_via_proxy(&b, "github", "GET", "/repos/acme/app/issues/1", None, false, true).unwrap();
+    let o = sup_at(&audit).fetch_via_proxy(&b, "github", "GET", "/repos/acme/app/issues/1", None, &toolcage_capability::RevocationList::default(), true).unwrap();
     assert!(o.allowed);
     assert!(!o.body.contains("s3cr3t"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn revoked_token_denied_and_audited() {
+    // I3: revoke(parent) kills fetch even with an otherwise-valid child token.
+    use toolcage_capability::{RevocationList, Rights, Token};
+    let dir = std::env::temp_dir().join("tc-chaos-revoked");
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let root = Token::root("r0", Rights {
+        fs_prefixes: vec!["/workspace".into()],
+        net_hosts: vec!["github".into()],
+        methods: vec!["GET".into()],
+        cred_use: vec![],
+        budget_bytes: 1000,
+        expires_at: 9_999_999_999,
+    });
+    let child = root.attenuate("r1", Rights {
+        fs_prefixes: vec![],
+        net_hosts: vec!["github".into()],
+        methods: vec!["GET".into()],
+        cred_use: vec![],
+        budget_bytes: 10,
+        expires_at: 9_999_999_000,
+    }).unwrap();
+    let mut rl = RevocationList::default();
+    rl.track(&child);
+    rl.revoke("r0");
+    let o = sup_at(&audit)
+        .fetch_via_proxy(&toolcage_broker::Broker::new(), "github", "GET", "/", Some(&child), &rl, true)
+        .unwrap();
+    assert!(!o.allowed && !o.need_approval);
+    assert!(o.rule_ids.contains(&"token:deny".to_string()));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -65,7 +100,7 @@ fn disk_full_simulated_by_readonly() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&audit, std::fs::Permissions::from_mode(0o444)).unwrap();
         // Appending may still succeed as root; assert verify still holds either way.
-        let _ = sup_at(&audit).fetch_via_proxy(&toolcage_broker::Broker::new(), "github", "GET", "/", None, false, true);
+        let _ = sup_at(&audit).fetch_via_proxy(&toolcage_broker::Broker::new(), "github", "GET", "/", None, &toolcage_capability::RevocationList::default(), true);
         assert!(toolcage_audit::verify(&audit).is_ok());
         std::fs::set_permissions(&audit, std::fs::Permissions::from_mode(0o644)).unwrap();
     }

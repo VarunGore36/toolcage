@@ -190,14 +190,14 @@ impl Supervisor {
         method: &str,
         path: &str,
         token: Option<&toolcage_capability::Token>,
-        revoked: bool,
+        revocation: &toolcage_capability::RevocationList,
         approved: bool,
     ) -> anyhow::Result<FetchOutcome> {
         let pd = toolcage_proxy::decide(&self.policy, alias_or_host, method, path);
         let mut w = Writer::open(&self.audit_path)?;
-        // Token check (I3): narrow rights, valid tag, not revoked.
+        // Token check (I3): narrow rights, valid tag, unexpired, not revoked.
         if let Some(t) = token {
-            if revoked || !t.verify_tag() || !t.allows(None, Some(alias_or_host), Some(method), None) {
+            if revocation.is_revoked(t) || !t.verify_tag() || !t.allows(None, Some(alias_or_host), Some(method), None) {
                 w.append(Event {
                     seq: 0, ts_wall: now_wall(), session: self.session.clone(),
                     actor: "agent".into(), action: format!("http.request {method} {alias_or_host}{path}"),
@@ -245,7 +245,7 @@ impl Supervisor {
         let upstream = pd.upstream.clone().unwrap_or_default();
         // Simulated upstream response (would be real TLS here). May echo secret -> scrub.
         let raw_upstream = if let Some(cn) = &cred_name {
-            match broker.inject(cn, &cred_name_alias(alias_or_host), method) {
+            match broker.inject(cn, &cred_name_alias(alias_or_host), method, path) {
                 Some(secret) => format!("upstream {upstream}{path} ok auth={secret}"),
                 None => format!("upstream {upstream}{path} ok no-auth"),
             }

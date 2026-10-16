@@ -70,6 +70,7 @@ pub fn route(
     sup: &toolcage_supervisor::Supervisor,
     broker: &toolcage_broker::Broker,
     token: Option<&toolcage_capability::Token>,
+    revocation: &toolcage_capability::RevocationList,
     name: &str,
     args: &serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
@@ -111,7 +112,7 @@ pub fn route(
             let host = args.get("host").and_then(|v| v.as_str()).unwrap_or("");
             let method = args.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("/");
-            let o = sup.fetch_via_proxy(broker, host, method, path, token, false, false)?;
+            let o = sup.fetch_via_proxy(broker, host, method, path, token, revocation, false)?;
             if o.need_approval {
                 anyhow::bail!("paused {:?}", o.rule_ids);
             }
@@ -194,7 +195,8 @@ mod tests {
             session: "t".into(),
         };
         let b = toolcage_broker::Broker::new();
-        assert!(route(&sup, &b, None, "nope", &serde_json::json!({})).is_err());
+        let rl = toolcage_capability::RevocationList::default();
+        assert!(route(&sup, &b, None, &rl, "nope", &serde_json::json!({})).is_err());
     }
     #[test]
     fn learn_proposes_denials() {

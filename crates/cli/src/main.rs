@@ -178,7 +178,8 @@ fn main() -> anyhow::Result<()> {
                 broker.insert(toolcage_broker::Credential { name: cred, value: secret_value, use_with: "github".into(), methods: vec![], paths: vec![] });
             }
             let tok = load_token(&token)?;
-            let o = sup.fetch_via_proxy(&broker, &host, &method, &path, tok.as_ref(), false, approve)?;
+            let rl = toolcage_capability::RevocationList::default();
+            let o = sup.fetch_via_proxy(&broker, &host, &method, &path, tok.as_ref(), &rl, approve)?;
             if o.need_approval {
                 eprintln!("paused: approval required {:?}", o.rule_ids);
                 std::process::exit(3);
@@ -192,13 +193,14 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::Token { op } => match op {
             TokenOp::Mint { rev, out } => {
+                // Far-future expiry: allows() enforces wall-clock expiry fail-closed.
                 let t = toolcage_capability::Token::root(&rev, toolcage_capability::Rights {
                     fs_prefixes: vec!["/workspace".into()],
                     net_hosts: vec!["github".into(), "registry.npmjs.org".into()],
                     methods: vec!["GET".into(), "POST".into()],
                     cred_use: vec!["github_token".into()],
                     budget_bytes: 1000,
-                    expires_at: 9999,
+                    expires_at: 9_999_999_999,
                 });
                 std::fs::write(&out, serde_json::to_string_pretty(&t)?)?;
                 println!("minted {rev} -> {}", out.display());
@@ -206,13 +208,17 @@ fn main() -> anyhow::Result<()> {
             TokenOp::Attenuate { parent, rev, out, hosts, budget } => {
                 let p: toolcage_capability::Token = serde_json::from_str(&std::fs::read_to_string(&parent)?)?;
                 let hs: Vec<String> = if hosts.is_empty() { vec![] } else { hosts.split(',').map(|s| s.to_string()).collect() };
+                // Child expiry: 1h from now, clamped to parent expiry so attenuation
+                // never widens (and stays usable with wall-clock enforcement).
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+                let child_exp = if p.rights.expires_at == 0 { now + 3600 } else { p.rights.expires_at.min(now + 3600) };
                 let c = p.attenuate(&rev, toolcage_capability::Rights {
                     fs_prefixes: vec![],
                     net_hosts: hs,
                     methods: vec![],
                     cred_use: vec![],
-                    budget_bytes: budget,
-                    expires_at: 1,
+                    budget_bytes: budget.min(p.rights.budget_bytes),
+                    expires_at: child_exp,
                 })?;
                 std::fs::write(&out, serde_json::to_string_pretty(&c)?)?;
                 println!("attenuated {} -> {rev}", p.rev_id);
@@ -241,7 +247,7 @@ fn main() -> anyhow::Result<()> {
                     };
                     let resp = if req.method == "tools/call" {
                         match serde_json::from_value::<toolcage_mcp::CallParams>(req.params) {
-                            Ok(cp) => match toolcage_mcp::route(&sup, &broker, None, &cp.name, &cp.arguments) {
+                            Ok(cp) => match toolcage_mcp::route(&sup, &broker, None, &toolcage_capability::RevocationList::default(), &cp.name, &cp.arguments) {
                                 Ok(v) => toolcage_mcp::RpcResp::ok(req.id, v),
                                 Err(e) => toolcage_mcp::RpcResp::deny(req.id, &[e.to_string()]),
                             },
@@ -261,7 +267,7 @@ fn main() -> anyhow::Result<()> {
                 let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "mcp-call".into() };
                 let broker = toolcage_broker::Broker::new();
                 let args: serde_json::Value = serde_json::from_str(&args_json)?;
-                match toolcage_mcp::route(&sup, &broker, None, &name, &args) {
+                match toolcage_mcp::route(&sup, &broker, None, &toolcage_capability::RevocationList::default(), &name, &args) {
                     Ok(v) => println!("{v}"),
                     Err(e) => {
                         eprintln!("denied: {e}");

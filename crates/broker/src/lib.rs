@@ -75,12 +75,18 @@ impl Broker {
 
     /// Returns the secret value ONLY if dest/method/path are allowed.
     /// Caller (proxy) attaches it upstream; it never goes to the guest.
-    pub fn inject(&self, name: &str, dest_alias: &str, method: &str) -> Option<&str> {
+    /// Empty methods/paths on a credential means "no constraint on that axis".
+    pub fn inject(&self, name: &str, dest_alias: &str, method: &str, path: &str) -> Option<&str> {
         let c = self.creds.get(name)?;
         if !c.use_with.eq_ignore_ascii_case(dest_alias) {
             return None;
         }
         if !c.methods.is_empty() && !c.methods.iter().any(|m| m.eq_ignore_ascii_case(method)) {
+            return None;
+        }
+        if !c.paths.is_empty()
+            && !c.paths.iter().any(|p| path_match_cred(p, path))
+        {
             return None;
         }
         Some(&c.value)
@@ -116,6 +122,15 @@ fn rand_suffix() -> String {
     format!("{:x}", n & 0xffffff)
 }
 
+/// Trailing-`/**` match only (same semantics as policy paths): exact or under prefix.
+fn path_match_cred(pattern: &str, path: &str) -> bool {
+    if let Some(prefix) = pattern.strip_suffix("/**") {
+        path == prefix || path.starts_with(&format!("{prefix}/"))
+    } else {
+        pattern == path
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,8 +138,12 @@ mod tests {
     fn inject_only_for_bound_dest() {
         let mut b = Broker::new();
         b.insert(Credential { name: "github_token".into(), value: "s3cr3t".into(), use_with: "github".into(), methods: vec![], paths: vec![] });
-        assert_eq!(b.inject("github_token", "github", "GET"), Some("s3cr3t"));
-        assert_eq!(b.inject("github_token", "evil", "GET"), None);
+        assert_eq!(b.inject("github_token", "github", "GET", "/"), Some("s3cr3t"));
+        assert_eq!(b.inject("github_token", "evil", "GET", "/"), None);
+        // Path-bound credential denies outside its prefix.
+        b.insert(Credential { name: "scoped".into(), value: "v".into(), use_with: "github".into(), methods: vec![], paths: vec!["/repos/acme/**".into()] });
+        assert_eq!(b.inject("scoped", "github", "GET", "/repos/acme/app"), Some("v"));
+        assert_eq!(b.inject("scoped", "github", "GET", "/repos/evil"), None);
         // Scrub strips echo
         assert_eq!(b.scrub("token=s3cr3t ok"), "token=[REDACTED] ok");
         // Log id leaks nothing
