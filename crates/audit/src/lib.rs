@@ -69,15 +69,11 @@ impl Writer {
         let mut next_seq = 0u64;
         let mut head = "GENESIS".to_string();
         if path.exists() {
-            let f = File::open(path)?;
-            for line in BufReader::new(f).lines() {
-                let line = line?;
-                if line.trim().is_empty() {
-                    continue;
-                }
-                let e: Event = serde_json::from_str(&line)?;
-                next_seq = e.seq + 1;
-                head = e.hash.clone();
+            // Verify existing chain before appending: never extend a corrupt log.
+            if std::fs::metadata(path)?.len() > 0 {
+                let (n, h) = verify(path)?;
+                next_seq = n;
+                head = h;
             }
         }
         let file = OpenOptions::new().create(true).append(true).open(path)?;

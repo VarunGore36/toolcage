@@ -1,4 +1,6 @@
 //! Supervisor v0: policy check -> audit intent -> exec argv -> audit outcome.
+use sha2::{Digest, Sha256};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -24,6 +26,16 @@ fn now_wall() -> String {
     format!("{t}")
 }
 
+fn hash_argv(argv: &[String]) -> String {
+    let mut h = Sha256::new();
+    for a in argv {
+        h.update([a.len() as u8]);
+        h.update(a.as_bytes());
+        h.update([0u8]);
+    }
+    h.finalize().iter().map(|x| format!("{:02x}", x)).collect()
+}
+
 impl Supervisor {
     pub fn check(&self, req: &Request) -> Decision {
         toolcage_policy::decide(&self.policy, req)
@@ -38,14 +50,16 @@ impl Supervisor {
             method: None,
             path: None,
             fs_path: None,
+            argv: Some(argv.to_vec()),
         };
         let d = self.check(&req);
         let mut w = Writer::open(&self.audit_path)?;
-        // Write-ahead intent
+        let argv_hash = hash_argv(argv);
+        // Write-ahead intent: store argv hash, never raw argv (secrets stay out of log).
         w.append(Event {
             seq: 0, ts_wall: now_wall(), session: self.session.clone(),
-            actor: "agent".into(), action: format!("proc.exec {:?}", argv),
-            request_hash: "argv".into(), decision: if d.allow { "allow" } else { "deny" }.into(),
+            actor: "agent".into(), action: "proc.exec".into(),
+            request_hash: argv_hash.clone(), decision: if d.allow { "allow" } else { "deny" }.into(),
             rule_ids: d.rule_ids.clone(), token_rev_id: "root".into(),
             result: "intent".into(), bytes: 0, claimed_by: "host".into(),
             prev_hash: String::new(), hash: String::new(),
@@ -53,8 +67,12 @@ impl Supervisor {
         if !d.allow {
             return Ok(ExecOutcome { allowed: false, rule_ids: d.rule_ids, exit_code: None, stdout: vec![], stderr: vec![] });
         }
-        // Cap output at 1 MiB (truncation noted in outcome)
-        let out = Command::new(&argv[0]).args(&argv[1..]).output()?;
+        // env_clear: child never inherits host secrets (I2). Keep only minimal PATH.
+        let out = Command::new(&argv[0])
+            .args(&argv[1..])
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .output()?;
         let mut stdout = out.stdout;
         let mut stderr = out.stderr;
         let mut truncated = false;
@@ -70,13 +88,15 @@ impl Supervisor {
         let code = out.status.code();
         w.append(Event {
             seq: 0, ts_wall: now_wall(), session: self.session.clone(),
-            actor: "supervisor".into(), action: format!("proc.exec {:?}", argv),
-            request_hash: "argv".into(), decision: "allow".into(),
+            actor: "supervisor".into(), action: "proc.exec".into(),
+            request_hash: argv_hash, decision: "allow".into(),
             rule_ids: d.rule_ids.clone(), token_rev_id: "root".into(),
             result: format!("exit={:?} truncated={}", code, truncated),
             bytes: (stdout.len() + stderr.len()) as u64, claimed_by: "host".into(),
             prev_hash: String::new(), hash: String::new(),
         })?;
+        // Ensure caller stream flush ordering is deterministic.
+        let _ = std::io::stdout().flush();
         Ok(ExecOutcome { allowed: true, rule_ids: d.rule_ids, exit_code: code, stdout, stderr })
     }
 }

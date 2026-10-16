@@ -5,6 +5,9 @@ use std::path::PathBuf;
 struct Args {
     #[arg(long)]
     log: PathBuf,
+    /// Accepted for CLI compatibility; Ed25519 checkpoint enforcement lands in M6.
+    #[arg(long)]
+    pubkey: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {

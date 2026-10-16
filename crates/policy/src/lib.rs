@@ -69,6 +69,7 @@ pub struct Request {
     pub method: Option<String>,
     pub path: Option<String>,
     pub fs_path: Option<String>,
+    pub argv: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -112,21 +113,32 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
         rule_ids: vec![rule.into()],
         reason: reason.into(),
     };
-    // Global forbid: metadata / link-local, always denied (I6 invariant).
+    // Global forbid: cloud metadata / link-local, always denied.
+    // Covers common forms so a string variant can't slip past (I1).
     if let Some(h) = &req.host {
-        if h.contains("169.254.169.254") || h == "metadata" {
+        let hl = h.to_ascii_lowercase();
+        if hl.contains("169.254.169.254")
+            || hl.contains("metadata")
+            || hl.contains("instance-data")
+            || hl.contains("100.100.100.200")
+            || hl.contains("metadata.google.internal")
+        {
             return deny("forbid:metadata", "metadata address is never reachable");
         }
     }
     match req.action.as_str() {
         "net.connect" | "http.request" => {
-            let host = req.host.as_deref().unwrap_or("");
-            let method = req.method.as_deref().unwrap_or("GET");
+            let host = req.host.as_deref().unwrap_or("").to_ascii_lowercase();
+            let method = req.method.as_deref().unwrap_or("GET").to_ascii_uppercase();
             let path = req.path.as_deref().unwrap_or("/");
             for h in &policy.net.hosts {
-                let name = h.host.as_deref().or(h.alias.as_deref()).unwrap_or("");
-                if name == host {
-                    if !h.methods.is_empty() && !h.methods.iter().any(|m| m == method) {
+                // A rule matches if EITHER host or alias equals the request host.
+                let rule_match = h.host.as_deref().is_some_and(|x| x.to_ascii_lowercase() == host)
+                    || h.alias.as_deref().is_some_and(|x| x.to_ascii_lowercase() == host);
+                if rule_match {
+                    if !h.methods.is_empty()
+                        && !h.methods.iter().any(|m| m.to_ascii_uppercase() == method)
+                    {
                         continue;
                     }
                     if !h.paths.is_empty() && !h.paths.iter().any(|p| path_match(p, path)) {
@@ -145,24 +157,41 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
             let raw = req.fs_path.as_deref().unwrap_or("/");
             let canon = canonical_path(raw);
             for m in &policy.fs.mounts {
-                if canon == m.path || canon.starts_with(&format!("{}/", m.path)) {
+                let mount = canonical_path(&m.path);
+                let mount = mount.trim_end_matches('/').to_string();
+                let mount = if mount.is_empty() { "/".to_string() } else { mount };
+                if canon == mount || canon.starts_with(&format!("{mount}/")) {
                     if req.action == "fs.write" && m.mode == "ro" {
                         return deny("fs:deny-ro", "mount is read-only");
                     }
                     return Decision {
                         allow: true,
-                        rule_ids: vec![format!("fs:allow:{}", m.path)],
-                        reason: format!("under mount {}", m.path),
+                        rule_ids: vec![format!("fs:allow:{mount}")],
+                        reason: format!("under mount {mount}"),
                     };
                 }
             }
             deny("fs:deny-default", "path outside mounts")
         }
-        "proc.exec" => Decision {
-            allow: true,
-            rule_ids: vec!["proc:allow".into()],
-            reason: "exec gated by tier0; argv only, no shell".into(),
-        },
+        "proc.exec" => {
+            // argv smuggling: `sh -c` / `bash -c` is its own gated capability.
+            // v0 has no shell policy, so deny shell-with-command-string fail-closed.
+            if let Some(argv) = &req.argv {
+                if argv.len() >= 2 {
+                    let bin = argv[0].rsplit('/').next().unwrap_or(&argv[0]);
+                    if (bin == "sh" || bin == "bash" || bin == "zsh" || bin == "fish")
+                        && argv[1..].iter().any(|a| a == "-c" || a == "-lc")
+                    {
+                        return deny("deny:shell", "shell -c is not allowed; use argv arrays");
+                    }
+                }
+            }
+            Decision {
+                allow: true,
+                rule_ids: vec!["proc:allow".into()],
+                reason: "argv exec allowed; shell strings denied".into(),
+            }
+        }
         _ => deny("deny:unknown-action", "unknown action"),
     }
 }
@@ -178,7 +207,7 @@ mod tests {
         let p = sample();
         let d = decide(
             &p,
-            &Request { action: "http.request".into(), host: Some("169.254.169.254".into()), method: Some("GET".into()), path: Some("/".into()), fs_path: None },
+            &Request { action: "http.request".into(), host: Some("169.254.169.254".into()), method: Some("GET".into()), path: Some("/".into()), fs_path: None, argv: None },
         );
         assert!(!d.allow);
     }
@@ -187,7 +216,7 @@ mod tests {
         let p = sample();
         let d = decide(
             &p,
-            &Request { action: "http.request".into(), host: Some("registry.npmjs.org".into()), method: Some("GET".into()), path: Some("/".into()), fs_path: None },
+            &Request { action: "http.request".into(), host: Some("registry.npmjs.org".into()), method: Some("GET".into()), path: Some("/".into()), fs_path: None, argv: None },
         );
         assert!(d.allow);
     }
@@ -196,7 +225,7 @@ mod tests {
         let p = sample();
         let d = decide(
             &p,
-            &Request { action: "http.request".into(), host: Some("registry.npmjs.org".into()), method: Some("POST".into()), path: Some("/".into()), fs_path: None },
+            &Request { action: "http.request".into(), host: Some("registry.npmjs.org".into()), method: Some("POST".into()), path: Some("/".into()), fs_path: None, argv: None },
         );
         assert!(!d.allow);
     }
@@ -207,21 +236,49 @@ mod tests {
         let p = sample();
         let d = decide(
             &p,
-            &Request { action: "fs.read".into(), host: None, method: None, path: None, fs_path: Some("/workspace/../../etc/passwd".into()) },
+            &Request { action: "fs.read".into(), host: None, method: None, path: None, fs_path: Some("/workspace/../../etc/passwd".into()), argv: None },
         );
         assert!(!d.allow);
+    }
+    #[test]
+    fn shell_c_denied() {
+        let p = sample();
+        let d = decide(
+            &p,
+            &Request { action: "proc.exec".into(), host: None, method: None, path: None, fs_path: None, argv: Some(vec!["sh".into(), "-c".into(), "echo hi".into()]) },
+        );
+        assert!(!d.allow);
+        let ok = decide(
+            &p,
+            &Request { action: "proc.exec".into(), host: None, method: None, path: None, fs_path: None, argv: Some(vec!["/bin/echo".into(), "hi".into()]) },
+        );
+        assert!(ok.allow);
+    }
+    #[test]
+    fn host_case_insensitive_and_metadata_variants() {
+        let p = sample();
+        let d = decide(
+            &p,
+            &Request { action: "http.request".into(), host: Some("REGISTRY.NPMJS.ORG".into()), method: Some("get".into()), path: Some("/".into()), fs_path: None, argv: None },
+        );
+        assert!(d.allow);
+        let m = decide(
+            &p,
+            &Request { action: "http.request".into(), host: Some("metadata.google.internal".into()), method: Some("GET".into()), path: Some("/".into()), fs_path: None, argv: None },
+        );
+        assert!(!m.allow);
     }
     #[test]
     fn path_glob() {
         let p = sample();
         let ok = decide(
             &p,
-            &Request { action: "http.request".into(), host: Some("github".into()), method: Some("GET".into()), path: Some("/repos/acme/app/issues/1".into()), fs_path: None },
+            &Request { action: "http.request".into(), host: Some("github".into()), method: Some("GET".into()), path: Some("/repos/acme/app/issues/1".into()), fs_path: None, argv: None },
         );
         assert!(ok.allow);
         let bad = decide(
             &p,
-            &Request { action: "http.request".into(), host: Some("github".into()), method: Some("GET".into()), path: Some("/repos/evil/x".into()), fs_path: None },
+            &Request { action: "http.request".into(), host: Some("github".into()), method: Some("GET".into()), path: Some("/repos/evil/x".into()), fs_path: None, argv: None },
         );
         assert!(!bad.allow);
     }
