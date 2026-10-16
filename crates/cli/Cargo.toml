@@ -5,3 +5,7 @@ edition = "2021"
 
 [dependencies]
 clap = { workspace = true }
+anyhow = { workspace = true }
+toolcage-policy = { path = "../policy" }
+toolcage-audit = { path = "../audit" }
+toolcage-supervisor = { path = "../supervisor" }

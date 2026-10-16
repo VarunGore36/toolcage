@@ -6,3 +6,5 @@ edition = "2021"
 [dependencies]
 toolcage-audit = { path = "../audit" }
 serde_json = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
