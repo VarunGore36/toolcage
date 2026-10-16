@@ -335,7 +335,7 @@ fn main() -> anyhow::Result<()> {
                 let cp = toolcage_audit::sign_checkpoint(0, "GENESIS", "0", &sk)?;
                 std::fs::write(out_prefix.with_extension("secret.hex"), &sk_hex)?;
                 std::fs::write(out_prefix.with_extension("pub.hex"), &cp.pubkey_hex)?;
-                println!("wrote {}-secret.hex + {}-pub.hex", out_prefix.display(), out_prefix.display());
+                println!("wrote {} + {}", out_prefix.with_extension("secret.hex").display(), out_prefix.with_extension("pub.hex").display());
             }
         },
     }

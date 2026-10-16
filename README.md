@@ -175,9 +175,9 @@ Tier 2  Firecracker + jailer (unprivileged, own netns, tight seccomp)
 </div>
 
 ```bash
-toolcage audit keygen --out-prefix /tmp/k   # k-secret.hex (host-only) + k-pub.hex
-toolcage audit checkpoint --log /tmp/tc.jsonl --key-hex /tmp/k-secret.hex
-toolcage audit verify --log /tmp/tc.jsonl --pubkey /tmp/k-pub.hex
+toolcage audit keygen --out-prefix /tmp/k   # k.secret.hex (host-only) + k.pub.hex
+toolcage audit checkpoint --log /tmp/tc.jsonl --key-hex /tmp/k.secret.hex
+toolcage audit verify --log /tmp/tc.jsonl --pubkey /tmp/k.pub.hex
 # chain continuity ✓  seq monotonic ✓  no gaps ✓  re-hash every event ✓  checkpoint sigs ✓
 ```
 
@@ -234,7 +234,7 @@ cargo build --release
   --cred github_token --secret-value s3cr3t
 # upstream api.github.com/... ok auth=[REDACTED]   <- secret injected host-side, scrubbed guest-side
 
-./target/release/toolcage audit verify --log /tmp/tc.jsonl --pubkey /tmp/k-pub.hex
+./target/release/toolcage audit verify --log /tmp/tc.jsonl --pubkey /tmp/k.pub.hex
 # ok: 3 events, head 679e84... (checkpoints verified)
 ```
 
