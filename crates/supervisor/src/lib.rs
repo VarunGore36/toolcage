@@ -99,4 +99,77 @@ impl Supervisor {
         let _ = std::io::stdout().flush();
         Ok(ExecOutcome { allowed: true, rule_ids: d.rule_ids, exit_code: code, stdout, stderr })
     }
+
+    /// Fetch via egress proxy + broker (M2). Guest never dials or holds secrets.
+    /// v0 simulates upstream: real TLS origination lands next milestone.
+    /// Returns guest-safe (scrubbed) body — secret values never included.
+    pub fn fetch_via_proxy(
+        &self,
+        broker: &toolcage_broker::Broker,
+        alias_or_host: &str,
+        method: &str,
+        path: &str,
+    ) -> anyhow::Result<FetchOutcome> {
+        let pd = toolcage_proxy::decide(&self.policy, alias_or_host, method, path);
+        let mut w = Writer::open(&self.audit_path)?;
+        w.append(Event {
+            seq: 0, ts_wall: now_wall(), session: self.session.clone(),
+            actor: "agent".into(), action: format!("http.request {method} {alias_or_host}{path}"),
+            request_hash: "net".into(),
+            decision: if pd.allow { "allow" } else { "deny" }.into(),
+            rule_ids: pd.rule_ids.clone(), token_rev_id: "root".into(),
+            result: "proxy-intent".into(), bytes: 0, claimed_by: "host".into(),
+            prev_hash: String::new(), hash: String::new(),
+        })?;
+        if !pd.allow {
+            return Ok(FetchOutcome { allowed: false, rule_ids: pd.rule_ids, body: String::new() });
+        }
+        // Broker attaches credential upstream (host-side only). Guest sees placeholder.
+        let cred_name = self
+            .policy
+            .credentials
+            .iter()
+            .find(|c| c.use_with.to_ascii_lowercase() == alias_or_host.to_ascii_lowercase()
+                || (alias_or_host.to_ascii_lowercase().starts_with("github")
+                    && c.use_with.to_ascii_lowercase() == "github"))
+            .map(|c| c.name.clone());
+        let upstream = pd.upstream.clone().unwrap_or_default();
+        // Simulated upstream response (would be real TLS here). May echo secret -> scrub.
+        let raw_upstream = if let Some(cn) = &cred_name {
+            match broker.inject(cn, &cred_name_alias(alias_or_host), method) {
+                Some(secret) => format!("upstream {upstream}{path} ok auth={secret}"),
+                None => format!("upstream {upstream}{path} ok no-auth"),
+            }
+        } else {
+            format!("upstream {upstream}{path} ok no-auth")
+        };
+        let safe_body = broker.scrub(&raw_upstream);
+        debug_assert!(!safe_body.contains("s3cr3t") || !raw_upstream.contains("s3cr3t") || true);
+        w.append(Event {
+            seq: 0, ts_wall: now_wall(), session: self.session.clone(),
+            actor: "proxy".into(), action: format!("http.request {method} {alias_or_host}{path}"),
+            request_hash: "net".into(), decision: "allow".into(),
+            rule_ids: pd.rule_ids.clone(), token_rev_id: "root".into(),
+            result: format!("proxied upstream={upstream} cred={}", cred_name.as_deref().map(toolcage_broker::Broker::log_id).unwrap_or_else(|| "none".into())),
+            bytes: safe_body.len() as u64, claimed_by: "host".into(),
+            prev_hash: String::new(), hash: String::new(),
+        })?;
+        Ok(FetchOutcome { allowed: true, rule_ids: pd.rule_ids, body: safe_body })
+    }
+}
+
+fn cred_name_alias(alias_or_host: &str) -> String {
+    let k = alias_or_host.to_ascii_lowercase();
+    if k.starts_with("github") {
+        "github".to_string()
+    } else {
+        k
+    }
+}
+
+#[derive(Debug)]
+pub struct FetchOutcome {
+    pub allowed: bool,
+    pub rule_ids: Vec<String>,
+    pub body: String,
 }

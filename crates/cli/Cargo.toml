@@ -10,3 +10,5 @@ anyhow = { workspace = true }
 toolcage-policy = { path = "../policy" }
 toolcage-audit = { path = "../audit" }
 toolcage-supervisor = { path = "../supervisor" }
+toolcage-proxy = { path = "../proxy" }
+toolcage-broker = { path = "../broker" }

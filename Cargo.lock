@@ -496,13 +496,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "toolcage-broker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+]
+
+[[package]]
 name = "toolcage-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
  "toolcage-audit",
+ "toolcage-broker",
  "toolcage-policy",
+ "toolcage-proxy",
  "toolcage-supervisor",
 ]
 
@@ -517,6 +527,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "toolcage-proxy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "toolcage-policy",
+]
+
+[[package]]
 name = "toolcage-supervisor"
 version = "0.1.0"
 dependencies = [
@@ -525,7 +544,9 @@ dependencies = [
  "serde_json",
  "sha2",
  "toolcage-audit",
+ "toolcage-broker",
  "toolcage-policy",
+ "toolcage-proxy",
 ]
 
 [[package]]

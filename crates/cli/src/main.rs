@@ -31,6 +31,23 @@ enum Cmd {
         #[arg(long, default_value = "/")]
         path: String,
     },
+    /// Fetch via proxy+broker (guest-safe, scrubbed). Secret from --secret-value stays host-side.
+    Fetch {
+        #[arg(long)]
+        policy: PathBuf,
+        #[arg(long)]
+        audit: PathBuf,
+        #[arg(long)]
+        host: String,
+        #[arg(long, default_value = "GET")]
+        method: String,
+        #[arg(long, default_value = "/")]
+        path: String,
+        #[arg(long, default_value = "github_token")]
+        cred: String,
+        #[arg(long, default_value = "")]
+        secret_value: String,
+    },
     Doctor,
     Panic,
     Audit {
@@ -68,14 +85,27 @@ fn main() -> anyhow::Result<()> {
         Cmd::CheckNet { policy, host, method, path } => {
             let text = std::fs::read_to_string(&policy)?;
             let pol = toolcage_policy::load_yaml(&text)?;
-            let d = toolcage_policy::decide(
-                &pol,
-                &toolcage_policy::Request { action: "http.request".into(), host: Some(host), method: Some(method), path: Some(path), fs_path: None, argv: None },
-            );
-            println!("{} {:?} {}", if d.allow { "allow" } else { "deny" }, d.rule_ids, d.reason);
+            let d = toolcage_proxy::decide(&pol, &host, &method, &path);
+            println!("{} {:?} {} upstream={:?}", if d.allow { "allow" } else { "deny" }, d.rule_ids, d.reason, d.upstream);
             if !d.allow {
                 std::process::exit(2);
             }
+        }
+        Cmd::Fetch { policy, audit, host, method, path, cred, secret_value } => {
+            let text = std::fs::read_to_string(&policy)?;
+            let pol = toolcage_policy::load_yaml(&text)?;
+            let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "cli".into() };
+            let mut broker = toolcage_broker::Broker::new();
+            if !secret_value.is_empty() {
+                broker.insert(toolcage_broker::Credential { name: cred, value: secret_value, use_with: "github".into(), methods: vec![], paths: vec![] });
+            }
+            let o = sup.fetch_via_proxy(&broker, &host, &method, &path)?;
+            if !o.allowed {
+                eprintln!("denied: {:?}", o.rule_ids);
+                std::process::exit(2);
+            }
+            println!("{o:?}");
+            println!("{}", o.body);
         }
         Cmd::Doctor => {
             let st = std::process::Command::new("bash").arg("scripts/doctor.sh").status();
