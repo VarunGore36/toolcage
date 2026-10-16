@@ -320,8 +320,13 @@ fn main() -> anyhow::Result<()> {
                 println!("checkpoint seq={n} -> {}", dest.display());
             }
             Audit::Keygen { out_prefix } => {
-                let rnd = std::fs::read("/dev/urandom")?;
-                let sk_hex: String = rnd[..32].iter().map(|x| format!("{:02x}", x)).collect();
+                // REVIEW fix: never fs::read() /dev/urandom (infinite stream —
+                // it blocks forever and balloons RAM). Read exactly 32 bytes.
+                use std::io::Read;
+                let mut rnd = std::fs::File::open("/dev/urandom")?;
+                let mut skb = [0u8; 32];
+                rnd.read_exact(&mut skb)?;
+                let sk_hex: String = skb.iter().map(|x| format!("{:02x}", x)).collect();
                 let mut sk = vec![0u8; 32];
                 for i in 0..32 {
                     sk[i] = u8::from_str_radix(&sk_hex[2 * i..2 * i + 2], 16)?;
