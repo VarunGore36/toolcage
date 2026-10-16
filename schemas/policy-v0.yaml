@@ -1,0 +1,26 @@
+tool: dependency-updater
+version: 0
+min_isolation: tier0
+fs:
+  mounts:
+    - path: /workspace
+      mode: rw
+      source: session-copy
+net:
+  mode: allowlist
+  hosts:
+    - host: registry.npmjs.org
+      methods: [GET]
+    - alias: github
+      methods: [GET, POST]
+      paths: ["/repos/acme/app/**"]
+credentials:
+  - name: github_token
+    use_with: github
+limits:
+  cpu_seconds: 300
+  memory_mb: 1024
+  egress_bytes: 20000000
+approval:
+  require_for:
+    - http.request: { methods: [POST], hosts: [github] }

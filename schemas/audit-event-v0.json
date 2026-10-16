@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "audit-event-v0",
+  "type": "object",
+  "required": ["seq", "ts_mono", "ts_wall", "session", "actor", "action", "request_hash", "decision", "rule_ids", "token_rev_id", "result", "prev_hash", "hash"],
+  "properties": {
+    "seq": { "type": "integer" },
+    "ts_mono": { "type": "integer" },
+    "ts_wall": { "type": "string" },
+    "session": { "type": "string" },
+    "actor": { "type": "string" },
+    "action": { "type": "string" },
+    "request_hash": { "type": "string" },
+    "decision": { "type": "string", "enum": ["allow", "deny", "need_approval"] },
+    "rule_ids": { "type": "array", "items": { "type": "string" } },
+    "token_rev_id": { "type": "string" },
+    "result": { "type": "string" },
+    "bytes": { "type": "integer" },
+    "claimed_by": { "type": "string", "enum": ["host", "guest"] },
+    "prev_hash": { "type": "string" },
+    "hash": { "type": "string", "description": "H(prev_hash, canonical(event)) sha256" }
+  }
+}

@@ -1,0 +1,43 @@
+# Rust
+/target/
+Cargo.lock.bak
+**/*.rs.bk
+*.pdb
+
+# Env / secrets — never push
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials.json
+
+# toolcage runtime artifacts
+segments/
+snapshots/
+pool/
+golden/
+audit-logs/
+*.log
+*.img
+*.ext4
+*.qcow2
+vmlinux
+vmlinuz*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test / bench output
+/coverage/
+*.profraw
+*.profdata
+criterion/
