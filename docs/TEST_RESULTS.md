@@ -1,6 +1,6 @@
 # Test results — toolcage
 
-42 tests, 0 failures (`cargo test --workspace`). Clippy 0 warnings.
+45 tests, 0 failures (`cargo test --workspace`). Clippy 0 warnings.
 
 | Suite | Count | Invariants |
 |---|---|---|
@@ -20,7 +20,9 @@
 | supervisor canary | 1 | I2, I7 |
 | supervisor fuzz (policy/guest/audit/proxy) | 4 | all |
 | supervisor chaos (audit-fail, proxy-down, broker-down, ro-disk) | 4 | fail-closed |
+| audit checkpoint sign/verify/tamper | 1 | I5 |
+| supervisor limits (timeout kill, over-cap truncate) | 2 | fail-closed |
 
 Manual live checks: `run` ok, `sh -c` denied, metadata denied, `fetch` scrubbed,
 evil denied, token widen rejected, POST paused then approved, `verify ok`,
-mutation fails, `panic` freezes + taints.
+mutation fails, `panic` freezes + taints, checkpoint tamper fails verify.

@@ -46,7 +46,7 @@
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="license"/>
   <img src="https://img.shields.io/badge/rust-1.98+-orange?style=flat-square&logo=rust" alt="rust"/>
   <img src="https://img.shields.io/badge/linux-cgroupv2_landlock_kvm-lightgrey?style=flat-square&logo=linux" alt="linux"/>
-  <img src="https://img.shields.io/badge/tests-25_passing-brightgreen?style=flat-square" alt="tests"/>
+  <img src="https://img.shields.io/badge/tests-45_passing-brightgreen?style=flat-square" alt="tests"/>
 </p>
 
 **Every agent tool call runs inside a disposable cage, with least-privilege capabilities, zero visible secrets, and a verifiable receipt.**
@@ -175,11 +175,13 @@ Tier 2  Firecracker + jailer (unprivileged, own netns, tight seccomp)
 </div>
 
 ```bash
-toolcage audit verify --pubkey key.pub
-# chain continuity ✓  seq monotonic ✓  no gaps ✓  re-hash every event ✓
+toolcage audit keygen --out-prefix /tmp/k   # k-secret.hex (host-only) + k-pub.hex
+toolcage audit checkpoint --log /tmp/tc.jsonl --key-hex /tmp/k-secret.hex
+toolcage audit verify --log /tmp/tc.jsonl --pubkey /tmp/k-pub.hex
+# chain continuity ✓  seq monotonic ✓  no gaps ✓  re-hash every event ✓  checkpoint sigs ✓
 ```
 
-Write-ahead: intent is logged before the action runs. If the write fails, the action is denied. The writer re-verifies the existing chain on open, so a corrupt log is never extended. Flip one byte, delete, or reorder — verification fails.
+Write-ahead: intent is logged before the action runs. If the write fails, the action is denied. The writer re-verifies the existing chain on open, so a corrupt log is never extended. Checkpoints bind `(seq, head, time)` with Ed25519; pinned-pubkey verify fails on bad sigs or missing checkpoint files. Flip one byte, delete, or reorder — verification fails.
 
 ## Policy in one file
 
@@ -232,18 +234,20 @@ cargo build --release
   --cred github_token --secret-value s3cr3t
 # upstream api.github.com/... ok auth=[REDACTED]   <- secret injected host-side, scrubbed guest-side
 
-./target/release/toolcage audit verify --log /tmp/tc.jsonl --pubkey key.pub
-# ok: 3 events, head 679e84...
+./target/release/toolcage audit verify --log /tmp/tc.jsonl --pubkey /tmp/k-pub.hex
+# ok: 3 events, head 679e84... (checkpoints verified)
 ```
 
 | Command | What |
 |---|---|
 | `toolcage doctor` | Probe userns, cgroup v2, Landlock ABI, seccomp, `/dev/kvm` |
-| `toolcage run --tier tier0 -- <argv>` | Policy check → audit intent → `env_clear` exec → audit outcome. `--tier` is fail-closed against `min_isolation` |
+| `toolcage run --tier tier0 -- <argv>` | Policy check → audit intent → `env_clear` exec (streaming 1 MiB cap, 30 s kill) → audit outcome. `--tier` fail-closed vs `min_isolation`; `sh -c` denied |
 | `toolcage check-net` | Proxy decision + upstream resolution, no network touched |
-| `toolcage fetch` | Proxy + broker fetch: injects credential upstream, returns scrubbed body, audits both steps |
-| `toolcage audit verify` | Re-hash every event, check seq + chain |
-| `toolcage panic` | Stop all sessions, freeze log with final checkpoint |
+| `toolcage fetch [--token T] [--approve]` | Proxy + broker fetch with dual-auth (policy AND token) and approval pause (exit 3); scrubbed body, both steps audited |
+| `toolcage token mint/attenuate` | Root mint + narrow-only delegation (widen rejected) |
+| `toolcage mcp serve/call` | Stdio JSON-RPC: `run_command`, `read_file`, `write_file`, `http_fetch` |
+| `toolcage audit keygen/checkpoint/verify` | Ed25519 keygen, signed checkpoints, pinned-pubkey verify |
+| `toolcage panic --audit LOG` | Freeze log with `deny-all` event + `.tainted` marker |
 
 Guest agent protocol (`Exec` / `PutFile` / `Heartbeat`): argv bounded, no NUL, `env_refs` must be `secret:name` (values rejected), writes confined to `/workspace`.
 
@@ -265,20 +269,26 @@ MCP front door: `run_command`, `read_file`, `write_file`, `http_fetch` — each 
 
 ```text
 crates/
-  supervisor/    session lifecycle, exec (env_clear, argv-hash log), fetch_via_proxy
-  policy/        YAML v0 loader, allowlist + forbid evaluator, tests/escape.rs
+  supervisor/    exec (env_clear, argv-hash, streaming cap, timeout kill), fetch_via_proxy (token+approval), panic_freeze
+  policy/        YAML v0 loader, allowlist + forbid evaluator, approval gates, tests/escape.rs
   proxy/         alias resolve, method/path enforcement, budgets
-  broker/        host-only store, inject-if-bound, scrub echo, canaries
+  broker/        host-only store (redacted Debug), inject-if-bound, scrub echo, canaries
+  capability/    attenuate-only tokens, tag integrity, revocation, 200-seed property test
+  approval/      require_for gates, out-of-band queue (timeout = deny)
   backend/       Tier trait + honors() fail-closed
   backend-ns/    Tier0 driver + probe (userns/cgroup2/Landlock/seccomp)
+  backend-gv/    Tier1 runsc driver (OCI bundle, honors tier0/1)
   backend-fc/    Tier2 driver (jailer argv, vsock-only, WarmPool + uniqueness steps)
   guest-agent/   PID1 protocol (Exec/PutFile/Heartbeat) + validate()
-  audit/         hash-chain writer (verify-on-open, fsync), verify()
+  mcp/           stdio tools/call x4, sandboxed host check, learn mode
+  audit/         hash-chain writer (verify-on-open, fsync), Ed25519 checkpoints, verify_with_pubkey
   verify/        standalone verifier
-  cli/           run --tier, check-net, fetch, audit verify, doctor, panic
+  cli/           run --tier, check-net, fetch --token/--approve, token, mcp, audit keygen/checkpoint/verify, doctor, panic
 schemas/         audit-event-v0.json, policy-v0.yaml
 scripts/         doctor.sh, bench.sh
-docs/            THREAT_MODEL.md
+docs/            THREAT_MODEL.md, TEST_RESULTS.md
+images/          build.sh (manifest + sha256, per-host-class goldens)
+clients/         python/toolcage.py, ts/toolcage.ts
 ```
 
 ## License
