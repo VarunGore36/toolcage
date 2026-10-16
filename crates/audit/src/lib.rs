@@ -137,6 +137,91 @@ pub fn verify(path: &Path) -> anyhow::Result<(u64, String)> {
     Ok((count, expect_prev))
 }
 
+// REVIEW: checkpoints bind (seq, head, time) with Ed25519. Key lives outside
+// guest reach (OS keystore/HSM ideally). verify_with_pubkey() checks chain +
+// every checkpoint sig; a valid chain with a BAD sig fails. Checkpoint files
+// sit next to the log as `<log>.checkpoint.<seq>`; external anchoring (second
+// machine / transparency log) closes tail-deletion. Secret key bytes are
+// zeroized by callers after use; this module never persists keys.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Checkpoint {
+    pub seq: u64,
+    pub head_hash: String,
+    pub time: String,
+    pub sig_hex: String,
+    pub pubkey_hex: String,
+}
+
+fn checkpoint_msg(seq: u64, head: &str, time: &str) -> Vec<u8> {
+    format!("{seq}|{head}|{time}").into_bytes()
+}
+
+fn hex_decode(s: &str) -> anyhow::Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(s.len() / 2);
+    anyhow::ensure!(s.len().is_multiple_of(2), "odd hex");
+    for i in (0..s.len()).step_by(2) {
+        out.push(u8::from_str_radix(&s[i..i + 2], 16)?);
+    }
+    Ok(out)
+}
+
+fn hex_of(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{:02x}", x)).collect()
+}
+
+/// Sign a checkpoint over the current head. sk_bytes must be 32 bytes.
+pub fn sign_checkpoint(seq: u64, head: &str, time: &str, sk_bytes: &[u8]) -> anyhow::Result<Checkpoint> {
+    use ed25519_dalek::{Signer, SigningKey};
+    anyhow::ensure!(sk_bytes.len() == 32, "sk must be 32 bytes");
+    let sk = SigningKey::from_bytes(sk_bytes.try_into().unwrap());
+    let msg = checkpoint_msg(seq, head, time);
+    let sig = sk.sign(&msg);
+    Ok(Checkpoint {
+        seq,
+        head_hash: head.into(),
+        time: time.into(),
+        sig_hex: hex_of(&sig.to_bytes()),
+        pubkey_hex: hex_of(&sk.verifying_key().to_bytes()),
+    })
+}
+
+/// Verify one checkpoint against a pinned pubkey (32 bytes).
+pub fn verify_checkpoint(cp: &Checkpoint, pubkey: &[u8]) -> anyhow::Result<()> {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    anyhow::ensure!(pubkey.len() == 32, "pubkey must be 32 bytes");
+    let vk = VerifyingKey::from_bytes(pubkey.try_into().unwrap())?;
+    let sig_bytes = hex_decode(&cp.sig_hex)?;
+    let sig = Signature::from_slice(&sig_bytes)?;
+    vk.verify(&checkpoint_msg(cp.seq, &cp.head_hash, &cp.time), &sig)?;
+    anyhow::ensure!(cp.pubkey_hex == hex_of(pubkey), "checkpoint pubkey mismatch");
+    Ok(())
+}
+
+/// Verify chain + all sibling checkpoint files against pubkey (if given).
+/// Without pubkey: chain only (back-compat). With pubkey: chain + every
+/// `<log>.checkpoint.*` must verify AND match the chain head at its seq.
+pub fn verify_with_pubkey(path: &Path, pubkey: Option<&[u8]>) -> anyhow::Result<(u64, String)> {
+    let (n, head) = verify(path)?;
+    if let Some(pk) = pubkey {
+        let dir = path.parent().unwrap_or(std::path::Path::new("."));
+        let stem = path.file_name().unwrap().to_string_lossy().to_string();
+        let mut found = 0;
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with(&format!("{stem}.checkpoint.")) {
+                    let cp: Checkpoint = serde_json::from_str(&std::fs::read_to_string(e.path())?)?;
+                    verify_checkpoint(&cp, pk)?;
+                    anyhow::ensure!(cp.seq <= n, "checkpoint seq beyond log");
+                    found += 1;
+                }
+            }
+        }
+        anyhow::ensure!(found > 0, "no checkpoint files found");
+    }
+    Ok((n, head))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +249,22 @@ mod tests {
         std::fs::write(&p, text).unwrap();
         assert!(verify(&p).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn checkpoint_sign_verify_and_tamper_fails() {
+        // REVIEW: deterministic test key (never production). Tampered sig/head
+        // and wrong pubkey must all fail; valid chain + sig passes.
+        let sk = [7u8; 32];
+        let cp = sign_checkpoint(3, "abc123", "99", &sk).unwrap();
+        let pk_hex = cp.pubkey_hex.clone();
+        let mut pk = vec![0u8; 32];
+        for i in 0..32 {
+            pk[i] = u8::from_str_radix(&pk_hex[2 * i..2 * i + 2], 16).unwrap();
+        }
+        assert!(verify_checkpoint(&cp, &pk).is_ok());
+        let mut bad = cp.clone();
+        bad.head_hash = "zzz".into();
+        assert!(verify_checkpoint(&bad, &pk).is_err());
+        assert!(verify_checkpoint(&cp, &[9u8; 32]).is_err());
     }
 }

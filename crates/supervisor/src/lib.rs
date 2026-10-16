@@ -62,7 +62,14 @@ impl Supervisor {
     }
 
     /// Run argv array (no shell). Logs intent before spawn (I4) and outcome after.
+    /// Streaming 1 MiB cap per stream + 30 s wall-clock kill (whole child).
     pub fn exec(&self, argv: &[String]) -> anyhow::Result<ExecOutcome> {
+        self.exec_limits(argv, 30, 1024 * 1024)
+    }
+
+    /// Bounded exec: timeout_secs wall clock, cap_bytes per stream.
+    /// Kill on timeout (fail-closed); truncation flagged in audit outcome.
+    pub fn exec_limits(&self, argv: &[String], timeout_secs: u64, cap: usize) -> anyhow::Result<ExecOutcome> {
         anyhow::ensure!(!argv.is_empty(), "empty argv");
         let req = Request {
             action: "proc.exec".into(),
@@ -88,30 +95,82 @@ impl Supervisor {
             return Ok(ExecOutcome { allowed: false, rule_ids: d.rule_ids, exit_code: None, stdout: vec![], stderr: vec![] });
         }
         // env_clear: child never inherits host secrets (I2). Keep only minimal PATH.
-        let out = Command::new(&argv[0])
+        // Streaming cap: read at most cap+1 bytes per stream so a fork-bomb
+        // writer cannot OOM the supervisor; overrun sets truncated=true.
+        use std::io::Read;
+        use std::process::Stdio;
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+        let mut child = Command::new(&argv[0])
             .args(&argv[1..])
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
-            .output()?;
-        let mut stdout = out.stdout;
-        let mut stderr = out.stderr;
-        let mut truncated = false;
-        const CAP: usize = 1024 * 1024;
-        if stdout.len() > CAP {
-            stdout.truncate(CAP);
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let (tx_out, rx_out) = channel();
+        let (tx_err, rx_err) = channel();
+        let mut co = child.stdout.take();
+        let mut ce = child.stderr.take();
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(f) = co.take() {
+                let _ = f.take((cap + 1) as u64).read_to_end(&mut buf);
+            }
+            let _ = tx_out.send(buf);
+        });
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(f) = ce.take() {
+                let _ = f.take((cap + 1) as u64).read_to_end(&mut buf);
+            }
+            let _ = tx_err.send(buf);
+        });
+        // Wall-clock timeout: poll, kill whole child on expiry (fail-closed).
+        let mut timed_out = false;
+        let code = {
+            let mut waited = Duration::from_secs(0);
+            let step = Duration::from_millis(50);
+            let mut done = None;
+            while waited.as_secs() < timeout_secs {
+                match child.try_wait()? {
+                    Some(st) => {
+                        done = Some(st.code());
+                        break;
+                    }
+                    None => {
+                        std::thread::sleep(step);
+                        waited += step;
+                    }
+                }
+            }
+            match done {
+                Some(c) => c,
+                None => {
+                    timed_out = true;
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    None
+                }
+            }
+        };
+        let mut stdout = rx_out.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
+        let mut stderr = rx_err.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
+        let mut truncated = timed_out;
+        if stdout.len() > cap {
+            stdout.truncate(cap);
             truncated = true;
         }
-        if stderr.len() > CAP {
-            stderr.truncate(CAP);
+        if stderr.len() > cap {
+            stderr.truncate(cap);
             truncated = true;
         }
-        let code = out.status.code();
         w.append(Event {
             seq: 0, ts_wall: now_wall(), session: self.session.clone(),
             actor: "supervisor".into(), action: "proc.exec".into(),
             request_hash: argv_hash, decision: "allow".into(),
             rule_ids: d.rule_ids.clone(), token_rev_id: "root".into(),
-            result: format!("exit={:?} truncated={}", code, truncated),
+            result: format!("exit={:?} truncated={} timeout={}", code, truncated, timed_out),
             bytes: (stdout.len() + stderr.len()) as u64, claimed_by: "host".into(),
             prev_hash: String::new(), hash: String::new(),
         })?;

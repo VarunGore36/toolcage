@@ -81,6 +81,10 @@ enum Cmd {
 #[derive(Subcommand)]
 enum Audit {
     Verify { #[arg(long)] log: PathBuf, #[arg(long)] pubkey: Option<PathBuf> },
+    /// Sign checkpoint over current head (key file = 64 hex chars, 32 bytes).
+    Checkpoint { #[arg(long)] log: PathBuf, #[arg(long)] key_hex: PathBuf },
+    /// Generate Ed25519 keypair (linux /dev/urandom); prints hex pubkey.
+    Keygen { #[arg(long)] out_prefix: PathBuf },
 }
 
 type AuditOp = Audit;
@@ -281,11 +285,52 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::Audit { op } => match op {
             Audit::Verify { log, pubkey } => {
-                if pubkey.is_some() {
-                    eprintln!("note: signature checkpoints not yet enforced (M6); checking hash chain");
+                if let Some(pkf) = pubkey {
+                    // REVIEW: pinned-pubkey mode — chain + every sibling
+                    // checkpoint must verify, or this fails (no silent skip).
+                    let hex = std::fs::read_to_string(&pkf)?.trim().to_string();
+                    let mut pk = vec![0u8; 32];
+                    for i in 0..32 {
+                        pk[i] = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16)?;
+                    }
+                    let (n, head) = toolcage_audit::verify_with_pubkey(&log, Some(&pk))?;
+                    println!("ok: {n} events, head {head} (checkpoints verified)");
+                } else {
+                    let (n, head) = toolcage_audit::verify(&log)?;
+                    println!("ok: {n} events, head {head}");
+                }
+            }
+            Audit::Checkpoint { log, key_hex } => {
+                let hex = std::fs::read_to_string(&key_hex)?.trim().to_string();
+                let mut sk = vec![0u8; 32];
+                for i in 0..32 {
+                    sk[i] = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16)?;
                 }
                 let (n, head) = toolcage_audit::verify(&log)?;
-                println!("ok: {n} events, head {head}");
+                let t = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+                    .to_string();
+                let cp = toolcage_audit::sign_checkpoint(n, &head, &t, &sk)?;
+                let dest = log.with_extension(format!("jsonl.checkpoint.{n}"));
+                // REVIEW: key file stays host-side; checkpoint (sig+pubkey) is
+                // public. Never commit *-secret.hex.
+                std::fs::write(&dest, serde_json::to_string_pretty(&cp)?)?;
+                println!("checkpoint seq={n} -> {}", dest.display());
+            }
+            Audit::Keygen { out_prefix } => {
+                let rnd = std::fs::read("/dev/urandom")?;
+                let sk_hex: String = rnd[..32].iter().map(|x| format!("{:02x}", x)).collect();
+                let mut sk = vec![0u8; 32];
+                for i in 0..32 {
+                    sk[i] = u8::from_str_radix(&sk_hex[2 * i..2 * i + 2], 16)?;
+                }
+                // REVIEW: pubkey derived locally; secret never leaves host.
+                let cp = toolcage_audit::sign_checkpoint(0, "GENESIS", "0", &sk)?;
+                std::fs::write(out_prefix.with_extension("secret.hex"), &sk_hex)?;
+                std::fs::write(out_prefix.with_extension("pub.hex"), &cp.pubkey_hex)?;
+                println!("wrote {}-secret.hex + {}-pub.hex", out_prefix.display(), out_prefix.display());
             }
         },
     }
