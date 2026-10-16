@@ -7,7 +7,7 @@ fn policy_never_panics_on_garbage() {
         let p = toolcage_policy::Policy {
             tool: "fuzz".into(), min_isolation: "tier0".into(),
             fs: Default::default(), net: Default::default(),
-            credentials: vec![], approval: Default::default(),
+            credentials: vec![], approval: Default::default(), limits: Default::default(),
         };
         let _ = toolcage_policy::decide(
             &p,

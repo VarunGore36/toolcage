@@ -598,6 +598,7 @@ dependencies = [
  "toolcage-broker",
  "toolcage-capability",
  "toolcage-policy",
+ "toolcage-proxy",
  "toolcage-supervisor",
 ]
 

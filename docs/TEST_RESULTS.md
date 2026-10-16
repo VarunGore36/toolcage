@@ -1,6 +1,6 @@
 # Test results — toolcage
 
-48 tests, 0 failures (`cargo test --workspace`). Clippy 0 warnings.
+49 tests, 0 failures (`cargo test --workspace`). Clippy 0 warnings.
 
 | Suite | Count | Invariants |
 |---|---|---|
@@ -18,7 +18,7 @@
 | mcp (learn, host, unknown-tool) | 3 | A2 |
 | supervisor canary | 1 | I2, I7 |
 | supervisor fuzz (policy/guest/audit/proxy) | 4 | all |
-| supervisor chaos (audit-fail, proxy-down, broker-down, ro-disk, revoked-token) | 5 | fail-closed |
+| supervisor chaos (audit-fail, proxy-down, broker-down, ro-disk, revoked-token, over-budget) | 6 | fail-closed |
 | audit checkpoint sign/verify/tamper + old-checkpoint/truncate binding | 2 | I5 |
 | capability narrow/widen/revoke/tamper + expiry/traversal | 4 | I3 |
 | supervisor limits (timeout kill, over-cap truncate) | 2 | fail-closed |

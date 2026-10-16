@@ -42,7 +42,7 @@
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="license"/>
   <img src="https://img.shields.io/badge/rust-1.98+-orange?style=flat-square&logo=rust" alt="rust"/>
   <img src="https://img.shields.io/badge/linux-cgroupv2_landlock_kvm-lightgrey?style=flat-square&logo=linux" alt="linux"/>
-  <img src="https://img.shields.io/badge/tests-48_passing-brightgreen?style=flat-square" alt="tests"/>
+  <img src="https://img.shields.io/badge/tests-49_passing-brightgreen?style=flat-square" alt="tests"/>
 </p>
 
 **Every agent tool call runs inside a disposable cage — least-privilege capabilities, zero visible secrets, and a verifiable receipt.**
@@ -323,7 +323,7 @@ Python + TypeScript clients live in `clients/` (`toolcage.py`, `toolcage.ts`).
 | Lateral movement | No guest-reachable control socket |
 | Log tampering | Hash chain + head-bound signed checkpoints |
 
-Full model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) · Results: [`docs/TEST_RESULTS.md`](docs/TEST_RESULTS.md) (48 tests, 0 failures, clippy clean).
+Full model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) · Results: [`docs/TEST_RESULTS.md`](docs/TEST_RESULTS.md) (49 tests, 0 failures, clippy clean).
 
 ---
 

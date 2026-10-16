@@ -186,6 +186,7 @@ impl Supervisor {
     pub fn fetch_via_proxy(
         &self,
         broker: &toolcage_broker::Broker,
+        budgets: &mut toolcage_proxy::Budgets,
         alias_or_host: &str,
         method: &str,
         path: &str,
@@ -254,6 +255,23 @@ impl Supervisor {
         };
         let safe_body = broker.scrub(&raw_upstream);
         debug_assert!(!safe_body.contains("s3cr3t") || !raw_upstream.contains("s3cr3t") || true);
+        // Egress damage bound (§8): per-destination byte + request budgets.
+        // Zero limit = unbounded (back-compat); over-budget denies fail-closed.
+        {
+            let max_bytes = if self.policy.limits.egress_bytes == 0 { u64::MAX } else { self.policy.limits.egress_bytes };
+            let max_req = if self.policy.limits.egress_requests == 0 { u64::MAX } else { self.policy.limits.egress_requests };
+            if !budgets.check(alias_or_host, safe_body.len() as u64, max_bytes, max_req) {
+                w.append(Event {
+                    seq: 0, ts_wall: now_wall(), session: self.session.clone(),
+                    actor: "proxy".into(), action: format!("http.request {method} {alias_or_host}{path}"),
+                    request_hash: "net".into(), decision: "deny".into(),
+                    rule_ids: vec!["budget:exceeded".into()], token_rev_id: token.map(|t| t.rev_id.clone()).unwrap_or_default(),
+                    result: "over-egress-budget".into(), bytes: safe_body.len() as u64, claimed_by: "host".into(),
+                    prev_hash: String::new(), hash: String::new(),
+                })?;
+                return Ok(FetchOutcome { allowed: false, need_approval: false, rule_ids: vec!["budget:exceeded".into()], body: String::new() });
+            }
+        }
         w.append(Event {
             seq: 0, ts_wall: now_wall(), session: self.session.clone(),
             actor: "proxy".into(), action: format!("http.request {method} {alias_or_host}{path}"),

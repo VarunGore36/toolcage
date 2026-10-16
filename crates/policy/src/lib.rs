@@ -34,6 +34,22 @@ pub struct Policy {
     pub credentials: Vec<CredRule>,
     #[serde(default)]
     pub approval: ApprovalPolicy,
+    #[serde(default)]
+    pub limits: Limits,
+}
+
+/// Resource bounds (M2 damage bound). Zero means "no bound set" for that axis
+/// except egress_bytes, which callers treat as unlimited when 0 for back-compat.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct Limits {
+    #[serde(default)]
+    pub cpu_seconds: u64,
+    #[serde(default)]
+    pub memory_mb: u64,
+    #[serde(default)]
+    pub egress_bytes: u64,
+    #[serde(default)]
+    pub egress_requests: u64,
 }
 
 fn default_tier() -> String {

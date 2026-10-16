@@ -69,6 +69,7 @@ pub struct CallParams {
 pub fn route(
     sup: &toolcage_supervisor::Supervisor,
     broker: &toolcage_broker::Broker,
+    budgets: &mut toolcage_proxy::Budgets,
     token: Option<&toolcage_capability::Token>,
     revocation: &toolcage_capability::RevocationList,
     name: &str,
@@ -112,7 +113,7 @@ pub fn route(
             let host = args.get("host").and_then(|v| v.as_str()).unwrap_or("");
             let method = args.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("/");
-            let o = sup.fetch_via_proxy(broker, host, method, path, token, revocation, false)?;
+            let o = sup.fetch_via_proxy(broker, budgets, host, method, path, token, revocation, false)?;
             if o.need_approval {
                 anyhow::bail!("paused {:?}", o.rule_ids);
             }
@@ -174,6 +175,7 @@ pub fn check_server_cmd(argv: &[String]) -> anyhow::Result<()> {
             net: Default::default(),
             credentials: vec![],
             approval: Default::default(),
+            limits: Default::default(),
         },
         &toolcage_policy::Request {
             action: "proc.exec".into(), host: None, method: None, path: None,
@@ -195,8 +197,9 @@ mod tests {
             session: "t".into(),
         };
         let b = toolcage_broker::Broker::new();
+        let mut budgets = toolcage_proxy::Budgets::default();
         let rl = toolcage_capability::RevocationList::default();
-        assert!(route(&sup, &b, None, &rl, "nope", &serde_json::json!({})).is_err());
+        assert!(route(&sup, &b, &mut budgets, None, &rl, "nope", &serde_json::json!({})).is_err());
     }
     #[test]
     fn learn_proposes_denials() {
