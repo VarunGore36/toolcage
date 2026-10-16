@@ -46,6 +46,7 @@
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="license"/>
   <img src="https://img.shields.io/badge/rust-1.98+-orange?style=flat-square&logo=rust" alt="rust"/>
   <img src="https://img.shields.io/badge/linux-cgroupv2_landlock_kvm-lightgrey?style=flat-square&logo=linux" alt="linux"/>
+  <img src="https://img.shields.io/badge/tests-25_passing-brightgreen?style=flat-square" alt="tests"/>
 </p>
 
 **Every agent tool call runs inside a disposable cage, with least-privilege capabilities, zero visible secrets, and a verifiable receipt.**
@@ -175,10 +176,10 @@ Tier 2  Firecracker + jailer (unprivileged, own netns, tight seccomp)
 
 ```bash
 toolcage audit verify --pubkey key.pub
-# chain continuity ✓  signatures ✓  seq/time monotonic ✓  no gaps ✓
+# chain continuity ✓  seq monotonic ✓  no gaps ✓  re-hash every event ✓
 ```
 
-Write-ahead: intent is logged before the action runs. If the write fails, the action is denied. Flip one byte, delete, or reorder — verification fails.
+Write-ahead: intent is logged before the action runs. If the write fails, the action is denied. The writer re-verifies the existing chain on open, so a corrupt log is never extended. Flip one byte, delete, or reorder — verification fails.
 
 ## Policy in one file
 
@@ -212,21 +213,39 @@ approval:
 
 Decision order: canonicalize at enforcement point → operator `forbid` wins → token checks → approval gate (timeout = deny) → log before act.
 
+`sh -c` / `bash -c` is denied — use argv arrays. Hosts and methods match case-insensitively. Mounts are canonicalized (`/workspace/a/../b` → `/workspace/b`), and `..` escapes outside mounts are denied. Metadata (`169.254.169.254`, `metadata*`, `instance-data`) is never reachable.
+
 ## Run it
 
 ```bash
 cargo build --release
 ./target/release/toolcage doctor
-./target/release/toolcage run --policy schemas/policy-v0.yaml -- echo hello
-./target/release/toolcage audit verify --pubkey key.pub
+# userns=true cgroup2=true landlock_abi=5 seccomp=true
+# kvm=true
+
+./target/release/toolcage run --policy schemas/policy-v0.yaml --audit /tmp/tc.jsonl --tier tier0 -- /bin/echo hello
+./target/debug/toolcage-cli check-net --policy schemas/policy-v0.yaml --host github.internal --method GET --path /repos/acme/app/issues/1
+# allow ["net:allow:github"] proxy allow upstream=Some("api.github.com")
+
+./target/debug/toolcage-cli fetch --policy schemas/policy-v0.yaml --audit /tmp/tc.jsonl \
+  --host github.internal --method GET --path /repos/acme/app/issues/1 \
+  --cred github_token --secret-value s3cr3t
+# upstream api.github.com/... ok auth=[REDACTED]   <- secret injected host-side, scrubbed guest-side
+
+./target/release/toolcage audit verify --log /tmp/tc.jsonl --pubkey key.pub
+# ok: 3 events, head 679e84...
 ```
 
 | Command | What |
 |---|---|
-| `toolcage doctor` | Check KVM, cgroup v2, Landlock ABI, seccomp, images |
-| `toolcage run / exec` | Create session, run argv array, stream output |
-| `toolcage audit` | Read events, verify chain |
+| `toolcage doctor` | Probe userns, cgroup v2, Landlock ABI, seccomp, `/dev/kvm` |
+| `toolcage run --tier tier0 -- <argv>` | Policy check → audit intent → `env_clear` exec → audit outcome. `--tier` is fail-closed against `min_isolation` |
+| `toolcage check-net` | Proxy decision + upstream resolution, no network touched |
+| `toolcage fetch` | Proxy + broker fetch: injects credential upstream, returns scrubbed body, audits both steps |
+| `toolcage audit verify` | Re-hash every event, check seq + chain |
 | `toolcage panic` | Stop all sessions, freeze log with final checkpoint |
+
+Guest agent protocol (`Exec` / `PutFile` / `Heartbeat`): argv bounded, no NUL, `env_refs` must be `secret:name` (values rejected), writes confined to `/workspace`.
 
 MCP front door: `run_command`, `read_file`, `write_file`, `http_fetch` — each maps 1:1 to a policy action. Third-party MCP servers run as guest processes under the same policy.
 
@@ -246,15 +265,19 @@ MCP front door: `run_command`, `read_file`, `write_file`, `http_fetch` — each 
 
 ```text
 crates/
-  supervisor/    session lifecycle, admission, API
-  policy/        parser, evaluator, tokens
-  proxy/         egress proxy + service aliases (planned)
-  broker/        credential store + injection (planned)
-  audit/         writer, chain, checkpoints
+  supervisor/    session lifecycle, exec (env_clear, argv-hash log), fetch_via_proxy
+  policy/        YAML v0 loader, allowlist + forbid evaluator, tests/escape.rs
+  proxy/         alias resolve, method/path enforcement, budgets
+  broker/        host-only store, inject-if-bound, scrub echo, canaries
+  backend/       Tier trait + honors() fail-closed
+  backend-ns/    Tier0 driver + probe (userns/cgroup2/Landlock/seccomp)
+  backend-fc/    Tier2 driver (jailer argv, vsock-only, WarmPool + uniqueness steps)
+  guest-agent/   PID1 protocol (Exec/PutFile/Heartbeat) + validate()
+  audit/         hash-chain writer (verify-on-open, fsync), verify()
   verify/        standalone verifier
-  cli/           command line
+  cli/           run --tier, check-net, fetch, audit verify, doctor, panic
 schemas/         audit-event-v0.json, policy-v0.yaml
-scripts/         doctor.sh
+scripts/         doctor.sh, bench.sh
 docs/            THREAT_MODEL.md
 ```
 
