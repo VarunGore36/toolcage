@@ -199,10 +199,29 @@ pub fn verify_checkpoint(cp: &Checkpoint, pubkey: &[u8]) -> anyhow::Result<()> {
 
 /// Verify chain + all sibling checkpoint files against pubkey (if given).
 /// Without pubkey: chain only (back-compat). With pubkey: chain + every
-/// `<log>.checkpoint.*` must verify AND match the chain head at its seq.
+/// `<log>.checkpoint.*` must verify AND its (seq, head) must match the chain
+/// prefix at that seq. This binds old checkpoints: truncating the tail after
+/// an old checkpoint fails because head(seq) != recorded head.
 pub fn verify_with_pubkey(path: &Path, pubkey: Option<&[u8]>) -> anyhow::Result<(u64, String)> {
     let (n, head) = verify(path)?;
     if let Some(pk) = pubkey {
+        // Replay chain to record head hash at each seq, so checkpoints bind.
+        let mut heads: Vec<String> = Vec::new();
+        {
+            let f = File::open(path)?;
+            let mut expect_prev = "GENESIS".to_string();
+            for line in BufReader::new(f).lines() {
+                let line = line?;
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let e: Event = serde_json::from_str(&line)?;
+                // verify() already checked continuity; recompute defensively.
+                anyhow::ensure!(e.prev_hash == expect_prev, "chain break at seq {}", e.seq);
+                expect_prev = e.hash.clone();
+                heads.push(expect_prev.clone());
+            }
+        }
         let dir = path.parent().unwrap_or(std::path::Path::new("."));
         let stem = path.file_name().unwrap().to_string_lossy().to_string();
         let mut found = 0;
@@ -213,6 +232,14 @@ pub fn verify_with_pubkey(path: &Path, pubkey: Option<&[u8]>) -> anyhow::Result<
                     let cp: Checkpoint = serde_json::from_str(&std::fs::read_to_string(e.path())?)?;
                     verify_checkpoint(&cp, pk)?;
                     anyhow::ensure!(cp.seq <= n, "checkpoint seq beyond log");
+                    // Bind (seq, head) to the actual chain prefix.
+                    if cp.seq == 0 {
+                        anyhow::ensure!(cp.head_hash == "GENESIS", "checkpoint head mismatch at seq 0");
+                    } else {
+                        let idx = (cp.seq - 1) as usize;
+                        anyhow::ensure!(idx < heads.len(), "checkpoint seq beyond log");
+                        anyhow::ensure!(heads[idx] == cp.head_hash, "checkpoint head mismatch at seq {}", cp.seq);
+                    }
                     found += 1;
                 }
             }
@@ -266,5 +293,55 @@ mod tests {
         bad.head_hash = "zzz".into();
         assert!(verify_checkpoint(&bad, &pk).is_err());
         assert!(verify_checkpoint(&cp, &[9u8; 32]).is_err());
+    }
+    #[test]
+    fn old_checkpoint_plus_truncated_tail_fails() {
+        // I5: checkpoint at seq 2 must bind head(2). Truncate to 2 events after
+        // checkpointing 3 -> old cp no longer matches -> verify_with_pubkey fails.
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("toolcage-audit-cp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("audit.jsonl");
+        let _ = std::fs::remove_file(&p);
+        // Clean stale checkpoints for this log name.
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                let n = e.file_name().to_string_lossy().to_string();
+                if n.starts_with("audit.jsonl.checkpoint.") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+        let sk = [11u8; 32];
+        let mut w = Writer::open(&p).unwrap();
+        for i in 0..3 {
+            w.append(Event {
+                seq: 0, ts_wall: "2026-01-01T00:00:00Z".into(), session: "s1".into(),
+                actor: "test".into(), action: format!("act{i}"), request_hash: "abc".into(),
+                decision: "allow".into(), rule_ids: vec![], token_rev_id: "r".into(),
+                result: "ok".into(), bytes: 0, claimed_by: "host".into(),
+                prev_hash: String::new(), hash: String::new(),
+            })
+            .unwrap();
+        }
+        let (n, head) = verify(&p).unwrap();
+        assert_eq!(n, 3);
+        let cp = sign_checkpoint(n, &head, "99", &sk).unwrap();
+        let pk = hex_decode(&cp.pubkey_hex).unwrap();
+        let dest = dir.join(format!("audit.jsonl.checkpoint.{n}"));
+        let mut f = std::fs::File::create(&dest).unwrap();
+        f.write_all(serde_json::to_string(&cp).unwrap().as_bytes()).unwrap();
+        assert!(verify_with_pubkey(&p, Some(&pk)).is_ok());
+        // Attacker truncates last event but keeps old checkpoint file.
+        let lines: Vec<String> = std::io::BufReader::new(std::fs::File::open(&p).unwrap())
+            .lines()
+            .map(|l| l.unwrap())
+            .collect();
+        assert_eq!(lines.len(), 3);
+        std::fs::write(&p, format!("{}\n{}\n", lines[0], lines[1])).unwrap();
+        // Chain alone looks valid (prefix), but pinned checkpoint head mismatches.
+        assert!(verify(&p).is_ok());
+        assert!(verify_with_pubkey(&p, Some(&pk)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

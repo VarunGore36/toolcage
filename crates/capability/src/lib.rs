@@ -58,6 +58,29 @@ fn tag_for(rev_id: &str, parent: &Option<String>, rights: &Rights) -> String {
     format!("{:x}", h.finalize())
 }
 
+/// Lexical fs normalization (no FS access): resolve `.`, `..`, `//`.
+/// Same semantics as policy::canonical_path; duplicated to avoid a dep cycle.
+fn normalize_fs(p: &str) -> String {
+    let mut parts: Vec<&str> = vec![];
+    for comp in p.split('/') {
+        match comp {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            c => parts.push(c),
+        }
+    }
+    format!("/{}", parts.join("/"))
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 impl Token {
     pub fn root(rev_id: &str, rights: Rights) -> Self {
         let tag = tag_for(rev_id, &None, &rights);
@@ -73,22 +96,32 @@ impl Token {
     /// shorter-or-equal expiry. New rev_id linked to parent.
     pub fn attenuate(&self, rev_id: &str, narrow: Rights) -> anyhow::Result<Token> {
         anyhow::ensure!(self.verify_tag(), "parent tag invalid");
-        // fs: each child prefix must sit under a parent prefix
+        // fs: each child prefix must sit under a parent prefix (normalized).
         for p in &narrow.fs_prefixes {
-            let ok = self.rights.fs_prefixes.iter().any(|pp| p == pp || p.starts_with(&format!("{pp}/")));
+            let np = normalize_fs(p);
+            let ok = self.rights.fs_prefixes.iter().any(|pp| {
+                let npp = normalize_fs(pp);
+                np == npp || np.starts_with(&format!("{npp}/"))
+            });
             anyhow::ensure!(ok, "fs prefix {p} widens parent");
         }
-        // net/methods/creds: subsets
-        let sub = |child: &[String], parent: &[String], what: &str| -> anyhow::Result<()> {
+        // net/methods: subsets, case-insensitive. creds: case-sensitive (identifiers).
+        let sub_ins = |child: &[String], parent: &[String], what: &str| -> anyhow::Result<()> {
             let ps: HashSet<_> = parent.iter().map(|s| s.to_ascii_lowercase()).collect();
             for c in child {
                 anyhow::ensure!(ps.contains(&c.to_ascii_lowercase()), "{what} {c} widens parent");
             }
             Ok(())
         };
-        sub(&narrow.net_hosts, &self.rights.net_hosts, "host")?;
-        sub(&narrow.methods, &self.rights.methods, "method")?;
-        sub(&narrow.cred_use, &self.rights.cred_use, "cred")?;
+        sub_ins(&narrow.net_hosts, &self.rights.net_hosts, "host")?;
+        sub_ins(&narrow.methods, &self.rights.methods, "method")?;
+        // cred_use is case-sensitive to match allows(); do not lowercase here.
+        {
+            let ps: HashSet<_> = self.rights.cred_use.iter().collect();
+            for c in &narrow.cred_use {
+                anyhow::ensure!(ps.contains(c), "cred {c} widens parent");
+            }
+        }
         anyhow::ensure!(narrow.budget_bytes <= self.rights.budget_bytes, "budget widens parent");
         if self.rights.expires_at != 0 {
             anyhow::ensure!(
@@ -107,12 +140,26 @@ impl Token {
     }
 
     /// Authorize a request against this token (policy checked separately).
+    /// Enforces expiry (fail-closed) and normalizes fs paths lexically so
+    /// `/workspace/../etc` cannot bypass a `/workspace` prefix grant.
     pub fn allows(&self, fs_path: Option<&str>, host: Option<&str>, method: Option<&str>, cred: Option<&str>) -> bool {
+        self.allows_at(fs_path, host, method, cred, now_secs())
+    }
+
+    pub fn allows_at(&self, fs_path: Option<&str>, host: Option<&str>, method: Option<&str>, cred: Option<&str>, now: u64) -> bool {
         if !self.verify_tag() {
             return false;
         }
+        if self.rights.expires_at != 0 && now > self.rights.expires_at {
+            return false;
+        }
         if let Some(p) = fs_path {
-            if !self.rights.fs_prefixes.iter().any(|pp| p == pp || p.starts_with(&format!("{pp}/"))) {
+            let np = normalize_fs(p);
+            let ok = self.rights.fs_prefixes.iter().any(|pp| {
+                let npp = normalize_fs(pp);
+                np == npp || np.starts_with(&format!("{npp}/"))
+            });
+            if !ok {
                 return false;
             }
         }
@@ -174,13 +221,14 @@ impl RevocationList {
 mod tests {
     use super::*;
     fn root() -> Token {
+        // Expiry is wall-clock seconds: use far-future so allows() (real now) passes.
         Token::root("r0", Rights {
             fs_prefixes: vec!["/workspace".into()],
             net_hosts: vec!["github".into(), "registry.npmjs.org".into()],
             methods: vec!["GET".into(), "POST".into()],
             cred_use: vec!["github_token".into()],
             budget_bytes: 1000,
-            expires_at: 9999,
+            expires_at: 9_999_999_999,
         })
     }
     #[test]
@@ -192,7 +240,7 @@ mod tests {
             methods: vec!["GET".into()],
             cred_use: vec![],
             budget_bytes: 100,
-            expires_at: 100,
+            expires_at: 9_999_999_000,
         }).unwrap();
         assert!(c.allows(Some("/workspace/a/f"), Some("github"), Some("GET"), None));
         assert!(!c.allows(Some("/workspace/b"), None, None, None));
@@ -218,5 +266,21 @@ mod tests {
         r.rights.budget_bytes = 999999;
         assert!(!r.allows(None, None, None, None) || !r.verify_tag());
         assert!(!r.verify_tag());
+    }
+    #[test]
+    fn expiry_enforced_and_traversal_denied() {
+        let r = root(); // expires_at 9_999_999_999
+        assert!(r.allows_at(None, Some("github"), Some("GET"), None, 9_999_999_999));
+        assert!(!r.allows_at(None, Some("github"), Some("GET"), None, 10_000_000_000));
+        assert!(!r.allows_at(None, Some("github"), Some("GET"), None, u64::MAX));
+        // Traversal outside granted prefix must deny even though string prefix matches.
+        // Use allows_at with valid time to isolate the path check from expiry.
+        assert!(!r.allows_at(Some("/workspace/../etc/passwd"), None, None, None, 1_000_000_000));
+        assert!(r.allows_at(Some("/workspace/a/../a/f"), None, None, None, 1_000_000_000));
+        // Attenuation cannot smuggle traversal prefix.
+        assert!(r.attenuate("rx", Rights {
+            fs_prefixes: vec!["/workspace/../etc".into()], net_hosts: vec![],
+            methods: vec![], cred_use: vec![], budget_bytes: 1, expires_at: 1,
+        }).is_err());
     }
 }
