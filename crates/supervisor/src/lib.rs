@@ -103,6 +103,7 @@ impl Supervisor {
     /// Fetch via egress proxy + broker (M2). Guest never dials or holds secrets.
     /// Dual-auth: policy AND token must allow. Approval gate pauses when required.
     /// Returns guest-safe (scrubbed) body — secret values never included.
+    #[allow(clippy::too_many_arguments)]
     pub fn fetch_via_proxy(
         &self,
         broker: &toolcage_broker::Broker,

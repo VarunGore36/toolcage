@@ -11,7 +11,7 @@ fn narrow_of(r: &Rights, seed: u64) -> Rights {
         net_hosts: take(&r.net_hosts, seed >> 1),
         methods: take(&r.methods, seed >> 2),
         cred_use: take(&r.cred_use, seed >> 3),
-        budget_bytes: r.budget_bytes.saturating_sub((seed % 7) as u64),
+        budget_bytes: r.budget_bytes.saturating_sub(seed % 7),
         expires_at: if r.expires_at == 0 { 0 } else { r.expires_at.saturating_sub(seed % 3) },
     }
 }

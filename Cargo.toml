@@ -15,6 +15,7 @@ members = [
   "crates/guest-agent",
   "crates/capability",
   "crates/approval",
+  "crates/mcp",
 ]
 
 [workspace.package]

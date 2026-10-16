@@ -573,6 +573,7 @@ dependencies = [
  "toolcage-backend-ns",
  "toolcage-broker",
  "toolcage-capability",
+ "toolcage-mcp",
  "toolcage-policy",
  "toolcage-proxy",
  "toolcage-supervisor",
@@ -585,6 +586,19 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "toolcage-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "toolcage-broker",
+ "toolcage-capability",
+ "toolcage-policy",
+ "toolcage-supervisor",
 ]
 
 [[package]]

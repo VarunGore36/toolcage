@@ -43,12 +43,12 @@ pub trait Backend {
     /// Returns true if this backend can honor the policy's min_isolation.
     fn honors(&self, min_isolation: &str) -> bool {
         let need = Tier::parse(min_isolation).unwrap_or(Tier::Tier2);
-        match (need, self.tier()) {
-            (Tier::Tier0, _) => true,
-            (Tier::Tier1, Tier::Tier1 | Tier::Tier2) => true,
-            (Tier::Tier2, Tier::Tier2) => true,
-            _ => false,
-        }
+        matches!(
+            (need, self.tier()),
+            (Tier::Tier0, _)
+                | (Tier::Tier1, Tier::Tier1 | Tier::Tier2)
+                | (Tier::Tier2, Tier::Tier2)
+        )
     }
     fn create(&mut self, spec: &SessionSpec) -> anyhow::Result<()>;
     fn destroy(&mut self, id: &str) -> anyhow::Result<()>;

@@ -7,6 +7,12 @@ pub struct GvBackend {
     pub runsc_present: bool,
 }
 
+impl Default for GvBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GvBackend {
     pub fn new() -> Self {
         Self { runsc_present: which_runsc() }

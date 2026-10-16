@@ -62,6 +62,11 @@ enum Cmd {
         #[command(subcommand)]
         op: TokenOp,
     },
+    /// MCP front door (stdio JSON-RPC).
+    Mcp {
+        #[command(subcommand)]
+        op: McpOp,
+    },
     Doctor,
     Panic,
     Audit {
@@ -76,6 +81,22 @@ enum Audit {
 }
 
 type AuditOp = Audit;
+
+#[derive(Subcommand)]
+enum McpOp {
+    /// Serve stdio JSON-RPC (tools/call x4).
+    Serve {
+        #[arg(long)] policy: PathBuf,
+        #[arg(long)] audit: PathBuf,
+    },
+    /// Single call (for tests): --name run_command --args-json '{...}'.
+    Call {
+        #[arg(long)] policy: PathBuf,
+        #[arg(long)] audit: PathBuf,
+        #[arg(long)] name: String,
+        #[arg(long, default_value = "{}")] args_json: String,
+    },
+}
 
 fn load_token(p: &Option<PathBuf>) -> anyhow::Result<Option<toolcage_capability::Token>> {
     if let Some(f) = p {
@@ -188,6 +209,58 @@ fn main() -> anyhow::Result<()> {
                 })?;
                 std::fs::write(&out, serde_json::to_string_pretty(&c)?)?;
                 println!("attenuated {} -> {rev}", p.rev_id);
+            }
+        },
+        Cmd::Mcp { op } => match op {
+            McpOp::Serve { policy, audit } => {
+                let text = std::fs::read_to_string(&policy)?;
+                let pol = toolcage_policy::load_yaml(&text)?;
+                let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "mcp".into() };
+                let broker = toolcage_broker::Broker::new();
+                let stdin = std::io::stdin();
+                use std::io::BufRead;
+                for line in stdin.lock().lines() {
+                    let line = line?;
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let req: toolcage_mcp::RpcReq = match serde_json::from_str(&line) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            let r = toolcage_mcp::RpcResp::deny(serde_json::Value::Null, &[format!("bad-request:{e}")]);
+                            println!("{}", serde_json::to_string(&r)?);
+                            continue;
+                        }
+                    };
+                    let resp = if req.method == "tools/call" {
+                        match serde_json::from_value::<toolcage_mcp::CallParams>(req.params) {
+                            Ok(cp) => match toolcage_mcp::route(&sup, &broker, None, &cp.name, &cp.arguments) {
+                                Ok(v) => toolcage_mcp::RpcResp::ok(req.id, v),
+                                Err(e) => toolcage_mcp::RpcResp::deny(req.id, &[e.to_string()]),
+                            },
+                            Err(e) => toolcage_mcp::RpcResp::deny(req.id, &[format!("bad-params:{e}")]),
+                        }
+                    } else if req.method == "tools/list" {
+                        toolcage_mcp::RpcResp::ok(req.id, serde_json::json!({"tools": ["run_command","read_file","write_file","http_fetch"]}))
+                    } else {
+                        toolcage_mcp::RpcResp::deny(req.id, &["unknown-method".into()])
+                    };
+                    println!("{}", serde_json::to_string(&resp)?);
+                }
+            }
+            McpOp::Call { policy, audit, name, args_json } => {
+                let text = std::fs::read_to_string(&policy)?;
+                let pol = toolcage_policy::load_yaml(&text)?;
+                let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "mcp-call".into() };
+                let broker = toolcage_broker::Broker::new();
+                let args: serde_json::Value = serde_json::from_str(&args_json)?;
+                match toolcage_mcp::route(&sup, &broker, None, &name, &args) {
+                    Ok(v) => println!("{v}"),
+                    Err(e) => {
+                        eprintln!("denied: {e}");
+                        std::process::exit(2);
+                    }
+                }
             }
         },
         Cmd::Doctor => {
