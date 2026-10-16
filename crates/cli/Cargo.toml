@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 clap = { workspace = true }
 anyhow = { workspace = true }
+serde_json = { workspace = true }
 toolcage-policy = { path = "../policy" }
 toolcage-audit = { path = "../audit" }
 toolcage-supervisor = { path = "../supervisor" }
@@ -15,3 +16,5 @@ toolcage-broker = { path = "../broker" }
 toolcage-backend = { path = "../backend" }
 toolcage-backend-ns = { path = "../backend-ns" }
 toolcage-backend-fc = { path = "../backend-fc" }
+toolcage-backend-gv = { path = "../backend-gv" }
+toolcage-capability = { path = "../capability" }

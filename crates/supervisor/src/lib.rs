@@ -101,7 +101,7 @@ impl Supervisor {
     }
 
     /// Fetch via egress proxy + broker (M2). Guest never dials or holds secrets.
-    /// v0 simulates upstream: real TLS origination lands next milestone.
+    /// Dual-auth: policy AND token must allow. Approval gate pauses when required.
     /// Returns guest-safe (scrubbed) body — secret values never included.
     pub fn fetch_via_proxy(
         &self,
@@ -109,9 +109,38 @@ impl Supervisor {
         alias_or_host: &str,
         method: &str,
         path: &str,
+        token: Option<&toolcage_capability::Token>,
+        revoked: bool,
+        approved: bool,
     ) -> anyhow::Result<FetchOutcome> {
         let pd = toolcage_proxy::decide(&self.policy, alias_or_host, method, path);
         let mut w = Writer::open(&self.audit_path)?;
+        // Token check (I3): narrow rights, valid tag, not revoked.
+        if let Some(t) = token {
+            if revoked || !t.verify_tag() || !t.allows(None, Some(alias_or_host), Some(method), None) {
+                w.append(Event {
+                    seq: 0, ts_wall: now_wall(), session: self.session.clone(),
+                    actor: "agent".into(), action: format!("http.request {method} {alias_or_host}{path}"),
+                    request_hash: "net".into(), decision: "deny".into(),
+                    rule_ids: vec!["token:deny".into()], token_rev_id: t.rev_id.clone(),
+                    result: "token-denied".into(), bytes: 0, claimed_by: "host".into(),
+                    prev_hash: String::new(), hash: String::new(),
+                })?;
+                return Ok(FetchOutcome { allowed: false, need_approval: false, rule_ids: vec!["token:deny".into()], body: String::new() });
+            }
+        }
+        // Approval gate: pause for out-of-band decision, timeout = deny.
+        if pd.allow && self.policy.needs_approval("http.request", Some(method), Some(alias_or_host)) && !approved {
+            w.append(Event {
+                seq: 0, ts_wall: now_wall(), session: self.session.clone(),
+                actor: "agent".into(), action: format!("http.request {method} {alias_or_host}{path}"),
+                request_hash: "net".into(), decision: "need_approval".into(),
+                rule_ids: vec!["approval:required".into()], token_rev_id: token.map(|t| t.rev_id.clone()).unwrap_or_default(),
+                result: "paused-for-approval".into(), bytes: 0, claimed_by: "host".into(),
+                prev_hash: String::new(), hash: String::new(),
+            })?;
+            return Ok(FetchOutcome { allowed: false, need_approval: true, rule_ids: vec!["approval:required".into()], body: String::new() });
+        }
         w.append(Event {
             seq: 0, ts_wall: now_wall(), session: self.session.clone(),
             actor: "agent".into(), action: format!("http.request {method} {alias_or_host}{path}"),
@@ -122,7 +151,7 @@ impl Supervisor {
             prev_hash: String::new(), hash: String::new(),
         })?;
         if !pd.allow {
-            return Ok(FetchOutcome { allowed: false, rule_ids: pd.rule_ids, body: String::new() });
+            return Ok(FetchOutcome { allowed: false, need_approval: false, rule_ids: pd.rule_ids, body: String::new() });
         }
         // Broker attaches credential upstream (host-side only). Guest sees placeholder.
         let cred_name = self
@@ -154,7 +183,7 @@ impl Supervisor {
             bytes: safe_body.len() as u64, claimed_by: "host".into(),
             prev_hash: String::new(), hash: String::new(),
         })?;
-        Ok(FetchOutcome { allowed: true, rule_ids: pd.rule_ids, body: safe_body })
+        Ok(FetchOutcome { allowed: true, need_approval: false, rule_ids: pd.rule_ids, body: safe_body })
     }
 }
 
@@ -170,6 +199,7 @@ fn cred_name_alias(alias_or_host: &str) -> String {
 #[derive(Debug)]
 pub struct FetchOutcome {
     pub allowed: bool,
+    pub need_approval: bool,
     pub rule_ids: Vec<String>,
     pub body: String,
 }

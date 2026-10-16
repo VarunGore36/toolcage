@@ -485,6 +485,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "toolcage-approval"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "toolcage-audit"
 version = "0.1.0"
 dependencies = [
@@ -514,6 +523,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "toolcage-backend-gv"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "toolcage-backend",
+]
+
+[[package]]
 name = "toolcage-backend-ns"
 version = "0.1.0"
 dependencies = [
@@ -531,16 +550,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "toolcage-capability"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "toolcage-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "serde_json",
  "toolcage-audit",
  "toolcage-backend",
  "toolcage-backend-fc",
+ "toolcage-backend-gv",
  "toolcage-backend-ns",
  "toolcage-broker",
+ "toolcage-capability",
  "toolcage-policy",
  "toolcage-proxy",
  "toolcage-supervisor",
@@ -584,6 +616,7 @@ dependencies = [
  "sha2",
  "toolcage-audit",
  "toolcage-broker",
+ "toolcage-capability",
  "toolcage-policy",
  "toolcage-proxy",
 ]

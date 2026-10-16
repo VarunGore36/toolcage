@@ -13,3 +13,4 @@ toolcage-policy = { path = "../policy" }
 toolcage-audit = { path = "../audit" }
 toolcage-proxy = { path = "../proxy" }
 toolcage-broker = { path = "../broker" }
+toolcage-capability = { path = "../capability" }

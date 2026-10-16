@@ -12,6 +12,8 @@ pub struct Policy {
     pub net: NetPolicy,
     #[serde(default)]
     pub credentials: Vec<CredRule>,
+    #[serde(default)]
+    pub approval: ApprovalPolicy,
 }
 
 fn default_tier() -> String {
@@ -62,6 +64,20 @@ pub struct CredRule {
     pub use_with: String,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ApprovalPolicy {
+    #[serde(default)]
+    pub require_for: Vec<std::collections::HashMap<String, ApprovalSpec>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ApprovalSpec {
+    #[serde(default)]
+    pub methods: Vec<String>,
+    #[serde(default)]
+    pub hosts: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Request {
     pub action: String,
@@ -81,6 +97,33 @@ pub struct Decision {
 
 pub fn load_yaml(s: &str) -> anyhow::Result<Policy> {
     Ok(serde_yaml::from_str(s)?)
+}
+
+impl Policy {
+    /// Approval gate from policy file: require_for entries (timeout = deny).
+    pub fn needs_approval(&self, action: &str, method: Option<&str>, host: Option<&str>) -> bool {
+        for entry in &self.approval.require_for {
+            for (act, spec) in entry {
+                if act != action {
+                    continue;
+                }
+                if !spec.methods.is_empty() {
+                    let m = method.unwrap_or("");
+                    if !spec.methods.iter().any(|x| x.eq_ignore_ascii_case(m)) {
+                        continue;
+                    }
+                }
+                if !spec.hosts.is_empty() {
+                    let h = host.unwrap_or("");
+                    if !spec.hosts.iter().any(|x| x.eq_ignore_ascii_case(h)) {
+                        continue;
+                    }
+                }
+                return true;
+            }
+        }
+        false
+    }
 }
 
 /// Canonicalize fs path: resolve `.`, `..`, duplicate `/` lexically (no FS access).

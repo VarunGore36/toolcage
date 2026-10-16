@@ -1,0 +1,11 @@
+[package]
+name = "toolcage-capability"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+anyhow = { workspace = true }

@@ -11,7 +11,10 @@ members = [
   "crates/backend",
   "crates/backend-fc",
   "crates/backend-ns",
+  "crates/backend-gv",
   "crates/guest-agent",
+  "crates/capability",
+  "crates/approval",
 ]
 
 [workspace.package]

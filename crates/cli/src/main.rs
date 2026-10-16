@@ -50,6 +50,17 @@ enum Cmd {
         cred: String,
         #[arg(long, default_value = "")]
         secret_value: String,
+        /// Out-of-band approval (operator approved). Without it, gated actions pause.
+        #[arg(long, default_value_t = false)]
+        approve: bool,
+        /// Optional capability token JSON file (dual-auth: policy AND token).
+        #[arg(long)]
+        token: Option<PathBuf>,
+    },
+    /// Mint root token / attenuate child (never widens).
+    Token {
+        #[command(subcommand)]
+        op: TokenOp,
     },
     Doctor,
     Panic,
@@ -66,6 +77,31 @@ enum Audit {
 
 type AuditOp = Audit;
 
+fn load_token(p: &Option<PathBuf>) -> anyhow::Result<Option<toolcage_capability::Token>> {
+    if let Some(f) = p {
+        Ok(Some(serde_json::from_str(&std::fs::read_to_string(f)?)?))
+    } else {
+        Ok(None)
+    }
+}
+
+#[derive(Subcommand)]
+enum TokenOp {
+    /// Mint a root token.
+    Mint {
+        #[arg(long)] rev: String,
+        #[arg(long)] out: PathBuf,
+    },
+    /// Attenuate parent token into narrower child.
+    Attenuate {
+        #[arg(long)] parent: PathBuf,
+        #[arg(long)] rev: String,
+        #[arg(long)] out: PathBuf,
+        #[arg(long, default_value = "")] hosts: String,
+        #[arg(long, default_value_t = 100)] budget: u64,
+    },
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
@@ -76,7 +112,7 @@ fn main() -> anyhow::Result<()> {
             let t = toolcage_backend::Tier::parse(&tier)?;
             let ok = match t {
                 toolcage_backend::Tier::Tier0 => toolcage_backend_ns::NsBackend::new().honors(&pol.min_isolation),
-                toolcage_backend::Tier::Tier1 => true, // gVisor driver lands next; Tier1 honors tier0/1
+                toolcage_backend::Tier::Tier1 => toolcage_backend_gv::GvBackend::new().honors(&pol.min_isolation),
                 toolcage_backend::Tier::Tier2 => toolcage_backend_fc::FcBackend::new().honors(&pol.min_isolation),
             };
             if !ok {
@@ -105,7 +141,7 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(2);
             }
         }
-        Cmd::Fetch { policy, audit, host, method, path, cred, secret_value } => {
+        Cmd::Fetch { policy, audit, host, method, path, cred, secret_value, approve, token } => {
             let text = std::fs::read_to_string(&policy)?;
             let pol = toolcage_policy::load_yaml(&text)?;
             let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "cli".into() };
@@ -113,7 +149,12 @@ fn main() -> anyhow::Result<()> {
             if !secret_value.is_empty() {
                 broker.insert(toolcage_broker::Credential { name: cred, value: secret_value, use_with: "github".into(), methods: vec![], paths: vec![] });
             }
-            let o = sup.fetch_via_proxy(&broker, &host, &method, &path)?;
+            let tok = load_token(&token)?;
+            let o = sup.fetch_via_proxy(&broker, &host, &method, &path, tok.as_ref(), false, approve)?;
+            if o.need_approval {
+                eprintln!("paused: approval required {:?}", o.rule_ids);
+                std::process::exit(3);
+            }
             if !o.allowed {
                 eprintln!("denied: {:?}", o.rule_ids);
                 std::process::exit(2);
@@ -121,6 +162,34 @@ fn main() -> anyhow::Result<()> {
             println!("{o:?}");
             println!("{}", o.body);
         }
+        Cmd::Token { op } => match op {
+            TokenOp::Mint { rev, out } => {
+                let t = toolcage_capability::Token::root(&rev, toolcage_capability::Rights {
+                    fs_prefixes: vec!["/workspace".into()],
+                    net_hosts: vec!["github".into(), "registry.npmjs.org".into()],
+                    methods: vec!["GET".into(), "POST".into()],
+                    cred_use: vec!["github_token".into()],
+                    budget_bytes: 1000,
+                    expires_at: 9999,
+                });
+                std::fs::write(&out, serde_json::to_string_pretty(&t)?)?;
+                println!("minted {rev} -> {}", out.display());
+            }
+            TokenOp::Attenuate { parent, rev, out, hosts, budget } => {
+                let p: toolcage_capability::Token = serde_json::from_str(&std::fs::read_to_string(&parent)?)?;
+                let hs: Vec<String> = if hosts.is_empty() { vec![] } else { hosts.split(',').map(|s| s.to_string()).collect() };
+                let c = p.attenuate(&rev, toolcage_capability::Rights {
+                    fs_prefixes: vec![],
+                    net_hosts: hs,
+                    methods: vec![],
+                    cred_use: vec![],
+                    budget_bytes: budget,
+                    expires_at: 1,
+                })?;
+                std::fs::write(&out, serde_json::to_string_pretty(&c)?)?;
+                println!("attenuated {} -> {rev}", p.rev_id);
+            }
+        },
         Cmd::Doctor => {
             let p = toolcage_backend_ns::NsBackend::probe();
             println!("userns={} cgroup2={} landlock_abi={} seccomp={}", p.userns, p.cgroup2, p.landlock_abi, p.seccomp);
