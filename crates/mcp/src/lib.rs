@@ -171,7 +171,13 @@ mod tests {
     use super::*;
     #[test]
     fn unknown_tool_rejected() {
-        assert!(route as fn(_, _, _, _, _) -> _ == route);
+        let sup = toolcage_supervisor::Supervisor {
+            policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+            audit_path: std::env::temp_dir().join("tc-mcp-test.jsonl"),
+            session: "t".into(),
+        };
+        let b = toolcage_broker::Broker::new();
+        assert!(route(&sup, &b, None, "nope", &serde_json::json!({})).is_err());
     }
     #[test]
     fn learn_proposes_denials() {
