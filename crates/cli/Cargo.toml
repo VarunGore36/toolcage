@@ -12,3 +12,6 @@ toolcage-audit = { path = "../audit" }
 toolcage-supervisor = { path = "../supervisor" }
 toolcage-proxy = { path = "../proxy" }
 toolcage-broker = { path = "../broker" }
+toolcage-backend = { path = "../backend" }
+toolcage-backend-ns = { path = "../backend-ns" }
+toolcage-backend-fc = { path = "../backend-fc" }

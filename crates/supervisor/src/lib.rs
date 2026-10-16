@@ -129,9 +129,9 @@ impl Supervisor {
             .policy
             .credentials
             .iter()
-            .find(|c| c.use_with.to_ascii_lowercase() == alias_or_host.to_ascii_lowercase()
+            .find(|c| c.use_with.eq_ignore_ascii_case(alias_or_host)
                 || (alias_or_host.to_ascii_lowercase().starts_with("github")
-                    && c.use_with.to_ascii_lowercase() == "github"))
+                    && c.use_with.eq_ignore_ascii_case("github")))
             .map(|c| c.name.clone());
         let upstream = pd.upstream.clone().unwrap_or_default();
         // Simulated upstream response (would be real TLS here). May echo secret -> scrub.

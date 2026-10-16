@@ -1,0 +1,10 @@
+[package]
+name = "toolcage-backend-ns"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+toolcage-backend = { path = "../backend" }

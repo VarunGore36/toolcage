@@ -1,6 +1,7 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use toolcage_backend::Backend;
 
 #[derive(Parser)]
 #[command(name = "toolcage")]
@@ -17,6 +18,8 @@ enum Cmd {
         policy: PathBuf,
         #[arg(long)]
         audit: PathBuf,
+        #[arg(long, default_value = "tier0")]
+        tier: String,
         #[arg(trailing_var_arg = true, required = true)]
         argv: Vec<String>,
     },
@@ -66,9 +69,20 @@ type AuditOp = Audit;
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Run { policy, audit, argv } => {
+        Cmd::Run { policy, audit, tier, argv } => {
             let text = std::fs::read_to_string(&policy).with_context(|| "read policy")?;
             let pol = toolcage_policy::load_yaml(&text)?;
+            // Fail-closed tier selection: refuse policy the backend cannot honor.
+            let t = toolcage_backend::Tier::parse(&tier)?;
+            let ok = match t {
+                toolcage_backend::Tier::Tier0 => toolcage_backend_ns::NsBackend::new().honors(&pol.min_isolation),
+                toolcage_backend::Tier::Tier1 => true, // gVisor driver lands next; Tier1 honors tier0/1
+                toolcage_backend::Tier::Tier2 => toolcage_backend_fc::FcBackend::new().honors(&pol.min_isolation),
+            };
+            if !ok {
+                eprintln!("denied: backend {tier} cannot honor min_isolation {}", pol.min_isolation);
+                std::process::exit(2);
+            }
             let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "cli".into() };
             let o = sup.exec(&argv)?;
             if !o.allowed {
@@ -108,6 +122,9 @@ fn main() -> anyhow::Result<()> {
             println!("{}", o.body);
         }
         Cmd::Doctor => {
+            let p = toolcage_backend_ns::NsBackend::probe();
+            println!("userns={} cgroup2={} landlock_abi={} seccomp={}", p.userns, p.cgroup2, p.landlock_abi, p.seccomp);
+            println!("kvm={}", std::path::Path::new("/dev/kvm").exists());
             let st = std::process::Command::new("bash").arg("scripts/doctor.sh").status();
             if st.is_err() {
                 println!("run scripts/doctor.sh");

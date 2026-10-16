@@ -46,10 +46,10 @@ impl Broker {
     /// Caller (proxy) attaches it upstream; it never goes to the guest.
     pub fn inject(&self, name: &str, dest_alias: &str, method: &str) -> Option<&str> {
         let c = self.creds.get(name)?;
-        if c.use_with.to_ascii_lowercase() != dest_alias.to_ascii_lowercase() {
+        if !c.use_with.eq_ignore_ascii_case(dest_alias) {
             return None;
         }
-        if !c.methods.is_empty() && !c.methods.iter().any(|m| m.to_ascii_uppercase() == method.to_ascii_uppercase()) {
+        if !c.methods.is_empty() && !c.methods.iter().any(|m| m.eq_ignore_ascii_case(method)) {
             return None;
         }
         Some(&c.value)

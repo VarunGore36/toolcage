@@ -32,7 +32,7 @@ pub fn decide(policy: &Policy, alias_or_host: &str, method: &str, path: &str) ->
         // Find the operator-facing alias name (e.g. "github").
         // If guest used "github.internal", check policy for "github".
         if policy.net.hosts.iter().any(|h| {
-            h.alias.as_deref().is_some_and(|a| a.to_ascii_lowercase() == "github")
+            h.alias.as_deref().is_some_and(|a| a.eq_ignore_ascii_case("github"))
         }) && key.starts_with("github")
         {
             "github".to_string()

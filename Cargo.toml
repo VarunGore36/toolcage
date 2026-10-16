@@ -8,6 +8,10 @@ members = [
   "crates/supervisor",
   "crates/proxy",
   "crates/broker",
+  "crates/backend",
+  "crates/backend-fc",
+  "crates/backend-ns",
+  "crates/guest-agent",
 ]
 
 [workspace.package]
