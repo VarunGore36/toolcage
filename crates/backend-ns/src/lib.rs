@@ -1,5 +1,20 @@
 //! Tier 0 driver v0: namespaces + Landlock + seccomp + cgroup v2.
 //! Fail-closed: reports what it CANNOT enforce so policy refuses Tier1/2 needs.
+//!
+//! REVIEW:
+//! - caps() is honest: separate_kernel=false, vsock_only=false. Policy must
+//!   refuse min_isolation=tier2 here (tested). Do not flip these to true
+//!   without the actual mechanism + escape-suite proof.
+//! - probe() is best-effort WITHOUT privs: userns flag, cgroup2 controllers
+//!   file, kernel-version-derived Landlock ABI, seccomp=true assumption.
+//!   The ABI-from-version mapping drifts with new kernels — replace with a
+//!   real landlock_create_ruleset(VERSION) probe before enforcing.
+//! - create() currently tracks lifecycle only (no unshare/Landlock/seccomp
+//!   applied yet). Real isolation lands here; until then Tier0 = policy +
+//!   audit + env_clear, NOT a kernel boundary. Do not claim containment.
+//! - Landlock edges (from kernel docs): port rules only, some calls
+//!   unrestricted (chdir/stat/chmod), 16 ruleset stack limit, OverlayFS gaps.
+//!   Build one ruleset against exposed paths; treat as one layer.
 use toolcage_backend::{Backend, SessionSpec, Tier, TierCaps};
 
 pub struct NsBackend {

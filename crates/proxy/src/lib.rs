@@ -1,6 +1,22 @@
 //! Egress proxy v0: allowlisted tunnels + service aliases, no guest DNS.
 //! Guest calls `alias.internal` or allowlisted host; proxy resolves and decides.
 //! Raw sockets / ICMP / IPv6 / direct metadata have no path — only this API.
+//!
+//! REVIEW:
+//! - Guest never dials: decide() returns an UPSTREAM the host dials; the guest
+//!   string is only a policy key. Adding a real dialer? Keep it here, never in
+//!   guest-reachable code, and resolve DNS here (guest DNS = exfil channel).
+//! - Alias mapping is policy-checked on the OPERATOR alias ("github"), not the
+//!   guest string ("github.internal"). New aliases must map explicitly; a
+//!   fallback that dials the guest string verbatim would be an open proxy.
+//! - Method/path enforced per rule; empty methods/paths in a rule means "no
+//!   constraint on that axis" — narrow rules instead of relying on callers.
+//! - Budgets are in-memory HashMaps, not persisted or shared across processes.
+//!   Restart resets them; multi-proxy deployments need a shared counter or a
+//!   single proxy. Over-budget returns false (deny), never allows + logs.
+//! - Metadata deny comes from policy::decide; proxy must not add a second,
+//!   weaker check that could disagree. Single choke point: all guest net flows
+//!   through decide(), including future UDP/WS tunnels.
 use std::collections::HashMap;
 use toolcage_policy::{Policy, Request};
 

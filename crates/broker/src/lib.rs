@@ -1,8 +1,25 @@
 //! Credential broker v0: secrets live in host, injected at proxy only.
 //! Guest holds `secret:name` placeholders. Log holds stable ids, never values.
+//!
+//! REVIEW (I2):
+//! - inject() binds (name, use_with alias, method). Mismatched dest returns
+//!   None — the proxy must treat None as no-auth, never fall back to a literal
+//!   or env value. New fields (paths/expiry) must default-deny when absent.
+//! - scrub() replaces every known value with [REDACTED] before guest-visible
+//!   output. Substring replace can miss encoded forms (base64/URL-encoded);
+//!   treat scrub as defense-in-depth, not the boundary — the boundary is never
+//!   placing values guest-side in the first place.
+//! - log_id() is `cred:name`: safe to audit. Never log Credential.value, not
+//!   even at debug/trace. Credential has a manual redacting Debug impl — do
+//!   not re-add a derived Debug or log `.value` anywhere.
+//! - Storage is in-memory HashMap (cleared on restart). Encrypted-at-rest +
+//!   short-lived derived tokens per upstream belong here next; rotation must
+//!   invalidate inject() immediately.
+//! - Canary plant_canary() uses time-nanos suffix: unique per test run, good
+//!   for I2 scans (grep guest mem/files for canary must find 0 hits).
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Credential {
     pub name: String,
     pub value: String,
@@ -10,6 +27,20 @@ pub struct Credential {
     pub use_with: String,
     pub methods: Vec<String>,
     pub paths: Vec<String>,
+}
+
+// REVIEW fix: Debug must never print the secret value. A derived Debug on
+// this struct would leak it into any {:?} log. Redact explicitly.
+impl std::fmt::Debug for Credential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credential")
+            .field("name", &self.name)
+            .field("value", &"[REDACTED]")
+            .field("use_with", &self.use_with)
+            .field("methods", &self.methods)
+            .field("paths", &self.paths)
+            .finish()
+    }
 }
 
 #[derive(Debug, Default)]

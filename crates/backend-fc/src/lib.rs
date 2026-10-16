@@ -1,6 +1,22 @@
 //! Tier 2 Firecracker driver v0: jailer + vsock + snapshot pool skeleton.
 //! Real VMM control goes through Firecracker's REST API on a Unix socket.
 // This crate owns config generation, pool lifecycle, and uniqueness rules.
+//!
+//! REVIEW:
+//! - Config: jailer runs unprivileged (uid 65532), own netns, cgroup slice.
+//!   vsock_cid derived from session bytes (3..10002) — collisions across many
+//!   sessions possible; use an allocator + CID reuse guard before production.
+//! - Net: vsock-only by design (no NIC field at all). Adding a tap device for
+//!   debugging reopens raw/ICMP/IPv6 paths — keep it out of default configs.
+//! - Pool: pre-restored paused VMs must carry NO per-session state/secrets.
+//!   claim() logs the 5 uniqueness steps (workspace attach, RNG reseed via
+//!   VMGenID k>=5.18, wall-clock reset, vsock re-establish, CID bind) because
+//!   Firecracker snapshots clone identifiers/RNG tokens into every child.
+//!   Golden images only, never snapshots of dirty sessions; sign + verify.
+//! - create() currently checks /dev/kvm + honors() but does NOT boot a VM
+//!   (no REST calls yet). Escape-suite-on-KVM stays red until boot lands.
+//! - Snapshot files are trusted by Firecracker (CRC only): verify signature +
+//!   hash before load, pin VMM/kernel versions (snapshots break across them).
 use std::collections::VecDeque;
 use toolcage_backend::{Backend, SessionSpec, Tier, TierCaps};
 

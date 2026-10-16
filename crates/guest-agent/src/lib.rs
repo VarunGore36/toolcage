@@ -1,5 +1,19 @@
 //! Guest agent v0: PID 1 inside the guest. Static musl binary.
 //! Minimal vsock/Unix-socket protocol. Supervisor treats every message as untrusted.
+//!
+//! REVIEW (A2/A3: guest messages are attacker-controlled):
+//! - validate() bounds everything: id<=64, argv 1..=64 entries each <=4096
+//!   without NUL, PutFile inside /workspace and <=64 MiB, env_refs must be
+//!   `secret:`/`plain:` with no newline. Anything else is Err (deny + audit).
+//!   New op variants must add bounds here FIRST — an unvalidated field is a
+//!   supervisor parser bug (fuzz target: fuzz.rs covers this).
+//! - env_refs allow `secret:name` placeholders ONLY; `NAME=value` rejected.
+//!   Values must never cross into the guest — injection happens host-side.
+//! - No shell in guest: argv executed directly; `sh -c` denied at policy AND
+//!   here by shape (no string splitting). Keep it that way.
+//! - Protocol has no auth/crypto: security comes from the transport (vsock to
+//!   the right VM + supervisor-side session binding), not message contents.
+//!   Bind each channel to its session id; never multiplex sessions on one SOB.
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

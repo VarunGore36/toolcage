@@ -1,4 +1,22 @@
 //! Audit v0: JSONL hash chain + verify. hash = SHA256(prev_hash || canonical_json).
+//!
+//! REVIEW:
+//! - Evidence, not debug: every decision/side-effect appends BEFORE the action
+//!   (I4). If append fails, caller must NOT act. Writer opens with verify() so
+//!   a corrupt log is never extended — a crash mid-write fails the next open.
+//! - Chain: prev_hash links genesis->head; verify() re-hashes each body and
+//!   checks seq continuity. Detects flip/delete/reorder/truncate. It does NOT
+//!   detect deletion of the tail without an anchored checkpoint ( newest events
+//!   have no successor yet) — external checkpoint anchoring closes that.
+//! - No secrets: bodies hold hashes/ids (argv hash, cred: name), never values.
+//!   Adding a field? Default to hash-or-id, never plaintext.
+//! - fsync per append: slow (~hundreds/s) but crash-safe. Batch/group-commit
+//!   only with a careful write-ahead protocol; never buffer intent in memory.
+//! - Canonical JSON: serde_json field order follows the struct, so re-hash is
+//!   deterministic today. Do not switch serializers without a schema version
+//!   bump and migration test.
+//! - Concurrency: one Writer per file. Multi-process appends interleave; use a
+//!   single audit writer process + file lock before scaling writers.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};

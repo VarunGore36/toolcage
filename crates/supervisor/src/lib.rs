@@ -1,4 +1,24 @@
 //! Supervisor v0: policy check -> audit intent -> exec argv -> audit outcome.
+//!
+//! REVIEW:
+//! - Order is the security property: check (policy AND token) -> append intent
+//!   -> spawn -> append outcome. Reordering (spawn before intent log) breaks I4.
+//! - env_clear: child gets PATH only. Any new .env() passthrough must be
+//!   allowlisted and reviewed — secrets in parent env must never reach guest (I2).
+//! - argv hashed (SHA256 with length prefixes), never logged raw: argv can
+//!   carry secrets and prompt-injected strings. Length-prefix avoids
+//!   concatenation ambiguity ("ab"+"c" vs "a"+"bc").
+//! - Output cap 1 MiB post-hoc: Command::output() buffers unbounded BEFORE
+//!   truncate, so a fork-bomb writer can OOM the supervisor. Next step is
+//!   streaming with take(CAP) + kill on overrun; truncation flag already logged.
+//! - No timeout/cgroup yet: exec blocks indefinitely and inherits no limits.
+//!   Add wall-clock kill (whole process group) + cgroup v2 caps before
+//!   untrusted workloads; enforce in supervisor, never trust guest rlimits.
+//! - fetch_via_proxy: token deny and approval pause are audited as their own
+//!   events (token:deny / approval:required). approved=false + gated policy
+//!   returns need_approval (CLI exit 3), never proceeds. Timeout = deny.
+//! - panic_freeze: appends deny-all + writes .tainted sibling. Caller must stop
+//!   sessions and close proxy first; taint clears only out-of-band.
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::PathBuf;

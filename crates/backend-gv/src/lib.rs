@@ -1,6 +1,17 @@
 //! Tier 1 gVisor driver v0: runsc OCI bundle.
 //! Fits hosts without KVM. Syscall overhead + compat gaps documented;
 //! install is multi-file release (Debian pkg or tarball, post Sep-2026).
+//!
+//! REVIEW:
+//! - Position: user-space kernel in front of the host kernel — narrower than
+//!   Tier0, weaker than Tier2 (shared host kernel underneath). honors(tier0/1)
+//!   but NOT tier2 (tested); CLI must keep enforcing that.
+//! - bundle_config() is a skeleton JSON (ro root, /workspace bind, net
+//!   annotation). Real runsc needs a full OCI spec + rootfs; install format
+//!   changed in 2026 (sidecar binaries required) — `doctor` should check
+//!   `runsc --version` + sidecars, not just which-runsc.
+//! - runsc_present probed via `which`; a stale PATH entry lies. Verify by
+//!   executing version query at session create and fail closed on mismatch.
 use toolcage_backend::{Backend, SessionSpec, Tier, TierCaps};
 
 pub struct GvBackend {

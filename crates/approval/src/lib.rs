@@ -1,5 +1,18 @@
 //! Approval gates v0: actions matching require_for pause for out-of-band decision.
 //! Timeout = deny. Every pause + decision is audit-logged by the caller.
+//!
+//! REVIEW:
+//! - needs_approval() matches (action, method?, host?) with empty lists as
+//!   wildcards. Adding a path axis? Keep wildcard semantics explicit — an
+//!   absent list must mean "all", never "none", or gates silently stop firing.
+//! - Queue is in-memory with monotonic appr-N ids. Restart loses pending +
+//!   decided maps: in-flight approvals resolve to deny on restart (fail-closed
+//!   only if callers treat unknown ids as deny — enforce that at call sites).
+//! - decide() on unknown id returns false; resolve() unknown returns None
+//!   (still waiting). Callers must map None-after-timeout to deny, never to
+//!   allow, and audit the timeout as its own event.
+//! - No approver auth here: whoever calls decide() approves. Bind approver
+//!   identity + audit actor before exposing beyond local operator CLI.
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

@@ -1,5 +1,17 @@
 //! Backend trait v0: one API, three tiers. Policy engine uses
 //! capabilities() to refuse policies a tier cannot honor (fail-closed).
+//!
+//! REVIEW:
+//! - honors() encodes the lattice Tier0 < Tier1 < Tier2: a backend honors its
+//!   own tier and everything below, never above. A new tier must slot into
+//!   this match explicitly; the wildcard `_ => false` keeps unknown pairs
+//!   denied. Callers (CLI run --tier) must deny+exit(2) on false, never
+//!   silently fall back to a weaker tier.
+//! - Tier::parse accepts aliases ("ns", "gvisor", "microvm"); unknown strings
+//!   bail. Do not add a lenient default — explicit tiers only.
+//! - SessionSpec carries budgets (mem/workspace MB) but no enforcement here;
+//!   enforcement belongs in each driver (cgroup/rate-limiter) + supervisor.
+//!   capabilities() is advisory data for the policy engine, not a guarantee.
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

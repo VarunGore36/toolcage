@@ -2,6 +2,23 @@
 //! Tools: run_command -> proc.exec, read_file/write_file -> fs.read/write,
 //! http_fetch -> http.request via proxy+broker. Denials are terse model-side,
 //! detailed orchestrator-side. Learn mode proposes allowlist from denials.
+//!
+//! REVIEW (A1/A2: tool args and server output are untrusted input):
+//! - route() re-checks policy AND token on every call; MCP transport auth is
+//!   separate from authorization. Unknown tools bail (deny). Adding a 5th tool
+//!   requires a new policy action + audit shape — no generic passthrough.
+//! - Model-facing errors are terse ("denied (...)") so injected content cannot
+//!   probe policy; orchestrator gets rule ids via audit log, not via error.
+//! - read/write_file audit via policy decide but do NOT copy bytes yet (v0
+//!   returns checked path). Real file transfer must go host-mediated with
+//!   canonicalize-at-open + O_NOFOLLOW, or TOCTOU reopens the path.
+//! - check_server_cmd() gates third-party server binaries (argv-only). A
+//!   malicious server's OUTPUT is still untrusted — its tool responses flow
+//!   back through route(), never directly to the model.
+//! - LearnMode proposes from DENIALS only; auto-applying proposals would let
+//!   an injected agent grow its own allowlist. Proposals need operator review.
+//! - RpcReq parsing: malformed lines get error responses, never panic (fuzz
+//!   the JSON-RPC layer next: truncated frames, huge ids, duplicate ids).
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 

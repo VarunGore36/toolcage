@@ -2,12 +2,31 @@
 //! Operator policy holds global forbids; token holds per-session rights.
 //! Action runs only if BOTH agree. Mirrors Biscuit attenuation semantics
 //! without the Datalog dependency (blocks appended, checks intersected).
+//!
+//! REVIEW (I3):
+//! - attenuate() is the whole security property: every axis must be subset or
+//!   tighter (fs prefix-under-prefix, hosts/methods/creds subset, budget <=,
+//!   expiry <= and non-zero when parent is bounded). Adding a rights axis?
+//!   Default it to empty/zero AND require explicit narrowing, else children
+//!   silently gain the new right (widen-by-default bug).
+//! - Tag is SHA256(rev_id|parent|rights|"toolcage-v0"), not a MAC: anyone who
+//!   reads a token can mint a sibling, but cannot widen (subset check runs on
+//!   the PARENT's rights server-side). Real deployments need a secret-keyed
+//!   MAC (HMAC/Ed25519) so guests cannot mint at all — track as Biscuit step.
+//! - allows() re-checks verify_tag() first; tampered rights fail closed. Case:
+//!   hosts/methods compare case-insensitively, cred names case-sensitively.
+//! - Revocation walks parent_of links: revoke(parent) kills subtree. Links are
+//!   tracked in-memory via track(); a restart forgets them — persist the graph
+//!   or use hierarchical rev_ids before relying on revoke across restarts.
+//! - Expiry 0 means "unbounded" only for roots; children of a bounded parent
+//!   must set expiry <= parent (enforced). System clock jumps forward can
+//!   prematurely expire; jumps backward extend — enforce monotonic time where
+//!   budgets matter.
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Rights {
-    #[serde(default)]
+pub struct Rights {    #[serde(default)]
     pub fs_prefixes: Vec<String>,
     #[serde(default)]
     pub net_hosts: Vec<String>,

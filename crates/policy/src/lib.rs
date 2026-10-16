@@ -1,4 +1,24 @@
 //! Policy v0: YAML allowlist + default-deny. See schemas/policy-v0.yaml.
+//!
+//! REVIEW (2026-10-16):
+//! - Trust: operator-written YAML is trusted; every Request field is untrusted
+//!   (guest/model controlled). Never log Request verbatim (see supervisor argv hash).
+//! - Default-deny: unknown actions/hosts/paths deny. `forbid:metadata` runs first
+//!   and always wins, even over allowlist entries (I6).
+//! - Canonicalize-at-enforcement: fs checks use lexical canonical_path() here,
+//!   but Tier 2 guests own their FS so real enforcement is mount design; host
+//!   re-checks on file transfer. Lexical only — does NOT resolve symlinks;
+//!   symlink races must be closed at the open() site with O_NOFOLLOW.
+//! - Case: hosts lowercased, methods uppercased before compare. A policy author
+//!   writing `get` still matches `GET`; `REGISTRY...` matches. Deny stays
+//!   fail-closed on mismatch.
+//! - Glob: only trailing `/**` supported. `*` mid-pattern is literal — do not
+//!   assume shell glob semantics when writing paths.
+//! - Shell: proc.exec allows argv arrays but denies `sh|bash|zsh|fish -c|-lc`.
+//!   Any new shell must be added to the denylist AND audited; prefer an
+//!   explicit allowlist of binaries in a later milestone.
+//! - Approval: require_for is data only; enforcement lives in supervisor
+//!   (pause + audit). An empty methods/hosts list means "all of that action".
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
