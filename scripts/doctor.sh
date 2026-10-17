@@ -10,3 +10,5 @@ echo "--- landlock ABI ---"
 python3 -c "print('check via landlock_create_ruleset(LANDLOCK_CREATE_RULESET_VERSION) — see kernel docs')"
 echo "--- tools ---"
 which firecracker runsc cargo rustc || true
+echo "--- runsc version ---"
+runsc --version 2>/dev/null || echo "runsc not available (Tier1 needs runsc)"

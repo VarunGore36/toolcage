@@ -287,6 +287,36 @@ impl Backend for GvBackend {
     }
 }
 
+/// Doctor probe: what the host can provide for Tier 1 (gVisor/runsc).
+#[derive(Debug, Default)]
+pub struct GvProbe {
+    pub runsc_present: bool,
+    pub runsc_version: Option<String>,
+}
+
+impl GvBackend {
+    /// Prerequisite probe for `doctor` (no root needed for the report).
+    pub fn probe() -> GvProbe {
+        let runsc_path = find_runsc();
+        let present = Command::new(&runsc_path)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        let version = if present {
+            Command::new(&runsc_path)
+                .arg("--version")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+        } else {
+            None
+        };
+        GvProbe { runsc_present: present, runsc_version: version }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,5 +390,13 @@ mod tests {
         };
         let err = b.create(&spec);
         assert!(err.is_err(), "create without runsc must fail closed");
+    }
+
+    #[test]
+    fn probe_reports_runsc_presence() {
+        let p = GvBackend::probe();
+        // runsc_present and runsc_version must be consistent:
+        // if present, version is Some; if absent, version is None.
+        assert_eq!(p.runsc_present, p.runsc_version.is_some());
     }
 }

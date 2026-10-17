@@ -303,6 +303,8 @@ fn main() -> anyhow::Result<()> {
             let p = toolcage_backend_ns::NsBackend::probe();
             println!("userns={} cgroup2={} landlock_abi={} seccomp={}", p.userns, p.cgroup2, p.landlock_abi, p.seccomp);
             println!("kvm={}", std::path::Path::new("/dev/kvm").exists());
+            let gv = toolcage_backend_gv::GvBackend::probe();
+            println!("runsc={} version={:?}", gv.runsc_present, gv.runsc_version);
             let st = std::process::Command::new("bash").arg("scripts/doctor.sh").status();
             if st.is_err() {
                 println!("run scripts/doctor.sh");
