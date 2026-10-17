@@ -1,7 +1,6 @@
 # Test results — toolcage
 
-69 tests, 0 failures (`cargo test --workspace`). Clippy 2 warnings (intentional
-nul-terminated C strings passed to libc mount calls — harmless).
+69 tests, 0 failures (`cargo test --workspace`). Clippy clean.
 
 | Suite | Count | Invariants |
 |---|---|---|

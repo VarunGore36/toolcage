@@ -66,6 +66,7 @@ pub struct CallParams {
 }
 
 /// Route a tools/call to supervisor. Returns JSON result or denial.
+#[allow(clippy::too_many_arguments)]
 pub fn route(
     sup: &mut toolcage_supervisor::Supervisor,
     broker: &toolcage_broker::Broker,

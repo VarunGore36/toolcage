@@ -442,7 +442,7 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
             unsafe {
                 libc::mount(
                     std::ptr::null(),
-                    b"/\0".as_ptr() as *const libc::c_char,
+                    c"/".as_ptr() as *const libc::c_char,
                     std::ptr::null(),
                     libc::MS_PRIVATE | libc::MS_REC,
                     std::ptr::null(),
@@ -456,7 +456,7 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                         libc::mount(
                             sysdir.as_ptr() as *const libc::c_char,
                             sysdir.as_ptr() as *const libc::c_char,
-                            b"\0".as_ptr() as *const libc::c_char,
+                            c"".as_ptr() as *const libc::c_char,
                             libc::MS_BIND | libc::MS_REC,
                             std::ptr::null(),
                         )
@@ -465,7 +465,7 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                         libc::mount(
                             std::ptr::null(),
                             sysdir.as_ptr() as *const libc::c_char,
-                            std::ptr::null(),
+                            c"".as_ptr() as *const libc::c_char,
                             libc::MS_RDONLY | libc::MS_BIND | libc::MS_REMOUNT,
                             std::ptr::null(),
                         )

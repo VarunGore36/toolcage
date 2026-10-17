@@ -31,17 +31,17 @@ use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, bail};
 use ed25519_dalek::Verifier;
 use sha2::Digest;
 use serde::{Deserialize, Serialize};
-use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier, TierCaps};
+use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
 
 const OUTPUT_CAP: usize = 1024 * 1024;
 const EXEC_TIMEOUT: Duration = Duration::from_secs(30);
-const FIRECRACKER_API_VERSION: &str = "1.0.0";
+
 
 // ---------------------------------------------------------------------------
 // Firecracker session configuration
@@ -157,6 +157,9 @@ impl WarmPool {
     }
     pub fn len(&self) -> usize {
         self.free.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.free.is_empty()
     }
 }
 
@@ -362,7 +365,7 @@ impl GoldenImage {
 
 fn hex_decode(s: &str) -> anyhow::Result<Vec<u8>> {
     let mut out = Vec::with_capacity(s.len() / 2);
-    anyhow::ensure!(s.len() % 2 == 0, "odd hex length");
+    anyhow::ensure!(s.len().is_multiple_of(2), "odd hex length");
     for i in (0..s.len()).step_by(2) {
         out.push(u8::from_str_radix(&s[i..i + 2], 16)?);
     }
@@ -506,12 +509,12 @@ fn bail(msg: &str) -> anyhow::Error {
 // Firecracker VM representation
 // ---------------------------------------------------------------------------
 
-struct FcVm {
-    id: String,
-    socket_path: PathBuf,
-    vsock_uds: PathBuf,
-    vsock_cid: u32,
-    mem_mib: u64,
+pub struct FcVm {
+    pub id: String,
+    pub socket_path: PathBuf,
+    pub vsock_uds: PathBuf,
+    pub vsock_cid: u32,
+    pub mem_mib: u64,
 }
 
 impl FcVm {
@@ -880,7 +883,6 @@ mod tests {
 
     #[test]
     fn verify_snapshot_hash_pass_and_fail() {
-        use std::io::Write;
         let dir = std::env::temp_dir().join(format!("tc-snap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let snap = dir.join("snapshot");
@@ -895,7 +897,6 @@ mod tests {
     fn golden_image_signature_verify() {
         use ed25519_dalek::Signer;
         use rand::Rng;
-        use std::io::Write;
 
         // Generate a test keypair from random seed bytes.
         let seed: [u8; 32] = rand::thread_rng().gen();

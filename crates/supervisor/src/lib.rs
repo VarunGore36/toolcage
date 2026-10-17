@@ -283,7 +283,7 @@ impl Supervisor {
                     actor: "proxy".into(), action: format!("http.request {method} {alias_or_host}{path}"),
                     request_hash: "net".into(), decision: "deny".into(),
                     rule_ids: vec!["proxy-error".into()], token_rev_id: "root".into(),
-                    result: format!("proxy-error: {e}").into(), bytes: 0, claimed_by: "host".into(),
+                    result: format!("proxy-error: {e}"), bytes: 0, claimed_by: "host".into(),
                     prev_hash: String::new(), hash: String::new(),
                 })?;
                 return Ok(FetchOutcome { allowed: false, need_approval: false, rule_ids: vec!["proxy-error".into()], body: String::new() });
