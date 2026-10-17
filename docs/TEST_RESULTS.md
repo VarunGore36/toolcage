@@ -26,3 +26,17 @@
 Manual live checks: `run` ok, `sh -c` denied, metadata denied, `fetch` scrubbed,
 evil denied, token widen rejected, POST paused then approved, `verify ok`,
 mutation fails, `panic` freezes + taints, checkpoint tamper fails verify.
+
+## Benchmarks — plan §11 targets (measured on this host, Oct 17 2026)
+
+| Metric | Target | Measured | Status |
+|---|---|---|---|
+| Policy decision p99 (in-process) | < 5 ms | 404 ns (p50 340 ns, max 6.0 µs, n=10k) | ✓ |
+| Audit append throughput | ≥ 10,000 eps | ~270,000 eps (fsync per append, n=5k) | ✓ |
+| CLI run end-to-end (Tier0 stub exec) | — | 53 ms/call (n=200) | baseline |
+| Supervisor idle memory | < 100 MB | not measured | open |
+
+Notes: audit fsyncs per append (crash-safe); the eps figure is host/fs-dependent
+(tmpfs may not durably flush) and is a baseline, not a durability claim.
+Group commit is the next step if real throughput ever needs it. Run `scripts/bench.sh`
+to re-measure on any host.
