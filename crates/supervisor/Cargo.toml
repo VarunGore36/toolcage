@@ -14,6 +14,7 @@ toolcage-audit = { path = "../audit" }
 toolcage-proxy = { path = "../proxy" }
 toolcage-broker = { path = "../broker" }
 toolcage-capability = { path = "../capability" }
+toolcage-backend = { path = "../backend" }
 
 [dev-dependencies]
 toolcage-guest-agent = { path = "../guest-agent" }

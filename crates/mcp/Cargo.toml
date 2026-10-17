@@ -13,3 +13,4 @@ toolcage-supervisor = { path = "../supervisor" }
 toolcage-broker = { path = "../broker" }
 toolcage-capability = { path = "../capability" }
 toolcage-proxy = { path = "../proxy" }
+toolcage-backend = { path = "../backend" }

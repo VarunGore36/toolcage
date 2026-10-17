@@ -25,12 +25,15 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use toolcage_audit::{Event, Writer};
+use toolcage_backend::{Backend, Tier};
 use toolcage_policy::{Decision, Policy, Request};
 
 pub struct Supervisor {
     pub policy: Policy,
     pub audit_path: PathBuf,
     pub session: String,
+    pub tier: Tier,
+    pub backend: Option<Box<dyn Backend>>,
 }
 
 pub struct ExecOutcome {
@@ -63,13 +66,13 @@ impl Supervisor {
 
     /// Run argv array (no shell). Logs intent before spawn (I4) and outcome after.
     /// Streaming 1 MiB cap per stream + 30 s wall-clock kill (whole child).
-    pub fn exec(&self, argv: &[String]) -> anyhow::Result<ExecOutcome> {
+    pub fn exec(&mut self, argv: &[String]) -> anyhow::Result<ExecOutcome> {
         self.exec_limits(argv, 30, 1024 * 1024)
     }
 
     /// Bounded exec: timeout_secs wall clock, cap_bytes per stream.
     /// Kill on timeout (fail-closed); truncation flagged in audit outcome.
-    pub fn exec_limits(&self, argv: &[String], timeout_secs: u64, cap: usize) -> anyhow::Result<ExecOutcome> {
+    pub fn exec_limits(&mut self, argv: &[String], timeout_secs: u64, cap: usize) -> anyhow::Result<ExecOutcome> {
         anyhow::ensure!(!argv.is_empty(), "empty argv");
         let req = Request {
             action: "proc.exec".into(),
@@ -93,6 +96,24 @@ impl Supervisor {
         })?;
         if !d.allow {
             return Ok(ExecOutcome { allowed: false, rule_ids: d.rule_ids, exit_code: None, stdout: vec![], stderr: vec![] });
+        }
+        // Tier 0 runs inside a real namespace + Landlock + seccomp cage (I1),
+        // when a backend is wired; otherwise fall back to direct spawn (tests
+        // that exercise supervisor-level limits only).
+        if self.tier == Tier::Tier0 {
+            if let Some(backend) = self.backend.as_mut() {
+                let cr = backend.exec(&self.session, argv)?;
+                w.append(Event {
+                    seq: 0, ts_wall: now_wall(), session: self.session.clone(),
+                    actor: "supervisor".into(), action: "proc.exec".into(),
+                    request_hash: hash_argv(argv), decision: "allow".into(),
+                    rule_ids: d.rule_ids.clone(), token_rev_id: "root".into(),
+                    result: format!("exit={:?} truncated={}", cr.exit_code, cr.truncated),
+                    bytes: (cr.stdout.len() + cr.stderr.len()) as u64, claimed_by: "host".into(),
+                    prev_hash: String::new(), hash: String::new(),
+                })?;
+                return Ok(ExecOutcome { allowed: true, rule_ids: d.rule_ids, exit_code: cr.exit_code, stdout: cr.stdout, stderr: cr.stderr });
+            }
         }
         // env_clear: child never inherits host secrets (I2). Keep only minimal PATH.
         // Streaming cap: read at most cap+1 bytes per stream so a fork-bomb

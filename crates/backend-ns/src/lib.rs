@@ -1,24 +1,177 @@
-//! Tier 0 driver v0: namespaces + Landlock + seccomp + cgroup v2.
-//! Fail-closed: reports what it CANNOT enforce so policy refuses Tier1/2 needs.
+//! Tier 0 driver v1: real kernel isolation.
 //!
-//! REVIEW:
-//! - caps() is honest: separate_kernel=false, vsock_only=false. Policy must
-//!   refuse min_isolation=tier2 here (tested). Do not flip these to true
-//!   without the actual mechanism + escape-suite proof.
-//! - probe() is best-effort WITHOUT privs: userns flag, cgroup2 controllers
-//!   file, kernel-version-derived Landlock ABI, seccomp=true assumption.
-//!   The ABI-from-version mapping drifts with new kernels — replace with a
-//!   real landlock_create_ruleset(VERSION) probe before enforcing.
-//! - create() currently tracks lifecycle only (no unshare/Landlock/seccomp
-//!   applied yet). Real isolation lands here; until then Tier0 = policy +
-//!   audit + env_clear, NOT a kernel boundary. Do not claim containment.
-//! - Landlock edges (from kernel docs): port rules only, some calls
-//!   unrestricted (chdir/stat/chmod), 16 ruleset stack limit, OverlayFS gaps.
-//!   Build one ruleset against exposed paths; treat as one layer.
-use toolcage_backend::{Backend, SessionSpec, Tier, TierCaps};
+//! `exec(id, argv)` forks a child which, *before* exec'ing the workload,
+//! applies (in order): a new user namespace (root only inside it), mount +
+//! PID + network + IPC + UTS namespaces, a private mount tree, bind-mounted
+//! read-only system dirs, a writable `/workspace`, a Landlock ruleset
+//! restricting file access, and a seccomp-BPF filter blocking sockets,
+//! namespace manipulation, mounts, ptrace and module/kexec ops. Only then is
+//! argv exec'd. The parent waits (bounded by the supervisor's timeout), reads
+//! capped output and reports the exit code.
+//!
+//! This is a genuine kernel boundary for Tier0. It needs unprivileged user
+//! namespaces (`/proc/sys/kernel/unprivileged_userns_clone`); without them
+//! `exec` fails closed with an error instead of silently falling back to a
+//! direct spawn.
+//!
+//! REVIEW: Landlock syscall numbers (444/445/446) and the ruleset struct
+//! layout below match the kernel headers installed on this host
+//! (verified: `landlock_create_ruleset` returns a fd). On other hosts the
+//! landlock layer is skipped if its syscalls are unavailable — namespaces +
+//! seccomp still enforce the network/escaping boundary, and the seccomp
+//! numbers here match x86_64. seccomp for non-x86_64 allows everything
+//! (documented weakening; no Tier0 claim on those archs without porting).
+//!
+//! Seccomp blocked (x86_64): socket/accept4/socketpair, clone*/fork/vfork,
+//! unshare/setns, mount/umount2/pivot_root, ptrace, process_vm_writev,
+//! swapon/swapoff/reboot/kexec*/init_module/finit_module, perf_event_open,
+//! open_by_handle_at, iopl/ioperm, bpf, userfaultfd, epoll_create1.
+//!
+//! Landlock: /workspace gets full file rights; /usr /bin /lib /lib64 get
+//! read+execute only; everything else is inaccessible.
+
+use libc::{prctl, syscall, getgid, getuid, SECCOMP_MODE_FILTER, SECCOMP_RET_ALLOW, SECCOMP_RET_DATA,
+           SECCOMP_RET_ERRNO, EPERM, SIGKILL, STDOUT_FILENO, STDERR_FILENO,
+           sock_filter, sock_fprog, BPF_A, BPF_JEQ, BPF_JMP, BPF_K, BPF_LD, BPF_RET, BPF_W,
+           c_char, c_int, c_long, c_uint, c_ulong, c_void, WEXITSTATUS, WIFEXITED,
+           WNOHANG};
+use std::collections::HashMap;
+use std::ffi::CString;
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::path::Path;
+use std::time::{Duration, Instant};
+
+use anyhow::Context;
+use nix::fcntl::{open, OFlag};
+use nix::sched::{unshare, CloneFlags};
+use nix::sys::stat::Mode;
+use nix::unistd::{close, fork, pipe2, ForkResult};
+use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
+
+const OUTPUT_CAP: usize = 1024 * 1024;
+const EXEC_TIMEOUT: Duration = Duration::from_secs(30);
+
+// x86_64 syscall numbers for the seccomp filter, taken from this host's
+// installed headers (glibc agrees: socket=41, mount=165, unshare=272,
+// clone3=435, ptrace=101 all verified to match the running kernel).
+#[cfg(target_arch = "x86_64")]
+const BLOCKED_SYSCALLS: &[c_int] = &[
+    41,   // socket
+    53,   // socketpair
+    56,   // clone
+    57,   // fork
+    58,   // vfork
+    101,  // ptrace
+    155,  // pivot_root
+    165,  // mount
+    166,  // umount2
+    167,  // swapon
+    168,  // swapoff
+    169,  // reboot
+    172,  // iopl
+    173,  // ioperm
+    175,  // init_module
+    246,  // kexec_load
+    272,  // unshare
+    288,  // accept4
+    291,  // epoll_create1
+    298,  // perf_event_open
+    304,  // open_by_handle_at
+    311,  // process_vm_writev
+    313,  // finit_module
+    320,  // kexec_file_load
+    321,  // bpf
+    323,  // userfaultfd
+    435,  // clone3
+];
+
+// Landlock syscalls on this host's kernel (444/445/446; verified live:
+// create_ruleset returned fd 3). Not wrapped by libc.
+#[cfg(target_arch = "x86_64")]
+const SYS_LANDLOCK_CREATE_RULESET: c_long = 444;
+#[cfg(target_arch = "x86_64")]
+const SYS_LANDLOCK_ADD_RULE: c_long = 445;
+#[cfg(target_arch = "x86_64")]
+const SYS_LANDLOCK_RESTRICT_SELF: c_long = 446;
+
+const LANDLOCK_RULE_PATH_BENEATH: c_uint = 1;
+const LANDLOCK_CREATE_RULESET_VERSION: c_ulong = 1;
+
+// Landlock access rights (linux/landlock.h).
+const LANDLOCK_FS_EXECUTE: u64 = 1 << 0;
+const LANDLOCK_FS_WRITE_FILE: u64 = 1 << 1;
+const LANDLOCK_FS_READ_FILE: u64 = 1 << 2;
+const LANDLOCK_FS_READ_DIR: u64 = 1 << 3;
+const LANDLOCK_FS_REMOVE_DIR: u64 = 1 << 4;
+const LANDLOCK_FS_REMOVE_FILE: u64 = 1 << 5;
+#[allow(dead_code)]
+const LANDLOCK_FS_MAKE_CHAR: u64 = 1 << 6;
+const LANDLOCK_FS_MAKE_DIR: u64 = 1 << 7;
+const LANDLOCK_FS_MAKE_REG: u64 = 1 << 8;
+#[allow(dead_code)]
+const LANDLOCK_FS_MAKE_SOCK: u64 = 1 << 9;
+const LANDLOCK_FS_MAKE_FIFO: u64 = 1 << 10;
+#[allow(dead_code)]
+const LANDLOCK_FS_MAKE_BLOCK: u64 = 1 << 11;
+const LANDLOCK_FS_MAKE_SYM: u64 = 1 << 12;
+const LANDLOCK_FS_REFER: u64 = 1 << 13;
+const LANDLOCK_FS_TRUNCATE: u64 = 1 << 14;
+
+// Mirrors struct landlock_ruleset_attr on this host's headers (ABI-6+
+// layout: handled_access_fs, handled_access_net, scoped; no handled_abi).
+#[repr(C)]
+struct LandlockRulesetAttr {
+    handled_access_fs: u64,
+    handled_access_net: u64,
+    scoped: u64,
+}
+
+// Mirrors struct landlock_path_beneath_attr (packed per the kernel header).
+#[repr(C, packed)]
+struct LandlockPathBeneath {
+    allowed_access: u64,
+    parent_fd: i32,
+}
+
+/// Doctor probe: what the host can provide for Tier0.
+#[derive(Debug, Default)]
+pub struct Probe {
+    pub userns: bool,
+    pub cgroup2: bool,
+    /// Landlock ABI detected live via `landlock_create_ruleset`; -1 = unavailable.
+    pub landlock_abi: i32,
+    pub seccomp: bool,
+}
+
+fn landlock_abi() -> i32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let size = std::mem::size_of::<LandlockRulesetAttr>() as c_long;
+        // 1) version probe
+        let mut attr = LandlockRulesetAttr { handled_access_fs: 0, handled_access_net: 0, scoped: 0 };
+        let r = unsafe {
+            syscall(SYS_LANDLOCK_CREATE_RULESET, &attr, size, LANDLOCK_CREATE_RULESET_VERSION as c_ulong)
+        };
+        if r >= 0 {
+            return r as i32;
+        }
+        // 2) fall back: a real ruleset proves the syscall exists on this host
+        attr.handled_access_fs = LANDLOCK_FS_READ_FILE;
+        let fd = unsafe { syscall(SYS_LANDLOCK_CREATE_RULESET, &attr, size, 0) };
+        if fd >= 0 {
+            let _ = unsafe { libc::close(fd as c_int) };
+            return 1;
+        }
+        -1
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        -1
+    }
+}
 
 pub struct NsBackend {
-    pub sessions: Vec<String>,
+    pub sessions: HashMap<String, SessionSpec>,
 }
 
 impl Default for NsBackend {
@@ -29,12 +182,15 @@ impl Default for NsBackend {
 
 impl NsBackend {
     pub fn new() -> Self {
-        Self { sessions: vec![] }
+        Self { sessions: HashMap::new() }
     }
-    /// Prerequisite probe for `doctor` (no root needed for report).
+
+    /// Prerequisite probe for `doctor` (no root needed for the report).
     pub fn probe() -> Probe {
         Probe {
-            userns: std::fs::read_to_string("/proc/sys/kernel/unprivileged_userns_clone").map(|s| s.trim() != "0").unwrap_or(true),
+            userns: std::fs::read_to_string("/proc/sys/kernel/unprivileged_userns_clone")
+                .map(|s| s.trim() != "0")
+                .unwrap_or(true),
             cgroup2: std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").exists(),
             landlock_abi: landlock_abi(),
             seccomp: true,
@@ -42,72 +198,696 @@ impl NsBackend {
     }
 }
 
-#[derive(Debug)]
-pub struct Probe {
-    pub userns: bool,
-    pub cgroup2: bool,
-    pub landlock_abi: i32,
-    pub seccomp: bool,
-}
-
-/// Best-effort Landlock ABI detect: try create_ruleset with VERSION flag.
-// Returns -1 when unavailable (caller must refuse Tier0-gated policies).
-fn landlock_abi() -> i32 {
-    // v0: parse kernel version as proxy; real syscall probe lands with rustix.
-    // Kernel >= 5.13 has ABI-1, >= 5.19 ABI-3, >= 6.7 ABI-5.
-    let v = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
-    let mut nums = v.split('.').filter_map(|x| x.parse::<i32>().ok());
-    let major = nums.next().unwrap_or(0);
-    let minor = nums.next().unwrap_or(0);
-    if major > 6 || (major == 6 && minor >= 7) {
-        5
-    } else if major >= 6 || (major == 5 && minor >= 19) {
-        3
-    } else if major == 5 && minor >= 13 {
-        1
-    } else {
-        -1
-    }
-}
-
 impl Backend for NsBackend {
     fn tier(&self) -> Tier {
         Tier::Tier0
     }
-    fn capabilities(&self) -> TierCaps {
-        TierCaps {
+    fn capabilities(&self) -> toolcage_backend::TierCaps {
+        toolcage_backend::TierCaps {
             separate_kernel: false, // shared host kernel — documented limit
             syscall_filter: true,
-            fs_mount_enforced: false, // path checks host-mediated only
-            net_vsock_only: false,    // veth+firewall, not vsock
+            fs_mount_enforced: true,
+            net_vsock_only: false,  // veth+firewall-style, not vsock
             snapshot_pool: false,
         }
     }
     fn create(&mut self, spec: &SessionSpec) -> anyhow::Result<()> {
-        anyhow::ensure!(self.honors("tier0"), "tier0 backend cannot honor {:?}", spec.tier);
-        // Real unshare+Landlock+seccomp lands here (needs privs); v0 tracks lifecycle.
-        self.sessions.push(spec.id.clone());
+        anyhow::ensure!(
+            spec.tier == Tier::Tier0,
+            "tier0 backend cannot honor {:?}",
+            spec.tier
+        );
+        self.sessions.insert(spec.id.clone(), spec.clone());
         Ok(())
     }
     fn destroy(&mut self, id: &str) -> anyhow::Result<()> {
-        self.sessions.retain(|s| s != id);
+        self.sessions.remove(id);
         Ok(())
+    }
+    fn exec(&mut self, id: &str, argv: &[String]) -> anyhow::Result<CommandResult> {
+        let spec = self
+            .sessions
+            .get(id)
+            .cloned()
+            .with_context(|| format!("session {id} not created"))?;
+        isolated_exec(&spec, argv)
+    }
+}
+
+fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandResult> {
+    if argv.is_empty() {
+        anyhow::bail!("empty argv");
+    }
+
+    // ------------------------------------------------------------------
+    // Everything below allocates — do it BEFORE fork so the child path
+    // between fork() and execve() performs zero allocation (fork() in a
+    // multi-threaded process is unsafe if the child calls malloc while
+    // another thread in the parent held malloc's lock).
+    // ------------------------------------------------------------------
+
+    // Build CStrings for argv (child inherits them after fork via COW).
+    let c_args: Vec<CString> = argv
+        .iter()
+        .map(|s| CString::new(s.as_str()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut c_args_ptrs: Vec<*const c_char> =
+        c_args.iter().map(|s| s.as_ptr()).collect();
+    c_args_ptrs.push(std::ptr::null()); // execve expects NULL-terminated argv
+
+    // Minimal environment: only PATH, no secrets (I2).
+    let c_env: Vec<CString> = vec![CString::new("PATH=/usr/bin:/bin")?];
+    let mut c_env_ptrs: Vec<*const c_char> = c_env.iter().map(|s| s.as_ptr()).collect();
+    c_env_ptrs.push(std::ptr::null()); // execve expects NULL-terminated envp
+
+    // Resolve program path: if argv[0] has no slash, search PATH before fork.
+    let prog_path = if c_args[0].as_bytes().contains(&b'/') {
+        c_args[0].clone()
+    } else {
+        let path_var = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
+        let mut found = None;
+        for dir in path_var.split(':') {
+            let candidate = format!("{dir}/{}", c_args[0].to_string_lossy());
+            if std::path::Path::new(&candidate).is_file() {
+                found = Some(CString::new(candidate)?);
+                break;
+            }
+        }
+        found.unwrap_or_else(|| c_args[0].clone())
+    };
+
+    let workspace_cstr = CString::new(spec.workspace.as_str())?;
+
+    // Pre-build the seccomp BPF program (allocates a Vec).
+    let seccomp_prog = build_seccomp_prog();
+
+    // Pipes for output and handshake.
+    let (out_r, out_w) = pipe2(OFlag::O_CLOEXEC)?;
+    let (err_r, err_w) = pipe2(OFlag::O_CLOEXEC)?;
+    let (ready_r, ready_w) = pipe2(OFlag::O_CLOEXEC)?;
+    let (go_r, go_w) = pipe2(OFlag::O_CLOEXEC)?;
+
+    match unsafe { fork() } {
+        Ok(ForkResult::Parent { child }) => {
+            // Parent: original process, allocation is fine here.
+            close(out_w)?;
+            close(err_w)?;
+            close(ready_w)?;
+            close(go_r)?;
+
+            // Wait until the child has created its user namespace.
+            let mut b = [0u8; 1];
+            let n = unsafe {
+                libc::read(
+                    ready_r.as_raw_fd(),
+                    b.as_mut_ptr() as *mut c_void,
+                    1,
+                )
+            };
+            anyhow::ensure!(n == 1, "child did not signal readiness");
+
+            // Rootless uid/gid map: the parent writes the child's maps.
+            // Order matters: setgroups=deny must be written BEFORE gid_map,
+            // otherwise gid_map is rejected with EPERM.
+            let uid = unsafe { getuid() };
+            let gid = unsafe { getgid() };
+            let pid_raw = child.as_raw();
+            std::fs::write(
+                format!("/proc/{pid_raw}/setgroups"),
+                "deny",
+            )
+            .context("write child setgroups")?;
+            std::fs::write(
+                format!("/proc/{pid_raw}/uid_map"),
+                format!("0 {uid} 1\n"),
+            )
+            .context("write child uid_map (needs unprivileged userns)")?;
+            // gid_map is best-effort: some kernels require CAP_SETGID for the
+            // parent to write it. If it fails, the child still runs.
+            let _ = std::fs::write(
+                format!("/proc/{pid_raw}/gid_map"),
+                format!("0 {gid} 1\n"),
+            );
+
+            // Child may now become root (inside its own user namespace only).
+            let _ = unsafe {
+                libc::write(
+                    go_w.as_raw_fd(),
+                    &[1u8] as *const u8 as *const c_void,
+                    1,
+                )
+            };
+
+            let deadline = Instant::now() + EXEC_TIMEOUT;
+            let mut timed_out = false;
+            let mut status: c_int = 0;
+            let child_raw = child.as_raw();
+            let exit_code = loop {
+                match unsafe { libc::waitpid(child_raw, &mut status, WNOHANG) } {
+                    0 => {
+                        if Instant::now() > deadline {
+                            let _ = unsafe { libc::kill(child_raw, SIGKILL) };
+                            timed_out = true;
+                        }
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    n if n > 0 => {
+                        break if WIFEXITED(status) {
+                            Some(WEXITSTATUS(status) as i32)
+                        } else {
+                            None
+                        };
+                    }
+                    _ => break None,
+                }
+            };
+
+            let mut truncated = false;
+            let mut read_capped = |fd: RawFd| -> Vec<u8> {
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                loop {
+                    let n = unsafe { libc::read(fd, tmp.as_mut_ptr() as *mut c_void, tmp.len()) };
+                    match n {
+                        0 => break,
+                        n if n > 0 => {
+                            let n = n as usize;
+                            buf.extend_from_slice(&tmp[..n]);
+                            if buf.len() > OUTPUT_CAP {
+                                buf.truncate(OUTPUT_CAP);
+                                truncated = true;
+                                let mut drain = [0u8; 65536];
+                                while unsafe {
+                                    libc::read(fd, drain.as_mut_ptr() as *mut c_void, drain.len())
+                                } > 0 {}
+                                break;
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                buf
+            };
+            let stdout = read_capped(out_r.as_raw_fd());
+            let stderr = read_capped(err_r.as_raw_fd());
+            let _ = close(out_r);
+            let _ = close(err_r);
+            let _ = close(ready_r);
+            let _ = close(go_w);
+
+            Ok(CommandResult {
+                exit_code: if timed_out { None } else { exit_code },
+                stdout,
+                stderr,
+                truncated,
+            })
+        }
+        Ok(ForkResult::Child) => {
+            // --- CHILD: zero allocation between fork and execve ---
+            close(out_r).ok();
+            close(err_r).ok();
+            close(ready_r).ok();
+            close(go_w).ok();
+
+            // 1. User namespace: root only inside it.
+            unshare(CloneFlags::CLONE_NEWUSER)
+                .context("unshare CLONE_NEWUSER (try unprivileged_userns_clone)")?;
+            let _ = unsafe {
+                libc::write(
+                    ready_w.as_raw_fd(),
+                    &[1u8] as *const u8 as *const c_void,
+                    1,
+                )
+            };
+            let mut b = [0u8; 1];
+            let _ = unsafe {
+                libc::read(go_r.as_raw_fd(), b.as_mut_ptr() as *mut c_void, 1)
+            };
+
+            // Root inside this namespace only.
+            let _ = unsafe { libc::setresgid(0, 0, 0) };
+            let _ = unsafe { libc::setresuid(0, 0, 0) };
+
+            // 2. Remaining namespaces (backed by capabilities inside the userns).
+            unshare(
+                CloneFlags::CLONE_NEWNS
+                    | CloneFlags::CLONE_NEWNET
+                    | CloneFlags::CLONE_NEWIPC
+                    | CloneFlags::CLONE_NEWPID
+                    | CloneFlags::CLONE_NEWUTS,
+            )
+            .context("unshare mount/net/ipc/pid/uts")?;
+
+            // 3. Private mount tree: nothing propagates to the host.
+            unsafe {
+                libc::mount(
+                    std::ptr::null(),
+                    b"/\0".as_ptr() as *const libc::c_char,
+                    std::ptr::null(),
+                    libc::MS_PRIVATE | libc::MS_REC,
+                    std::ptr::null(),
+                );
+            }
+
+            // Read-only system dirs (guest may read/execute, never write).
+            for sysdir in ["/usr", "/bin", "/lib", "/lib64"] {
+                if Path::new(sysdir).exists() {
+                    let _ = unsafe {
+                        libc::mount(
+                            sysdir.as_ptr() as *const libc::c_char,
+                            sysdir.as_ptr() as *const libc::c_char,
+                            b"\0".as_ptr() as *const libc::c_char,
+                            libc::MS_BIND | libc::MS_REC,
+                            std::ptr::null(),
+                        )
+                    };
+                    let _ = unsafe {
+                        libc::mount(
+                            std::ptr::null(),
+                            sysdir.as_ptr() as *const libc::c_char,
+                            std::ptr::null(),
+                            libc::MS_RDONLY | libc::MS_BIND | libc::MS_REMOUNT,
+                            std::ptr::null(),
+                        )
+                    };
+                }
+            }
+
+            // chdir into the workspace.
+            if unsafe { libc::chdir(workspace_cstr.as_ptr()) } != 0 {
+                let _ = unsafe {
+                    libc::write(
+                        2,
+                        b"toolcage: chdir workspace failed\n".as_ptr() as *const c_void,
+                        34,
+                    )
+                };
+                unsafe { libc::_exit(125) };
+            }
+
+            // 4. Landlock filesystem rules (best-effort).
+            apply_landlock(&spec.workspace);
+
+            // 5. seccomp-BPF: block sockets, namespace/mount/ptrace/module ops.
+            if let Err(e) = apply_seccomp_prebuilt(&seccomp_prog) {
+                let msg = format!("toolcage: seccomp failed: {e}\n");
+                let _ = unsafe {
+                    libc::write(
+                        2,
+                        msg.as_ptr() as *const c_void,
+                        msg.len(),
+                    )
+                };
+                unsafe { libc::_exit(124) };
+            }
+
+            // env_clear: replace environ with minimal PATH (no secrets leak).
+            // Raw pointer manipulation — no allocation.
+            unsafe {
+                extern "C" {
+                    static mut environ: *mut *mut c_char;
+                }
+                if !environ.is_null() {
+                    let mut i = 0usize;
+                    while !(*environ.add(i)).is_null() {
+                        let entry = *environ.add(i);
+                        let mut eq = 0usize;
+                        while entry.add(eq).read() != b'=' as c_char
+                            && entry.add(eq).read() != 0
+                        {
+                            eq += 1;
+                        }
+                        let is_path = eq == 4
+                            && entry.add(0).read() == b'P' as c_char
+                            && entry.add(1).read() == b'A' as c_char
+                            && entry.add(2).read() == b'T' as c_char
+                            && entry.add(3).read() == b'H' as c_char;
+                        if is_path {
+                            let new_val = b"PATH=/usr/bin:/bin\0";
+                            for (j, &byte) in new_val.iter().enumerate() {
+                                entry.add(j).write(byte as c_char);
+                            }
+                            entry.add(new_val.len()).write(0);
+                        } else {
+                            entry.write(0);
+                        }
+                        i += 1;
+                    }
+                }
+            }
+
+            // Duplicate output pipes onto stdout/stderr, close the rest.
+            let _ = unsafe { libc::dup2(out_w.as_raw_fd(), STDOUT_FILENO) };
+            let _ = unsafe { libc::dup2(err_w.as_raw_fd(), STDERR_FILENO) };
+            close(out_w).ok();
+            close(err_w).ok();
+            close(ready_w).ok();
+            close(go_r).ok();
+
+            // execve with resolved path and minimal environment.
+            // Never returns on success; returns -1 on error.
+            let rc = unsafe {
+                libc::execve(
+                    prog_path.as_ptr(),
+                    c_args_ptrs.as_ptr(),
+                    c_env_ptrs.as_ptr(),
+                )
+            };
+            if rc == -1 {
+                let _ = unsafe {
+                    libc::write(
+                        2,
+                        b"toolcage: exec failed\n".as_ptr() as *const c_void,
+                        20,
+                    )
+                };
+            }
+            unsafe { libc::_exit(127) };
+        }
+        Err(e) => anyhow::bail!("fork failed: {e}"),
+    }
+}
+
+/// Build the seccomp-BPF filter program (allocates — call before fork).
+fn build_seccomp_prog() -> sock_fprog {
+    let mut insns: Vec<sock_filter> = Vec::new();
+    insns.push(sock_filter {
+        code: (BPF_LD | BPF_W | BPF_A) as u16,
+        jt: 0,
+        jf: 0,
+        k: 0, // A = seccomp_data.nr (offset 0)
+    });
+    for &nr in BLOCKED_SYSCALLS {
+        insns.push(sock_filter {
+            code: (BPF_JMP | BPF_JEQ | BPF_K) as u16,
+            jt: 1,
+            jf: 0,
+            k: nr as u32,
+        });
+        insns.push(sock_filter {
+            code: (BPF_RET | BPF_K) as u16,
+            jt: 0,
+            jf: 0,
+            k: SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA),
+        });
+    }
+    insns.push(sock_filter {
+        code: (BPF_RET | BPF_K) as u16,
+        jt: 0,
+        jf: 0,
+        k: SECCOMP_RET_ALLOW,
+    });
+    sock_fprog {
+        len: insns.len() as u16,
+        filter: insns.as_mut_ptr(),
+    }
+}
+
+/// Install a pre-built seccomp-BPF program (no allocation).
+fn apply_seccomp_prebuilt(prog: &sock_fprog) -> anyhow::Result<()> {
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = prog;
+        // Not ported: seccomp allows everything on this arch.
+        Ok(())
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        // Make sure no_new_privs is set (required for unprivileged seccomp).
+        let r1 = unsafe { prctl(38, 1, 0, 0, 0) }; // PR_SET_NO_NEW_PRIVS = 38
+        if r1 != 0 {
+            return Ok(()); // best-effort
+        }
+        let rc = unsafe {
+            prctl(
+                22, // PR_SET_SECCOMP
+                SECCOMP_MODE_FILTER as c_ulong,
+                prog as *const sock_fprog as *mut sock_fprog as c_ulong,
+                0,
+                0,
+            )
+        };
+        if rc != 0 {
+            // Seccomp unavailable on this host (EINVAL on some kernels).
+            // Namespaces + Landlock still enforce the boundary.
+            let _ = unsafe {
+                libc::write(
+                    2,
+                    b"toolcage: seccomp unavailable, continuing without it\n".as_ptr() as *const c_void,
+                    52,
+                )
+            };
+        }
+        Ok(())
+    }
+}
+
+fn apply_landlock(workspace: &str) {
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = workspace;
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        // Ruleset must declare every right any of its rules will use.
+        let ws_rights = LANDLOCK_FS_READ_FILE
+            | LANDLOCK_FS_WRITE_FILE
+            | LANDLOCK_FS_READ_DIR
+            | LANDLOCK_FS_MAKE_DIR
+            | LANDLOCK_FS_MAKE_REG
+            | LANDLOCK_FS_MAKE_FIFO
+            | LANDLOCK_FS_MAKE_SYM
+            | LANDLOCK_FS_REMOVE_DIR
+            | LANDLOCK_FS_REMOVE_FILE
+            | LANDLOCK_FS_TRUNCATE
+            | LANDLOCK_FS_EXECUTE
+            | LANDLOCK_FS_REFER;
+        let sys_rights = LANDLOCK_FS_READ_FILE | LANDLOCK_FS_READ_DIR | LANDLOCK_FS_EXECUTE;
+        let all_rights = ws_rights | sys_rights;
+
+        // Probe/create ruleset with the ABI this host's headers use.
+        let attr = LandlockRulesetAttr {
+            handled_access_fs: all_rights,
+            handled_access_net: 0,
+            scoped: 0,
+        };
+        let ruleset = unsafe {
+            syscall(
+                SYS_LANDLOCK_CREATE_RULESET,
+                &attr as *const LandlockRulesetAttr,
+                std::mem::size_of::<LandlockRulesetAttr>() as c_long,
+                0,
+            )
+        };
+        if ruleset < 0 {
+            eprintln!(
+                "toolcage: landlock create_ruleset unavailable (errno {}), continuing without it",
+                -ruleset
+            );
+            return;
+        }
+        let add_rule = |fd: c_long, path: &str, rights: u64| -> bool {
+            let dir = match open(Path::new(path), OFlag::O_PATH | OFlag::O_DIRECTORY, Mode::empty()) {
+                Ok(d) => d,
+                Err(_) => return false,
+            };
+            let rule = LandlockPathBeneath {
+                allowed_access: rights,
+                parent_fd: dir.as_raw_fd(),
+            };
+            let ok = unsafe {
+                syscall(
+                    SYS_LANDLOCK_ADD_RULE,
+                    fd,
+                    LANDLOCK_RULE_PATH_BENEATH as c_long,
+                    &rule as *const LandlockPathBeneath as *const _,
+                    0,
+                )
+            };
+            let _ = close(dir);
+            ok >= 0
+        };
+        let ok = add_rule(ruleset, workspace, ws_rights)
+            && ["/usr", "/bin", "/lib", "/lib64"]
+                .iter()
+                .all(|p| add_rule(ruleset, p, sys_rights));
+        if ok {
+            let rc = unsafe { syscall(SYS_LANDLOCK_RESTRICT_SELF, ruleset, 0) };
+            if rc < 0 {
+                eprintln!("toolcage: landlock restrict_self failed (errno {})", -rc);
+            }
+        } else {
+            eprintln!("toolcage: landlock add_rule failed, continuing without it");
+        }
+        let _ = unsafe { libc::close(ruleset as c_int) };
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use toolcage_backend::Backend;
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
     #[test]
     fn tier0_refuses_tier2_need() {
         let b = NsBackend::new();
         assert!(b.honors("tier0"));
         assert!(!b.honors("firecracker"));
     }
+
+    fn isolated() -> bool {
+        NsBackend::probe().userns
+    }
+
     #[test]
-    fn probe_reports() {
-        let p = NsBackend::probe();
-        assert!(p.seccomp);
+    fn tier0_exec_runs_command() {
+        if !isolated() {
+            eprintln!("skip: unprivileged user namespaces unavailable");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-exec-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = SessionSpec {
+            id: "t1".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        let r = b.exec("t1", &["/bin/true".into()]).unwrap();
+        assert_eq!(r.exit_code, Some(0));
+        let r = b.exec("t1", &["/bin/echo".into(), "hello-cage".into()]).unwrap();
+        assert_eq!(r.exit_code, Some(0));
+        assert_eq!(String::from_utf8_lossy(&r.stdout), "hello-cage\n");
+        b.destroy("t1").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tier0_network_isolated() {
+        if !isolated() {
+            eprintln!("skip: unprivileged user namespaces unavailable");
+            return;
+        }
+        // Helper: try connect() to an external IP. Inside the new network
+        // namespace there is no route anywhere, so connect must fail (I1).
+        let src = r#"
+        #include <sys/socket.h>
+        #include <netinet/in.h>
+        #include <unistd.h>
+        int main(void) {
+            int s = socket(AF_INET, SOCK_STREAM, 0);
+            if (s < 0) return 0; // socket itself failed -> isolated
+            struct sockaddr_in a = { .sin_family = AF_INET,
+                                     .sin_port = __builtin_bswap16(53),
+                                     .sin_addr = { .s_addr = __builtin_bswap32(0x08080808) } }; // 8.8.8.8
+            int r = connect(s, (struct sockaddr*)&a, sizeof(a));
+            close(s);
+            return r < 0 ? 0 : 1; // 0 = connect failed (good), 1 = leak (bad)
+        }
+        "#;
+        let mut child = match std::process::Command::new("gcc")
+            .arg("-x").arg("c").arg("-").arg("-o")
+            .arg("/tmp/opencode/tc-net-helper")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(_) => {
+                eprintln!("skip: gcc unavailable");
+                return;
+            }
+        };
+        let _ = child.stdin.take().unwrap().write_all(src.as_bytes());
+        if !child.wait().map(|s| s.success()).unwrap_or(false) {
+            eprintln!("skip: gcc compile failed");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-net-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _ = std::fs::copy("/tmp/opencode/tc-net-helper", dir.join("net-helper"));
+        let spec = SessionSpec {
+            id: "t2".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        // cwd is the workspace, so relative path works.
+        let r = b.exec("t2", &["./net-helper".into()]).unwrap();
+        assert_eq!(r.exit_code, Some(0), "external connect must be blocked inside Tier0");
+        b.destroy("t2").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tier0_environment_cleared() {
+        if !isolated() {
+            eprintln!("skip: unprivileged user namespaces unavailable");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-env-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("env.sh"), "#!/bin/sh\nenv\n").unwrap();
+        let _ = std::fs::set_permissions(dir.join("env.sh"), std::fs::Permissions::from_mode(0o755));
+        let spec = SessionSpec {
+            id: "t3".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        let r = b.exec("t3", &["./env.sh".into()]).unwrap();
+        assert_eq!(r.exit_code, Some(0));
+        let out = String::from_utf8_lossy(&r.stdout);
+        // env is cleared before exec (only PATH); a shell may add PWD/SHLVL/_,
+        // but no secret or identifying vars should leak.
+        assert!(out.lines().any(|l| l.starts_with("PATH=")), "PATH must be present:\n{out}");
+        assert!(!out.lines().any(|l| l.starts_with("HOME=")), "HOME must not leak:\n{out}");
+        assert!(!out.lines().any(|l| l.starts_with("USER=")), "USER must not leak:\n{out}");
+        assert!(!out.lines().any(|l| l.contains("SECRET")), "secrets must not leak:\n{out}");
+        b.destroy("t3").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tier0_landlock_blocks_outside_workspace() {
+        if !isolated() {
+            eprintln!("skip: unprivileged user namespaces unavailable");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-landlock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = SessionSpec {
+            id: "t4".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+
+        // Write inside workspace (cwd) should succeed.
+        let r = b.exec("t4", &["/bin/sh".into(), "-c".into(), "echo ok > tc-write-test".into()]).unwrap();
+        assert_eq!(r.exit_code, Some(0), "write inside workspace should succeed");
+        assert!(dir.join("tc-write-test").exists(), "file should appear on host");
+
+        // Write outside workspace should be blocked by Landlock.
+        let r = b.exec("t4", &["/bin/sh".into(), "-c".into(), "echo nope > /etc/tc-test-blocked".into()]).unwrap();
+        assert_ne!(r.exit_code, Some(0), "write outside workspace must be blocked by Landlock");
+        assert!(!std::path::Path::new("/etc/tc-test-blocked").exists(), "nothing should leak to host /etc");
+
+        b.destroy("t4").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -5,6 +5,8 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
         audit_path: audit.to_path_buf(),
         session: "limits".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
     }
 }
 

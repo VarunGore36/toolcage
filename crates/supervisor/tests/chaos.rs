@@ -10,6 +10,8 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         policy: sample_policy(),
         audit_path: audit.to_path_buf(),
         session: "chaos".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
     }
 }
 
@@ -24,6 +26,8 @@ fn audit_write_failure_denies_action() {
         policy: sample_policy(),
         audit_path: bad,
         session: "c".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
     };
     let b = toolcage_broker::Broker::new();
     // open("not-a-dir/audit.jsonl") fails -> propagate as Err, caller must not act.
@@ -99,7 +103,7 @@ fn over_egress_budget_denies_fail_closed() {
     std::fs::create_dir_all(&dir).unwrap();
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
-    let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "c".into() };
+    let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "c".into(), tier: toolcage_backend::Tier::Tier0, backend: None };
     let b = toolcage_broker::Broker::new();
     let rl = toolcage_capability::RevocationList::default();
     let mut budgets = toolcage_proxy::Budgets::default();

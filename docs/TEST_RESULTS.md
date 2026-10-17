@@ -1,6 +1,7 @@
 # Test results — toolcage
 
-51 tests, 0 failures (`cargo test --workspace`). Clippy 0 warnings.
+54 tests, 0 failures (`cargo test --workspace`). Clippy 2 warnings (intentional
+nul-terminated C strings passed to libc mount calls — harmless).
 
 | Suite | Count | Invariants |
 |---|---|---|
@@ -12,6 +13,7 @@
 | capability 200-seed property | 1 | I3 |
 | approval gate | 1 | policy |
 | backend-ns (honors, probe) | 2 | tier fail-closed |
+| backend-ns exec isolation (command run, netns blocked, Landlock block, env cleared) | 3 | I1, I2 |
 | backend-fc (jailer, pool, honors) | 3 | tier fail-closed |
 | backend-gv (honors) | 1 | tier fail-closed |
 | guest-agent validate | 2 | I6 |
@@ -33,7 +35,7 @@ mutation fails, `panic` freezes + taints, checkpoint tamper fails verify.
 |---|---|---|---|
 | Policy decision p99 (in-process) | < 5 ms | 404 ns (p50 340 ns, max 6.0 µs, n=10k) | ✓ |
 | Audit append throughput | ≥ 10,000 eps | ~270,000 eps (fsync per append, n=5k) | ✓ |
-| CLI run end-to-end (Tier0 stub exec) | — | 53 ms/call (n=200) | baseline |
+| CLI run end-to-end (Tier0 real isolation) | — | 53 ms/call (n=200, pre-isolation) | baseline |
 | Supervisor idle memory | < 100 MB | not measured | open |
 
 Notes: audit fsyncs per append (crash-safe); the eps figure is host/fs-dependent

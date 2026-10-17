@@ -47,6 +47,16 @@ pub struct SessionSpec {
     pub tier: Tier,
     pub mem_mb: u64,
     pub workspace_mb: u64,
+    /// Host path bind-mounted as `/workspace` inside Tier0 (enforced by policy).
+    pub workspace: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandResult {
+    pub exit_code: Option<i32>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub truncated: bool,
 }
 
 pub trait Backend {
@@ -64,4 +74,9 @@ pub trait Backend {
     }
     fn create(&mut self, spec: &SessionSpec) -> anyhow::Result<()>;
     fn destroy(&mut self, id: &str) -> anyhow::Result<()>;
+    /// Run argv inside an isolated session. Tier0 implements this with
+    /// namespaces + Landlock + seccomp; other tiers return Err until wired.
+    fn exec(&mut self, _id: &str, _argv: &[String]) -> anyhow::Result<CommandResult> {
+        anyhow::bail!("backend exec not implemented for tier {:?}", self.tier())
+    }
 }

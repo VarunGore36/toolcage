@@ -1,7 +1,6 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use toolcage_backend::Backend;
 
 #[derive(Parser)]
 #[command(name = "toolcage")]
@@ -20,6 +19,9 @@ enum Cmd {
         audit: PathBuf,
         #[arg(long, default_value = "tier0")]
         tier: String,
+        /// Host path bind-mounted as `/workspace` inside Tier0 (defaults to cwd).
+        #[arg(long, default_value = ".")]
+        workspace: PathBuf,
         #[arg(trailing_var_arg = true, required = true)]
         argv: Vec<String>,
     },
@@ -133,22 +135,42 @@ enum TokenOp {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Run { policy, audit, tier, argv } => {
+        Cmd::Run { policy, audit, tier, workspace, argv } => {
             let text = std::fs::read_to_string(&policy).with_context(|| "read policy")?;
             let pol = toolcage_policy::load_yaml(&text)?;
             // Fail-closed tier selection: refuse policy the backend cannot honor.
             let t = toolcage_backend::Tier::parse(&tier)?;
-            let ok = match t {
-                toolcage_backend::Tier::Tier0 => toolcage_backend_ns::NsBackend::new().honors(&pol.min_isolation),
-                toolcage_backend::Tier::Tier1 => toolcage_backend_gv::GvBackend::new().honors(&pol.min_isolation),
-                toolcage_backend::Tier::Tier2 => toolcage_backend_fc::FcBackend::new().honors(&pol.min_isolation),
+            let mut backend: Box<dyn toolcage_backend::Backend> = match t {
+                toolcage_backend::Tier::Tier0 => Box::new(toolcage_backend_ns::NsBackend::new()),
+                toolcage_backend::Tier::Tier1 => Box::new(toolcage_backend_gv::GvBackend::new()),
+                toolcage_backend::Tier::Tier2 => Box::new(toolcage_backend_fc::FcBackend::new()),
             };
-            if !ok {
+            if !backend.honors(&pol.min_isolation) {
                 eprintln!("denied: backend {tier} cannot honor min_isolation {}", pol.min_isolation);
                 std::process::exit(2);
             }
-            let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "cli".into() };
+            // Resolve workspace to an absolute path so it works from inside the
+            // namespace regardless of cwd changes.
+            let workspace = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
+            let spec = toolcage_backend::SessionSpec {
+                id: format!("run-{}", std::process::id()),
+                tier: t,
+                mem_mb: pol.limits.memory_mb,
+                workspace_mb: 0, // not enforced yet; cgroup placement lands with the drivers
+                workspace: workspace.display().to_string(),
+            };
+            backend.create(&spec).with_context(|| "create isolated session")?;
+            let mut sup = toolcage_supervisor::Supervisor {
+                policy: pol,
+                audit_path: audit,
+                session: spec.id.clone(),
+                tier: t,
+                backend: Some(backend),
+            };
             let o = sup.exec(&argv)?;
+            if let Some(mut b) = sup.backend.take() {
+                let _ = b.destroy(&spec.id);
+            }
             if !o.allowed {
                 eprintln!("denied: {:?}", o.rule_ids);
                 std::process::exit(2);
@@ -172,7 +194,7 @@ fn main() -> anyhow::Result<()> {
         Cmd::Fetch { policy, audit, host, method, path, cred, secret_value, approve, token } => {
             let text = std::fs::read_to_string(&policy)?;
             let pol = toolcage_policy::load_yaml(&text)?;
-            let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "cli".into() };
+            let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "cli".into(), tier: toolcage_backend::Tier::Tier0, backend: None };
             let mut broker = toolcage_broker::Broker::new();
             if !secret_value.is_empty() {
                 broker.insert(toolcage_broker::Credential { name: cred, value: secret_value, use_with: "github".into(), methods: vec![], paths: vec![] });
@@ -229,7 +251,7 @@ fn main() -> anyhow::Result<()> {
             McpOp::Serve { policy, audit } => {
                 let text = std::fs::read_to_string(&policy)?;
                 let pol = toolcage_policy::load_yaml(&text)?;
-                let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "mcp".into() };
+                let mut sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "mcp".into(), tier: toolcage_backend::Tier::Tier0, backend: None };
                 let broker = toolcage_broker::Broker::new();
                 let stdin = std::io::stdin();
                 use std::io::BufRead;
@@ -248,7 +270,7 @@ fn main() -> anyhow::Result<()> {
                     };
                     let resp = if req.method == "tools/call" {
                         match serde_json::from_value::<toolcage_mcp::CallParams>(req.params) {
-                            Ok(cp) => match toolcage_mcp::route(&sup, &broker, &mut toolcage_proxy::Budgets::default(), None, &toolcage_capability::RevocationList::default(), &cp.name, &cp.arguments) {
+                            Ok(cp) => match toolcage_mcp::route(&mut sup, &broker, &mut toolcage_proxy::Budgets::default(), None, &toolcage_capability::RevocationList::default(), &cp.name, &cp.arguments) {
                                 Ok(v) => toolcage_mcp::RpcResp::ok(req.id, v),
                                 Err(e) => toolcage_mcp::RpcResp::deny(req.id, &[e.to_string()]),
                             },
@@ -265,10 +287,10 @@ fn main() -> anyhow::Result<()> {
             McpOp::Call { policy, audit, name, args_json } => {
                 let text = std::fs::read_to_string(&policy)?;
                 let pol = toolcage_policy::load_yaml(&text)?;
-                let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "mcp-call".into() };
+                let mut sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "mcp-call".into(), tier: toolcage_backend::Tier::Tier0, backend: None };
                 let broker = toolcage_broker::Broker::new();
                 let args: serde_json::Value = serde_json::from_str(&args_json)?;
-                match toolcage_mcp::route(&sup, &broker, &mut toolcage_proxy::Budgets::default(), None, &toolcage_capability::RevocationList::default(), &name, &args) {
+                match toolcage_mcp::route(&mut sup, &broker, &mut toolcage_proxy::Budgets::default(), None, &toolcage_capability::RevocationList::default(), &name, &args) {
                     Ok(v) => println!("{v}"),
                     Err(e) => {
                         eprintln!("denied: {e}");

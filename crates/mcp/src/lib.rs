@@ -67,7 +67,7 @@ pub struct CallParams {
 
 /// Route a tools/call to supervisor. Returns JSON result or denial.
 pub fn route(
-    sup: &toolcage_supervisor::Supervisor,
+    sup: &mut toolcage_supervisor::Supervisor,
     broker: &toolcage_broker::Broker,
     budgets: &mut toolcage_proxy::Budgets,
     token: Option<&toolcage_capability::Token>,
@@ -191,15 +191,17 @@ mod tests {
     use super::*;
     #[test]
     fn unknown_tool_rejected() {
-        let sup = toolcage_supervisor::Supervisor {
+        let mut sup = toolcage_supervisor::Supervisor {
             policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
             audit_path: std::env::temp_dir().join("tc-mcp-test.jsonl"),
             session: "t".into(),
+            tier: toolcage_backend::Tier::Tier0,
+            backend: None,
         };
         let b = toolcage_broker::Broker::new();
         let mut budgets = toolcage_proxy::Budgets::default();
         let rl = toolcage_capability::RevocationList::default();
-        assert!(route(&sup, &b, &mut budgets, None, &rl, "nope", &serde_json::json!({})).is_err());
+        assert!(route(&mut sup, &b, &mut budgets, None, &rl, "nope", &serde_json::json!({})).is_err());
     }
     #[test]
     fn learn_proposes_denials() {

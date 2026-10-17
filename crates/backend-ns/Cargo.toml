@@ -7,4 +7,6 @@ license.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 serde = { workspace = true }
+libc = { workspace = true }
+nix = { workspace = true, features = ["fs", "mount", "process", "signal", "sched"] }
 toolcage-backend = { path = "../backend" }
