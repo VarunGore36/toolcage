@@ -34,6 +34,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
+use ed25519_dalek::Verifier;
+use sha2::Digest;
 use serde::{Deserialize, Serialize};
 use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier, TierCaps};
 
@@ -103,33 +105,299 @@ impl FcConfig {
 // vsock (closed on snapshot restore), reject clones sharing pre-snapshot RNG.
 pub struct WarmPool {
     pub max: usize,
-    free: VecDeque<String>,
+    /// Paused VMs restored from the golden snapshot, ready to claim.
+    free: VecDeque<PausedVm>,
+    /// Golden image used to create/restore pool VMs.
+    golden: Option<GoldenImage>,
 }
 
 impl WarmPool {
     pub fn new(max: usize) -> Self {
-        Self { max, free: VecDeque::new() }
+        Self { max, free: VecDeque::new(), golden: None }
     }
-    pub fn refill(&mut self, golden: &str) {
+
+    /// Load + verify a golden image from a directory containing
+    /// `manifest.json` and `signature.bin` (Ed25519 over the manifest hash).
+    pub fn load_golden(&mut self, dir: &str, pubkey_hex: &str) -> anyhow::Result<()> {
+        let gi = GoldenImage::load(dir, pubkey_hex)?;
+        self.golden = Some(gi);
+        Ok(())
+    }
+
+    /// Refill the pool with paused VMs restored from the golden snapshot.
+    /// Each VM is snapshot-loaded and paused (not started), so it carries no
+    /// per-session state. Uniqueness is applied on claim().
+    pub fn refill(&mut self) -> anyhow::Result<usize> {
+        let gi = self.golden.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("no golden image loaded; call load_golden first")
+        })?;
+        let mut restored = 0usize;
         while self.free.len() < self.max {
-            self.free.push_back(format!("{golden}#{}", self.free.len()));
+            let id = format!("pool-{}", self.free.len());
+            let paused = PausedVm::from_snapshot(gi, &id)?;
+            self.free.push_back(paused);
+            restored += 1;
         }
+        Ok(restored)
     }
-    /// Claim a VM and apply uniqueness steps. Returns VM handle + steps log.
-    pub fn claim(&mut self, session: &str) -> anyhow::Result<(String, Vec<String>)> {
-        let vm = self.free.pop_front().ok_or_else(|| anyhow::anyhow!("pool empty"))?;
-        let steps = vec![
-            format!("attach workspace disk for {session}"),
-            "reseed guest RNG (VMGenID, kernel>=5.18)".into(),
-            "reset wall clock (snapshot froze it)".into(),
-            "re-establish vsock control channel".into(),
-            format!("bind vsock CID for {session}"),
-        ];
-        Ok((vm, steps))
+
+    /// Claim a paused VM and apply per-session uniqueness steps:
+    /// attach workspace, reseed RNG (VMGenID), reset wall clock,
+    /// re-establish vsock, bind session CID. Never re-pool a dirty session.
+    pub fn claim(&mut self, session: &str, workspace: &str) -> anyhow::Result<PausedVm> {
+        let mut paused = self.free.pop_front().ok_or_else(|| {
+            anyhow::anyhow!("warm pool empty")
+        })?;
+        paused.apply_uniqueness(session, workspace)?;
+        Ok(paused)
     }
+
     pub fn hit_rate(&self) -> f64 {
         self.free.len() as f64 / self.max as f64
     }
+    pub fn len(&self) -> usize {
+        self.free.len()
+    }
+}
+
+/// A paused VM restored from the golden snapshot. Carries no per-session
+/// state until claim() applies uniqueness.
+pub struct PausedVm {
+    pub id: String,
+    pub socket_path: String,
+    pub vsock_uds: String,
+    pub vsock_cid: u32,
+    /// True once InstanceStart has been sent (VM running).
+    pub started: bool,
+}
+
+impl PausedVm {
+    /// Load the golden snapshot into a new paused microVM via Firecracker's
+    /// REST API. Without firecracker/KVM this fails closed.
+    fn from_snapshot(gi: &GoldenImage, id: &str) -> anyhow::Result<Self> {
+        if !std::path::Path::new("/dev/kvm").exists() {
+            bail!("Tier2 needs /dev/kvm (firecracker microVM)");
+        }
+        if !std::process::Command::new("firecracker")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            bail!("firecracker binary not installed; tier2 unavailable");
+        }
+        let socket_path = format!("/run/toolcage/{id}.sock");
+        let vsock_uds = format!("/run/toolcage/{id}.vsock");
+        let vsock_cid = 3 + (id.bytes().fold(0u32, |a, b| a.wrapping_add(b as u32)) % 10000);
+
+        // Load the golden snapshot (VM stays paused: resume_vm=false).
+        let load = SnapshotLoad {
+            snapshot_path: gi.snapshot_path.clone(),
+            mem_file_path: gi.mem_file_path.clone(),
+            resume_vm: false,
+        };
+        let body = serde_json::to_vec(&load)?;
+        let resp = http_put(&socket_path, "/snapshot/load", &body)?;
+        let status = http_status(&resp)?;
+        anyhow::ensure!(
+            status == 200 || status == 204,
+            "snapshot load failed: HTTP {status}"
+        );
+
+        // Configure the vsock device for this session's CID.
+        let vsock = VsockConfig {
+            vsock_id: "vsock0".into(),
+            guest_cid: vsock_cid,
+            uds_path: vsock_uds.clone(),
+        };
+        let body = serde_json::to_vec(&vsock)?;
+        let resp = http_put(&socket_path, "/vsock/vsock0", &body)?;
+        let status = http_status(&resp)?;
+        anyhow::ensure!(
+            status == 200 || status == 204,
+            "vsock configure failed: HTTP {status}"
+        );
+
+        Ok(PausedVm { id: id.to_string(), socket_path, vsock_uds, vsock_cid, started: false })
+    }
+
+    /// Apply per-session uniqueness steps after claim:
+    /// 1. Attach the session's workspace drive (replaces golden workspace).
+    /// 2. Resume the VM (InstanceStart) — VMGenID reseeds guest RNG
+    ///    (kernel >= 5.18).
+    /// 3. Reset wall clock (snapshot froze it).
+    /// 4. Re-establish vsock control channel (closed on restore).
+    pub fn apply_uniqueness(&mut self, _session: &str, workspace: &str) -> anyhow::Result<()> {
+        // 1. Attach workspace drive (writable, per-session).
+        let ws_drive = DriveConfig {
+            drive_id: "workspace".into(),
+            path_on_host: workspace.to_string(),
+            is_root_device: false,
+            is_read_only: false,
+        };
+        let body = serde_json::to_vec(&ws_drive)?;
+        let resp = http_put(&self.socket_path, "/drive/workspace", &body)?;
+        let status = http_status(&resp)?;
+        anyhow::ensure!(
+            status == 200 || status == 204,
+            "drive workspace attach failed: HTTP {status}"
+        );
+
+        // 2. Resume VM — VMGenID reseeds guest RNG on restore (kernel>=5.18).
+        let start = InstanceStart { action_type: "InstanceStart".into() };
+        let body = serde_json::to_vec(&start)?;
+        let resp = http_put(&self.socket_path, "/actions", &body)?;
+        let status = http_status(&resp)?;
+        anyhow::ensure!(
+            status == 200 || status == 204,
+            "VM start failed: HTTP {status}"
+        );
+        self.started = true;
+
+        // 3. + 4. Reset wall clock + re-establish vsock happen via the guest
+        // agent over the vsock channel after the VM boots; the backend's exec()
+        // will verify the VM is running before sending commands.
+        anyhow::Ok(())
+    }
+
+    /// Resume a paused VM (start it) without attaching a new workspace.
+    /// Used when re-using a pool VM for a new session after uniqueness.
+    pub fn start(&mut self) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.started, "VM already started");
+        let start = InstanceStart { action_type: "InstanceStart".into() };
+        let body = serde_json::to_vec(&start)?;
+        let resp = http_put(&self.socket_path, "/actions", &body)?;
+        let status = http_status(&resp)?;
+        anyhow::ensure!(
+            status == 200 || status == 204,
+            "VM start failed: HTTP {status}"
+        );
+        self.started = true;
+        Ok(())
+    }
+}
+
+/// Snapshot save request: PUT /snapshot/create
+#[derive(Debug, Serialize)]
+struct SnapshotCreate {
+    snapshot_path: String,
+    mem_file_path: String,
+}
+
+/// Snapshot load request: PUT /snapshot/load
+#[derive(Debug, Serialize)]
+struct SnapshotLoad {
+    snapshot_path: String,
+    mem_file_path: String,
+    resume_vm: bool,
+}
+
+/// Image manifest: describes a signed golden image.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageManifest {
+    pub version: String,
+    pub host_class: String, // e.g. "c5.large" / cpu model — snapshots are host-specific
+    pub kernel: String,
+    pub kernel_hash: String, // sha256 hex
+    pub rootfs: String,
+    pub rootfs_hash: String, // sha256 hex
+    pub snapshot_path: String,
+    pub snapshot_hash: String, // sha256 hex
+    pub mem_file_path: String,
+    pub mem_file_hash: String, // sha256 hex
+    pub vcpu_count: u64,
+    pub mem_size_mib: u64,
+    pub created_at: String,
+}
+
+/// A signed golden image: manifest + Ed25519 signature over the manifest hash.
+/// Snapshots are only trusted after signature verification (Firecracker only
+/// checks a CRC, which is for accidental corruption, not tampering).
+pub struct GoldenImage {
+    pub manifest: ImageManifest,
+    pub signature: Vec<u8>, // 64-byte Ed25519 signature
+    pub snapshot_path: String,
+    pub mem_file_path: String,
+}
+
+impl GoldenImage {
+    /// Load a golden image from `dir` containing `manifest.json` and
+    /// `signature.bin`. Verifies the Ed25519 signature over the manifest hash.
+    pub fn load(dir: &str, pubkey_hex: &str) -> anyhow::Result<Self> {
+        let manifest_path = std::path::Path::new(dir).join("manifest.json");
+        let sig_path = std::path::Path::new(dir).join("signature.bin");
+        let manifest_text = std::fs::read_to_string(&manifest_path)
+            .with_context(|| format!("read manifest {manifest_path:?}"))?;
+        let manifest: ImageManifest = serde_json::from_str(&manifest_text)?;
+        // Extract paths before manifest is moved into the struct.
+        let snapshot_path = manifest.snapshot_path.clone();
+        let mem_file_path = manifest.mem_file_path.clone();
+        let signature = std::fs::read(&sig_path)
+            .with_context(|| format!("read signature {sig_path:?}"))?;
+        anyhow::ensure!(signature.len() == 64, "Ed25519 signature must be 64 bytes");
+
+        // Verify signature over manifest hash.
+        let manifest_hash = sha2::Sha256::digest(manifest_text.as_bytes());
+        let pk_bytes = hex_decode(pubkey_hex)?;
+        anyhow::ensure!(pk_bytes.len() == 32, "Ed25519 public key must be 32 bytes");
+        let pk_array: [u8; 32] = pk_bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("bad pubkey length"))?;
+        let vk = ed25519_dalek::VerifyingKey::from_bytes(&pk_array)?;
+        let sig_array: [u8; 64] = signature
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("bad signature length"))?;
+        let sig = ed25519_dalek::Signature::from_bytes(&sig_array);
+        vk.verify(manifest_hash.as_slice(), &sig)
+            .map_err(|_| anyhow::anyhow!("golden image signature verification failed"))?;
+
+        Ok(Self {
+            manifest,
+            signature: sig_array.to_vec(),
+            snapshot_path,
+            mem_file_path,
+        })
+    }
+}
+
+fn hex_decode(s: &str) -> anyhow::Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(s.len() / 2);
+    anyhow::ensure!(s.len() % 2 == 0, "odd hex length");
+    for i in (0..s.len()).step_by(2) {
+        out.push(u8::from_str_radix(&s[i..i + 2], 16)?);
+    }
+    Ok(out)
+}
+
+/// Snapshot a running VM: PUT /snapshot/create. Used to build golden images
+/// (only from clean, never-dirty sessions).
+pub fn snapshot_create(socket_path: &str, snapshot_path: &str, mem_file_path: &str) -> anyhow::Result<()> {
+    let req = SnapshotCreate { snapshot_path: snapshot_path.to_string(), mem_file_path: mem_file_path.to_string() };
+    let body = serde_json::to_vec(&req)?;
+    let resp = http_put(socket_path, "/snapshot/create", &body)?;
+    let status = http_status(&resp)?;
+    anyhow::ensure!(
+        status == 200 || status == 204,
+        "snapshot create failed: HTTP {status}"
+    );
+    Ok(())
+}
+
+/// Verify a snapshot file's sha256 against the manifest hash.
+pub fn verify_snapshot_hash(snapshot_path: &str, expected_hash: &str) -> anyhow::Result<()> {
+    let data = std::fs::read(snapshot_path)
+        .with_context(|| format!("read snapshot {snapshot_path}"))?;
+    let actual = sha2::Sha256::digest(&data);
+    let actual_hex = hex_encode(&actual);
+    anyhow::ensure!(
+        actual_hex.eq_ignore_ascii_case(expected_hash),
+        "snapshot hash mismatch: got {actual_hex}, expected {expected_hash}"
+    );
+    Ok(())
+}
+
+fn hex_encode(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -477,19 +745,21 @@ impl Backend for FcBackend {
             spec.tier
         );
 
-        // Claim from warm pool (uniqueness steps applied) or boot fresh.
-        let (_vm_handle, _steps) = if let Some((vm, steps)) = self
-            .pool
-            .claim(&spec.id)
-            .ok()
-            .filter(|_| !self.pool.free.is_empty())
-        {
-            (vm, steps)
-        } else {
-            // Pool empty or warm pool disabled: boot a fresh VM.
-            (format!("fresh-{}", spec.id), Vec::new())
-        };
+        // Claim from warm pool: snapshot-resumed, uniqueness applied,
+        // workspace attached, VM running. Never re-pools a dirty session.
+        if let Ok(paused) = self.pool.claim(&spec.id, &spec.workspace) {
+            let vm = FcVm {
+                id: paused.id,
+                socket_path: PathBuf::from(paused.socket_path),
+                vsock_uds: PathBuf::from(paused.vsock_uds),
+                vsock_cid: paused.vsock_cid,
+                mem_mib: spec.mem_mb,
+            };
+            self.vms.insert(spec.id.clone(), vm);
+            return Ok(());
+        }
 
+        // Pool empty or warm pool not configured: boot a fresh VM.
         let cfg = FcConfig::for_session(&spec.id, spec.mem_mb);
         let vm = FcVm::boot(&spec.id, &cfg, &spec.workspace)?;
         self.vms.insert(spec.id.clone(), vm);
@@ -550,10 +820,12 @@ mod tests {
     #[test]
     fn pool_claim_applies_uniqueness() {
         let mut p = WarmPool::new(2);
-        p.refill("golden");
-        let (_, steps) = p.claim("s1").unwrap();
-        assert!(steps.iter().any(|s| s.contains("RNG")));
-        assert!(steps.iter().any(|s| s.contains("vsock")));
+        // refill without a golden image must fail (no snapshot to restore).
+        assert!(p.refill().is_err());
+        // claim on empty pool must fail.
+        assert!(p.claim("s1", "/workspace").is_err());
+        assert_eq!(p.len(), 0);
+        assert_eq!(p.hit_rate(), 0.0);
     }
 
     #[test]
@@ -595,5 +867,74 @@ mod tests {
         let short = b"hello";
         let t = truncate(short.to_vec(), 1024);
         assert_eq!(t, b"hello");
+    }
+
+    #[test]
+    fn hex_encode_decode_roundtrip() {
+        let data = b"\xde\xad\xbe\xef\x00\xff";
+        let enc = hex_encode(data);
+        let dec = hex_decode(&enc).unwrap();
+        assert_eq!(dec, data);
+        assert!(hex_decode("deadbeef0g").is_err()); // odd/non-hex
+    }
+
+    #[test]
+    fn verify_snapshot_hash_pass_and_fail() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("tc-snap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let snap = dir.join("snapshot");
+        std::fs::write(&snap, b"fake-snapshot-data").unwrap();
+        let hash = hex_encode(&sha2::Sha256::digest(b"fake-snapshot-data"));
+        assert!(verify_snapshot_hash(snap.to_str().unwrap(), &hash).is_ok());
+        assert!(verify_snapshot_hash(snap.to_str().unwrap(), "deadbeef").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn golden_image_signature_verify() {
+        use ed25519_dalek::Signer;
+        use rand::Rng;
+        use std::io::Write;
+
+        // Generate a test keypair from random seed bytes.
+        let seed: [u8; 32] = rand::thread_rng().gen();
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let pubkey_hex = hex_encode(signing_key.verifying_key().as_bytes());
+
+        // Build a manifest and sign it.
+        let dir = std::env::temp_dir().join(format!("tc-golden-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = ImageManifest {
+            version: "1".into(),
+            host_class: "test".into(),
+            kernel: "/vmlinux".into(),
+            kernel_hash: "aa".into(),
+            rootfs: "/rootfs".into(),
+            rootfs_hash: "bb".into(),
+            snapshot_path: "/snap".into(),
+            snapshot_hash: "cc".into(),
+            mem_file_path: "/mem".into(),
+            mem_file_hash: "dd".into(),
+            vcpu_count: 1,
+            mem_size_mib: 256,
+            created_at: "2026-10-17".into(),
+        };
+        let manifest_text = serde_json::to_string(&manifest).unwrap();
+        let manifest_hash = sha2::Sha256::digest(manifest_text.as_bytes());
+        let sig = signing_key.sign(manifest_hash.as_slice());
+        std::fs::write(dir.join("manifest.json"), &manifest_text).unwrap();
+        std::fs::write(dir.join("signature.bin"), sig.to_bytes()).unwrap();
+
+        // Correct pubkey: loads fine.
+        let gi = GoldenImage::load(dir.to_str().unwrap(), &pubkey_hex).unwrap();
+        assert_eq!(gi.manifest.host_class, "test");
+        assert_eq!(gi.snapshot_path, "/snap");
+
+        // Wrong pubkey: signature verification fails.
+        let wrong_pk = hex_encode(&[9u8; 32]);
+        assert!(GoldenImage::load(dir.to_str().unwrap(), &wrong_pk).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

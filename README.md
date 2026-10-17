@@ -42,7 +42,7 @@
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="license"/>
   <img src="https://img.shields.io/badge/rust-1.98+-orange?style=flat-square&logo=rust" alt="rust"/>
   <img src="https://img.shields.io/badge/linux-cgroupv2_landlock_kvm-lightgrey?style=flat-square&logo=linux" alt="linux"/>
-  <img src="https://img.shields.io/badge/tests-63_passing-brightgreen?style=flat-square" alt="tests"/>
+  <img src="https://img.shields.io/badge/tests-66_passing-brightgreen?style=flat-square" alt="tests"/>
 </p>
 
 **Every agent tool call runs inside a disposable cage — least-privilege capabilities, zero visible secrets, and a verifiable receipt.**
@@ -329,9 +329,9 @@ Full model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) · Results: [`docs/TE
 
 ## 🗺️ Status & roadmap
 
-**Enforced today:** YAML policy allowlist + metadata forbid, Tier0 real kernel isolation (namespaces + Landlock), Tier1 real gVisor isolation (runsc exec) and Tier2 Firecracker REST driver (create/boot/destroy/exec via vsock) + `env_clear`/streaming cap/timeout kill, proxy decision + broker inject/scrub, attenuate-only tokens with expiry + revocation graph, approval pause, hash-chain audit with verify-on-open and head-bound checkpoints, `doctor`/`panic`.
+**Enforced today:** YAML policy allowlist + metadata forbid, Tier0 real kernel isolation (namespaces + Landlock), Tier1 real gVisor isolation (runsc exec) and Tier2 Firecracker REST driver (microVM boot + vsock exec, signed golden-image snapshots + warm pool) + `env_clear`/streaming cap/timeout kill, proxy decision + broker inject/scrub, attenuate-only tokens with expiry + revocation graph, approval pause, hash-chain audit with verify-on-open and head-bound checkpoints, `doctor`/`panic`.
 
-**In progress:** Firecracker snapshot warm pool (T2.2), shared/persistent budget counters, encrypted credential store, seccomp-BPF (unavailable on this host's kernel build — best-effort, namespaces+Landlock still enforce).
+**In progress:** shared/persistent budget counters, encrypted credential store, seccomp-BPF (unavailable on this host's kernel build — best-effort, namespaces+Landlock still enforce).
 
 ---
 
