@@ -1,6 +1,6 @@
 # Test results — toolcage
 
-49 tests, 0 failures (`cargo test --workspace`). Clippy 0 warnings.
+51 tests, 0 failures (`cargo test --workspace`). Clippy 0 warnings.
 
 | Suite | Count | Invariants |
 |---|---|---|

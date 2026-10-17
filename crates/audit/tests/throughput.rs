@@ -2,7 +2,6 @@
 //! fsync-per-append caps this (~hundreds/s today); group commit is the next step.
 //! Runs every commit; prints appends/sec. Asserts a CI-safe floor so a
 //! regression is caught, while the real number is captured in docs/TEST_RESULTS.md.
-use std::io::Write;
 use std::time::Instant;
 use toolcage_audit::{Event, Writer};
 
