@@ -1,6 +1,6 @@
 # Test results — toolcage
 
-54 tests, 0 failures (`cargo test --workspace`). Clippy 2 warnings (intentional
+57 tests, 0 failures (`cargo test --workspace`). Clippy 2 warnings (intentional
 nul-terminated C strings passed to libc mount calls — harmless).
 
 | Suite | Count | Invariants |
@@ -15,7 +15,7 @@ nul-terminated C strings passed to libc mount calls — harmless).
 | backend-ns (honors, probe) | 2 | tier fail-closed |
 | backend-ns exec isolation (command run, netns blocked, Landlock block, env cleared) | 3 | I1, I2 |
 | backend-fc (jailer, pool, honors) | 3 | tier fail-closed |
-| backend-gv (honors) | 1 | tier fail-closed |
+| backend-gv (honors lattice, bundle config, fail-closed without runsc) | 4 | tier fail-closed |
 | guest-agent validate | 2 | I6 |
 | mcp (learn, host, unknown-tool) | 3 | A2 |
 | supervisor canary | 1 | I2, I7 |

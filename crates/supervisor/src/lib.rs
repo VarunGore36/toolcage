@@ -98,9 +98,10 @@ impl Supervisor {
             return Ok(ExecOutcome { allowed: false, rule_ids: d.rule_ids, exit_code: None, stdout: vec![], stderr: vec![] });
         }
         // Tier 0 runs inside a real namespace + Landlock + seccomp cage (I1),
-        // when a backend is wired; otherwise fall back to direct spawn (tests
-        // that exercise supervisor-level limits only).
-        if self.tier == Tier::Tier0 {
+        // Tier 1 runs inside runsc (gVisor). Both go through the wired backend;
+        // otherwise fall back to direct spawn (tests that exercise supervisor-level
+        // limits only).
+        if self.tier == Tier::Tier0 || self.tier == Tier::Tier1 {
             if let Some(backend) = self.backend.as_mut() {
                 let cr = backend.exec(&self.session, argv)?;
                 w.append(Event {
