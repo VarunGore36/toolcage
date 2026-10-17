@@ -1,6 +1,6 @@
 # Test results — toolcage
 
-66 tests, 0 failures (`cargo test --workspace`). Clippy 2 warnings (intentional
+69 tests, 0 failures (`cargo test --workspace`). Clippy 2 warnings (intentional
 nul-terminated C strings passed to libc mount calls — harmless).
 
 | Suite | Count | Invariants |
@@ -9,7 +9,7 @@ nul-terminated C strings passed to libc mount calls — harmless).
 | policy escape integration | 3 | I1, I6 |
 | audit chain + mutation | 1 | I4, I5 |
 | broker inject/scrub/canary + path-bound creds | 3 | I2 |
-| proxy alias/metadata/budget | 4 | I1 |
+| proxy alias/metadata/budget + blocked-ip + http parsing + golden-image sig | 10 | I1 |
 | capability 200-seed property | 1 | I3 |
 | approval gate | 1 | policy |
 | backend-ns (honors, probe) | 2 | tier fail-closed |

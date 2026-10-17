@@ -209,6 +209,7 @@ impl Supervisor {
         &self,
         broker: &toolcage_broker::Broker,
         budgets: &mut toolcage_proxy::Budgets,
+        proxy: &mut toolcage_proxy::Proxy,
         alias_or_host: &str,
         method: &str,
         path: &str,
@@ -266,17 +267,29 @@ impl Supervisor {
                     && c.use_with.eq_ignore_ascii_case("github")))
             .map(|c| c.name.clone());
         let upstream = pd.upstream.clone().unwrap_or_default();
-        // Simulated upstream response (would be real TLS here). May echo secret -> scrub.
-        let raw_upstream = if let Some(cn) = &cred_name {
-            match broker.inject(cn, &cred_name_alias(alias_or_host), method, path) {
-                Some(secret) => format!("upstream {upstream}{path} ok auth={secret}"),
-                None => format!("upstream {upstream}{path} ok no-auth"),
+        // Build auth header from broker-injected credential (never goes to guest).
+        let mut headers: Vec<(String, String)> = Vec::new();
+        if let Some(cn) = &cred_name {
+            if let Some(secret) = broker.inject(cn, &cred_name_alias(alias_or_host), method, path) {
+                headers.push(("Authorization".to_string(), format!("Bearer {secret}")));
             }
-        } else {
-            format!("upstream {upstream}{path} ok no-auth")
+        }
+        // Real dial: proxy resolves DNS, connects (TLS if https), sends request.
+        let resp = match proxy.fetch(&upstream, method, path, &headers) {
+            Ok(r) => r,
+            Err(e) => {
+                w.append(Event {
+                    seq: 0, ts_wall: now_wall(), session: self.session.clone(),
+                    actor: "proxy".into(), action: format!("http.request {method} {alias_or_host}{path}"),
+                    request_hash: "net".into(), decision: "deny".into(),
+                    rule_ids: vec!["proxy-error".into()], token_rev_id: "root".into(),
+                    result: format!("proxy-error: {e}").into(), bytes: 0, claimed_by: "host".into(),
+                    prev_hash: String::new(), hash: String::new(),
+                })?;
+                return Ok(FetchOutcome { allowed: false, need_approval: false, rule_ids: vec!["proxy-error".into()], body: String::new() });
+            }
         };
-        let safe_body = broker.scrub(&raw_upstream);
-        debug_assert!(!safe_body.contains("s3cr3t") || !raw_upstream.contains("s3cr3t") || true);
+        let safe_body = broker.scrub(&String::from_utf8_lossy(&resp.body));
         // Egress damage bound (§8): per-destination byte + request budgets.
         // Zero limit = unbounded (back-compat); over-budget denies fail-closed.
         {
@@ -299,7 +312,7 @@ impl Supervisor {
             actor: "proxy".into(), action: format!("http.request {method} {alias_or_host}{path}"),
             request_hash: "net".into(), decision: "allow".into(),
             rule_ids: pd.rule_ids.clone(), token_rev_id: "root".into(),
-            result: format!("proxied upstream={upstream} cred={}", cred_name.as_deref().map(toolcage_broker::Broker::log_id).unwrap_or_else(|| "none".into())),
+            result: format!("proxied upstream={upstream} status={} cred={}", resp.status, cred_name.as_deref().map(toolcage_broker::Broker::log_id).unwrap_or_else(|| "none".into())),
             bytes: safe_body.len() as u64, claimed_by: "host".into(),
             prev_hash: String::new(), hash: String::new(),
         })?;

@@ -202,7 +202,8 @@ fn main() -> anyhow::Result<()> {
             let tok = load_token(&token)?;
             let rl = toolcage_capability::RevocationList::default();
             let mut budgets = toolcage_proxy::Budgets::default();
-            let o = sup.fetch_via_proxy(&broker, &mut budgets, &host, &method, &path, tok.as_ref(), &rl, approve)?;
+            let mut proxy = toolcage_proxy::Proxy::new()?;
+            let o = sup.fetch_via_proxy(&broker, &mut budgets, &mut proxy, &host, &method, &path, tok.as_ref(), &rl, approve)?;
             if o.need_approval {
                 eprintln!("paused: approval required {:?}", o.rule_ids);
                 std::process::exit(3);
@@ -253,6 +254,7 @@ fn main() -> anyhow::Result<()> {
                 let pol = toolcage_policy::load_yaml(&text)?;
                 let mut sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "mcp".into(), tier: toolcage_backend::Tier::Tier0, backend: None };
                 let broker = toolcage_broker::Broker::new();
+                let mut proxy = toolcage_proxy::Proxy::new()?;
                 let stdin = std::io::stdin();
                 use std::io::BufRead;
                 for line in stdin.lock().lines() {
@@ -270,7 +272,7 @@ fn main() -> anyhow::Result<()> {
                     };
                     let resp = if req.method == "tools/call" {
                         match serde_json::from_value::<toolcage_mcp::CallParams>(req.params) {
-                            Ok(cp) => match toolcage_mcp::route(&mut sup, &broker, &mut toolcage_proxy::Budgets::default(), None, &toolcage_capability::RevocationList::default(), &cp.name, &cp.arguments) {
+                            Ok(cp) => match toolcage_mcp::route(&mut sup, &broker, &mut proxy, &mut toolcage_proxy::Budgets::default(), None, &toolcage_capability::RevocationList::default(), &cp.name, &cp.arguments) {
                                 Ok(v) => toolcage_mcp::RpcResp::ok(req.id, v),
                                 Err(e) => toolcage_mcp::RpcResp::deny(req.id, &[e.to_string()]),
                             },
@@ -289,8 +291,9 @@ fn main() -> anyhow::Result<()> {
                 let pol = toolcage_policy::load_yaml(&text)?;
                 let mut sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "mcp-call".into(), tier: toolcage_backend::Tier::Tier0, backend: None };
                 let broker = toolcage_broker::Broker::new();
+                let mut proxy = toolcage_proxy::Proxy::new()?;
                 let args: serde_json::Value = serde_json::from_str(&args_json)?;
-                match toolcage_mcp::route(&mut sup, &broker, &mut toolcage_proxy::Budgets::default(), None, &toolcage_capability::RevocationList::default(), &name, &args) {
+                match toolcage_mcp::route(&mut sup, &broker, &mut proxy, &mut toolcage_proxy::Budgets::default(), None, &toolcage_capability::RevocationList::default(), &name, &args) {
                     Ok(v) => println!("{v}"),
                     Err(e) => {
                         eprintln!("denied: {e}");
