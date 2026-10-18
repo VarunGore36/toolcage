@@ -1,0 +1,17 @@
+[package]
+name = "fuzz"
+version = "0.1.0"
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+toolcage-guest-agent = { path = "../crates/guest-agent" }
+toolcage-policy = { path = "../crates/policy" }
+toolcage-audit = { path = "../crates/audit" }
+toolcage-proxy = { path = "../crates/proxy" }
+serde_json = "1"
+arbitrary = "1"
