@@ -331,7 +331,7 @@ Full model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) · Results: [`docs/TE
 
 **Enforced today:** YAML policy allowlist + metadata forbid, Tier0 real kernel isolation (namespaces + Landlock), Tier1 real gVisor isolation (runsc exec) and Tier2 Firecracker REST driver (microVM boot + vsock exec, signed golden-image snapshots + warm pool) + `env_clear`/streaming cap/timeout kill, real egress proxy (DNS control, metadata blocking, TLS, per-dest byte/request budgets) + encrypted credential broker (at-rest XChaCha20-Poly1305 encryption, expiry, rotation) + attenuate-only tokens with expiry + revocation graph, approval pause, hash-chain audit with verify-on-open and head-bound checkpoints, `doctor`/`panic`.
 
-**In progress:** shared/persistent budget counters, encrypted credential store, seccomp-BPF (unavailable on this host's kernel build — best-effort, namespaces+Landlock still enforce).
+**In progress:** shared/persistent budget counters (currently in-memory), seccomp-BPF (unavailable on this host's kernel build — best-effort, namespaces+Landlock still enforce).
 
 ---
 

@@ -29,6 +29,20 @@ Manual live checks: `run` ok, `sh -c` denied, metadata denied, `fetch` scrubbed,
 evil denied, token widen rejected, POST paused then approved, `verify ok`,
 mutation fails, `panic` freezes + taints, checkpoint tamper fails verify.
 
+## 60-Second Demo — Verified (Oct 19 2026)
+
+The plan's wedge demo runs end-to-end on this host:
+
+1. `toolcage-cli doctor` — userns, cgroup2, landlock_abi, seccomp, kvm all present
+2. `toolcage-cli run --tier tier0 -- /bin/echo hello` — prints "hello"
+3. `toolcage-cli run --tier tier0 -- sh -c 'echo pwned'` — denied: `deny:shell`
+4. `toolcage-cli audit keygen --out-prefix /tmp/k` — generates Ed25519 keypair
+5. `toolcage-cli audit checkpoint --log /tmp/tc.jsonl --key-hex /tmp/k.secret.hex` — checkpoint written
+6. `toolcage-cli audit verify --log /tmp/tc.jsonl --pubkey /tmp/k.pub.hex` — `ok: N events, head ... (checkpoints verified)`
+7. Flip one byte of `/tmp/tc.jsonl` → `audit verify` fails (tamper detected)
+
+This demonstrates all four guarantees: disposable isolation, capabilities (deny shell), secret-free guest (no secrets leaked), and tamper-evident log.
+
 ## Benchmarks — plan §11 targets (measured on this host, Oct 17 2026)
 
 | Metric | Target | Measured | Status |
