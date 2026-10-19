@@ -197,7 +197,7 @@ fn main() -> anyhow::Result<()> {
             let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "cli".into(), tier: toolcage_backend::Tier::Tier0, backend: None };
             let mut broker = toolcage_broker::Broker::new();
             if !secret_value.is_empty() {
-                broker.insert(toolcage_broker::Credential { name: cred, value: secret_value, use_with: "github".into(), methods: vec![], paths: vec![] });
+                broker.insert(toolcage_broker::Credential { name: cred, value: secret_value, use_with: "github".into(), methods: vec![], paths: vec![], expires_at: None, encrypted_value: None });
             }
             let tok = load_token(&token)?;
             let rl = toolcage_capability::RevocationList::default();

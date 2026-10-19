@@ -1,6 +1,6 @@
 # Test results — toolcage
 
-69 tests, 0 failures (`cargo test --workspace`). Clippy clean.
+72 tests, 0 failures (`cargo test --workspace`). Clippy clean.
 
 | Suite | Count | Invariants |
 |---|---|---|
@@ -8,6 +8,7 @@
 | policy escape integration | 3 | I1, I6 |
 | audit chain + mutation | 1 | I4, I5 |
 | broker inject/scrub/canary + path-bound creds | 3 | I2 |
+| broker encrypt/load/rotate (encrypted at rest) | 3 | I2 |
 | proxy alias/metadata/budget + blocked-ip + http parsing + golden-image sig | 10 | I1 |
 | capability 200-seed property | 1 | I3 |
 | approval gate | 1 | policy |

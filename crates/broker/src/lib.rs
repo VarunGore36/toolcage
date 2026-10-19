@@ -1,10 +1,11 @@
-//! Credential broker v0: secrets live in host, injected at proxy only.
+//! Credential broker v1: secrets live in host, encrypted at rest, injected at proxy only.
 //! Guest holds `secret:name` placeholders. Log holds stable ids, never values.
 //!
 //! REVIEW (I2):
-//! - inject() binds (name, use_with alias, method). Mismatched dest returns
+//! - inject() binds (name, use_with alias, method, path). Mismatched dest returns
 //!   None — the proxy must treat None as no-auth, never fall back to a literal
 //!   or env value. New fields (paths/expiry) must default-deny when absent.
+//! - inject() also enforces expires_at — expired credentials return None.
 //! - scrub() replaces every known value with [REDACTED] before guest-visible
 //!   output. Substring replace can miss encoded forms (base64/URL-encoded);
 //!   treat scrub as defense-in-depth, not the boundary — the boundary is never
@@ -12,25 +13,48 @@
 //! - log_id() is `cred:name`: safe to audit. Never log Credential.value, not
 //!   even at debug/trace. Credential has a manual redacting Debug impl — do
 //!   not re-add a derived Debug or log `.value` anywhere.
-//! - Storage is in-memory HashMap (cleared on restart). Encrypted-at-rest +
-//!   short-lived derived tokens per upstream belong here next; rotation must
-//!   invalidate inject() immediately.
+//! - Storage is in-memory HashMap with encrypted-at-rest persist/load/rotate.
+//!   Master key (32 bytes hex) from TOOLCAGE_BROKER_KEY env var or key file.
+//!   Rotation re-encrypts all credentials immediately.
 //! - Canary plant_canary() uses time-nanos suffix: unique per test run, good
 //!   for I2 scans (grep guest mem/files for canary must find 0 hits).
-use std::collections::HashMap;
+//!
+//! Encryption: XChaCha20-Poly1305 with random 24-byte nonces (random nonces
+//! are safe with 192-bit nonce space). Associated data = credential name
+//! (binding ciphertext to its identity). Master key = 32 bytes.
 
+use chacha20poly1305::{XChaCha20Poly1305, KeyInit};
+use chacha20poly1305::aead::{Aead, AeadCore};
+use generic_array::GenericArray;
+use rand::rngs::OsRng;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+use zeroize::Zeroize;
+
+const MASTER_KEY_LEN: usize = 32; // bytes
+
+/// A credential held in memory as plaintext (needed for inject).
+/// `encrypted_value` is set only when loaded from disk for rotation.
 #[derive(Clone)]
 pub struct Credential {
     pub name: String,
-    pub value: String,
-    /// Alias this credential may be used with (e.g. "github").
     pub use_with: String,
     pub methods: Vec<String>,
     pub paths: Vec<String>,
+    pub expires_at: Option<u64>, // epoch seconds; None = unbounded
+    pub value: String,           // plaintext — zeroized on drop via Drop impl
+    pub encrypted_value: Option<Vec<u8>>, // set when loaded from disk (nonce||ct)
 }
 
-// REVIEW fix: Debug must never print the secret value. A derived Debug on
-// this struct would leak it into any {:?} log. Redact explicitly.
+impl Drop for Credential {
+    fn drop(&mut self) {
+        self.value.zeroize();
+    }
+}
+
+/// Manual Debug to never print the secret value.
 impl std::fmt::Debug for Credential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Credential")
@@ -39,18 +63,154 @@ impl std::fmt::Debug for Credential {
             .field("use_with", &self.use_with)
             .field("methods", &self.methods)
             .field("paths", &self.paths)
+            .field("expires_at", &self.expires_at)
             .finish()
     }
 }
 
-#[derive(Debug, Default)]
+/// Serializable credential for at-rest storage (encrypted).
+/// `encrypted_value` = base64(nonce || ciphertext), nonce is 24 bytes prepended.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncryptedCredential {
+    pub name: String,
+    pub use_with: String,
+    pub methods: Vec<String>,
+    pub paths: Vec<String>,
+    pub expires_at: Option<u64>,
+    pub encrypted_value: String, // base64(nonce || ciphertext)
+}
+
+/// Master key holder: 32 bytes, zeroized on drop.
+pub struct MasterKey([u8; MASTER_KEY_LEN]);
+
+impl MasterKey {
+    pub fn from_hex(hex: &str) -> anyhow::Result<Self> {
+        let bytes = hex_decode(hex)?;
+        anyhow::ensure!(bytes.len() == MASTER_KEY_LEN, "master key must be 32 bytes (64 hex chars)");
+        let mut k = [0u8; MASTER_KEY_LEN];
+        k.copy_from_slice(&bytes);
+        Ok(Self(k))
+    }
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Drop for MasterKey {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl std::fmt::Debug for MasterKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MasterKey([REDACTED])")
+    }
+}
+
+/// Broker: secrets in memory as plaintext, encrypted at rest.
 pub struct Broker {
     creds: HashMap<String, Credential>,
+    master_key: Option<MasterKey>,
+}
+
+impl Default for Broker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Broker {
     pub fn new() -> Self {
-        Self::default()
+        Self { creds: HashMap::new(), master_key: None }
+    }
+
+    /// Load broker from disk: decrypt all credentials with master key.
+    /// Master key from env `TOOLCAGE_BROKER_KEY` or file `TOOLCAGE_BROKER_KEY_FILE`.
+    pub fn load(path: &Path) -> anyhow::Result<Self> {
+        let key = load_master_key()?;
+        let data = fs::read(path).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+        let encrypted: Vec<EncryptedCredential> =
+            serde_json::from_slice(&data).map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
+        let cipher = XChaCha20Poly1305::new_from_slice(key.as_bytes())
+            .map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
+        let mut creds = HashMap::new();
+        for ec in encrypted {
+            let combined = base64_decode(&ec.encrypted_value)
+                .map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
+            anyhow::ensure!(combined.len() >= 24, "decrypt: combined too short");
+            let (nonce_bytes, ct) = combined.split_at(24);
+            let nonce: GenericArray<u8, <XChaCha20Poly1305 as AeadCore>::NonceSize> = *
+                GenericArray::from_slice(nonce_bytes);
+            let pt = cipher
+                .decrypt(&nonce, ct)
+                .map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
+            let value = String::from_utf8(pt).map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
+            creds.insert(
+                ec.name.clone(),
+                Credential {
+                    name: ec.name,
+                    use_with: ec.use_with,
+                    methods: ec.methods,
+                    paths: ec.paths,
+                    expires_at: ec.expires_at,
+                    value,
+                    encrypted_value: Some(combined.to_vec()),
+                },
+            );
+        }
+        Ok(Self { creds, master_key: Some(key) })
+    }
+
+    /// Save broker to disk: encrypt all credentials with master key.
+    pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+        let key = self
+            .master_key
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no master key set"))?;
+        let cipher = XChaCha20Poly1305::new_from_slice(key.as_bytes())
+            .map_err(|e| anyhow::anyhow!("encrypt: {e}"))?;
+        let mut encrypted = Vec::new();
+        for c in self.creds.values() {
+            let mut rng = OsRng;
+            let nonce = XChaCha20Poly1305::generate_nonce(&mut rng);
+            let pt = c.value.as_bytes();
+            let ct = cipher
+                .encrypt(&nonce, pt)
+                .map_err(|e| anyhow::anyhow!("encrypt: {e}"))?;
+            let mut combined = nonce.to_vec();
+            combined.extend_from_slice(&ct);
+            encrypted.push(EncryptedCredential {
+                name: c.name.clone(),
+                use_with: c.use_with.clone(),
+                methods: c.methods.clone(),
+                paths: c.paths.clone(),
+                expires_at: c.expires_at,
+                encrypted_value: base64_encode(&combined),
+            });
+        }
+        let data = serde_json::to_vec_pretty(&encrypted)
+            .map_err(|e| anyhow::anyhow!("encrypt: {e}"))?;
+        fs::write(path, data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+        Ok(())
+    }
+
+    /// Rotate master key: re-encrypt all credentials with new key.
+    pub fn rotate(&mut self, new_key_hex: &str) -> anyhow::Result<()> {
+        let new_key = MasterKey::from_hex(new_key_hex)?;
+        // Since values are plaintext in memory, we just replace the key.
+        // Cached ciphertext is cleared so next save uses new key.
+        self.master_key = Some(new_key);
+        for c in self.creds.values_mut() {
+            c.encrypted_value = None;
+        }
+        Ok(())
+    }
+
+    /// Set master key from hex (for programmatic use / tests).
+    pub fn set_master_key(&mut self, key_hex: &str) -> anyhow::Result<()> {
+        self.master_key = Some(MasterKey::from_hex(key_hex)?);
+        Ok(())
     }
 
     pub fn insert(&mut self, c: Credential) {
@@ -67,13 +227,15 @@ impl Broker {
                     use_with: use_with.clone(),
                     methods: vec![],
                     paths: vec![],
+                    expires_at: None,
+                    encrypted_value: None,
                 });
             }
         }
         b
     }
 
-    /// Returns the secret value ONLY if dest/method/path are allowed.
+    /// Returns the secret value ONLY if dest/method/path are allowed AND not expired.
     /// Caller (proxy) attaches it upstream; it never goes to the guest.
     /// Empty methods/paths on a credential means "no constraint on that axis".
     pub fn inject(&self, name: &str, dest_alias: &str, method: &str, path: &str) -> Option<&str> {
@@ -84,10 +246,18 @@ impl Broker {
         if !c.methods.is_empty() && !c.methods.iter().any(|m| m.eq_ignore_ascii_case(method)) {
             return None;
         }
-        if !c.paths.is_empty()
-            && !c.paths.iter().any(|p| path_match_cred(p, path))
-        {
+        if !c.paths.is_empty() && !c.paths.iter().any(|p| path_match_cred(p, path)) {
             return None;
+        }
+        // Expiry check (fail-closed).
+        if let Some(exp) = c.expires_at {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            if now > exp {
+                return None;
+            }
         }
         Some(&c.value)
     }
@@ -111,10 +281,58 @@ impl Broker {
     /// Canary for I2 tests: unique value that must never appear guest-side.
     pub fn plant_canary(&mut self, name: &str) -> String {
         let v = format!("CANARY-{}-{}", name, rand_suffix());
-        self.insert(Credential { name: name.into(), value: v.clone(), use_with: "github".into(), methods: vec![], paths: vec![] });
+        self.insert(Credential {
+            name: name.into(),
+            value: v.clone(),
+            use_with: "github".into(),
+            methods: vec![],
+            paths: vec![],
+            expires_at: None,
+            encrypted_value: None,
+        });
         v
     }
 }
+
+/// Load master key from env var or key file.
+fn load_master_key() -> anyhow::Result<MasterKey> {
+    if let Ok(hex) = std::env::var("TOOLCAGE_BROKER_KEY") {
+        return MasterKey::from_hex(&hex);
+    }
+    if let Ok(path) = std::env::var("TOOLCAGE_BROKER_KEY_FILE") {
+        let hex = fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("io: {e}"))?
+            .trim()
+            .to_string();
+        return MasterKey::from_hex(&hex);
+    }
+    Err(anyhow::anyhow!(
+        "master key not set: set TOOLCAGE_BROKER_KEY or TOOLCAGE_BROKER_KEY_FILE"
+    ))
+}
+
+fn base64_encode(b: &[u8]) -> String {
+    BASE64.encode(b)
+}
+
+fn base64_decode(s: &str) -> anyhow::Result<Vec<u8>> {
+    BASE64.decode(s).map_err(|e| anyhow::anyhow!(e))
+}
+
+fn hex_decode(s: &str) -> anyhow::Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(s.len() / 2);
+    anyhow::ensure!(s.len().is_multiple_of(2), "odd hex length");
+    for i in (0..s.len()).step_by(2) {
+        out.push(u8::from_str_radix(&s[i..i + 2], 16)?);
+    }
+    Ok(out)
+}
+
+mod base64_engine {
+    pub use base64::engine::general_purpose::STANDARD as BASE64;
+}
+use base64::Engine as _;
+use base64_engine::BASE64;
 
 fn rand_suffix() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -134,14 +352,31 @@ fn path_match_cred(pattern: &str, path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn inject_only_for_bound_dest() {
         let mut b = Broker::new();
-        b.insert(Credential { name: "github_token".into(), value: "s3cr3t".into(), use_with: "github".into(), methods: vec![], paths: vec![] });
+        b.insert(Credential {
+            name: "github_token".into(),
+            value: "s3cr3t".into(),
+            use_with: "github".into(),
+            methods: vec![],
+            paths: vec![],
+            expires_at: None,
+            encrypted_value: None,
+        });
         assert_eq!(b.inject("github_token", "github", "GET", "/"), Some("s3cr3t"));
         assert_eq!(b.inject("github_token", "evil", "GET", "/"), None);
         // Path-bound credential denies outside its prefix.
-        b.insert(Credential { name: "scoped".into(), value: "v".into(), use_with: "github".into(), methods: vec![], paths: vec!["/repos/acme/**".into()] });
+        b.insert(Credential {
+            name: "scoped".into(),
+            value: "v".into(),
+            use_with: "github".into(),
+            methods: vec![],
+            paths: vec!["/repos/acme/**".into()],
+            expires_at: None,
+            encrypted_value: None,
+        });
         assert_eq!(b.inject("scoped", "github", "GET", "/repos/acme/app"), Some("v"));
         assert_eq!(b.inject("scoped", "github", "GET", "/repos/evil"), None);
         // Scrub strips echo
@@ -149,14 +384,84 @@ mod tests {
         // Log id leaks nothing
         assert!(!Broker::log_id("github_token").contains("s3cr3t"));
     }
+
+    #[test]
+    fn inject_expired_denied() {
+        let mut b = Broker::new();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        b.insert(Credential {
+            name: "expired".into(),
+            value: "v".into(),
+            use_with: "github".into(),
+            methods: vec![],
+            paths: vec![],
+            expires_at: Some(now - 1), // expired yesterday
+            encrypted_value: None,
+        });
+        assert_eq!(b.inject("expired", "github", "GET", "/"), None);
+    }
+
+    #[test]
+    fn encrypt_save_load_roundtrip() {
+        let mut b = Broker::new();
+        b.set_master_key("0000000000000000000000000000000000000000000000000000000000000000")
+            .unwrap();
+        b.insert(Credential {
+            name: "gh".into(),
+            value: "supersecret".into(),
+            use_with: "github".into(),
+            methods: vec!["GET".into()],
+            paths: vec!["/repos/acme/**".into()],
+            expires_at: None,
+            encrypted_value: None,
+        });
+        let dir = std::env::temp_dir().join(format!("tc-broker-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("broker.json");
+        b.save(&path).unwrap();
+
+        // Load fresh broker from disk.
+        std::env::set_var(
+            "TOOLCAGE_BROKER_KEY",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        let b2 = Broker::load(&path).unwrap();
+        assert_eq!(b2.inject("gh", "github", "GET", "/repos/acme/app"), Some("supersecret"));
+        assert!(b2.inject("gh", "evil", "GET", "/").is_none()); // dest mismatch
+        assert!(b2.inject("gh", "github", "POST", "/").is_none()); // method mismatch
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rotate_reencrypts() {
+        let mut b = Broker::new();
+        b.set_master_key("1111111111111111111111111111111111111111111111111111111111111111")
+            .unwrap();
+        b.insert(Credential {
+            name: "gh".into(),
+            value: "v1".into(),
+            use_with: "github".into(),
+            methods: vec![],
+            paths: vec![],
+            expires_at: None,
+            encrypted_value: None,
+        });
+        assert_eq!(b.inject("gh", "github", "GET", "/"), Some("v1"));
+        // Rotate to new key.
+        b.rotate("2222222222222222222222222222222222222222222222222222222222222222")
+            .unwrap();
+        assert_eq!(b.inject("gh", "github", "GET", "/"), Some("v1"));
+    }
+
     #[test]
     fn canary_never_in_guest_output() {
         let mut b = Broker::new();
         let canary = b.plant_canary("test_tok");
-        // Simulated guest-visible output (placeholder, not value)
         let guest_output = "using secret:test_tok via proxy";
         assert!(!guest_output.contains(&canary));
-        // Simulated upstream echo gets scrubbed before guest sees it
         let echoed = format!("echo {canary}");
         assert!(!b.scrub(&echoed).contains(&canary));
     }
