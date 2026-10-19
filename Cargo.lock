@@ -991,6 +991,7 @@ dependencies = [
  "anyhow",
  "native-tls",
  "serde",
+ "serde_json",
  "toolcage-policy",
 ]
 

@@ -14,11 +14,14 @@
 //! - No fallback: if the proxy can't dial, the action is denied.
 
 use std::collections::HashMap;
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpStream, IpAddr, ToSocketAddrs};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use native_tls::{TlsConnector};
 
+use serde::{Deserialize, Serialize};
 use toolcage_policy::{Policy, Request};
 
 // Trait object workaround: Rust doesn't allow Box<dyn Read + Write>
@@ -273,13 +276,43 @@ fn parse_status(buf: &[u8]) -> Option<u16> {
 }
 
 /// Per-destination budgets (M2 damage bound). Returns false when over budget.
-#[derive(Debug, Default)]
+///
+/// Budgets are persisted to disk so damage bounds survive supervisor
+/// restarts. Without a path, budgets are in-memory only (back-compat).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Budgets {
     pub bytes: HashMap<String, u64>,
     pub requests: HashMap<String, u64>,
+    #[serde(skip)]
+    persist_path: Option<PathBuf>,
 }
 
 impl Budgets {
+    /// Create budgets with persistence to the given path. Loads existing
+    /// state if the file exists, otherwise starts fresh.
+    pub fn with_path(path: &Path) -> anyhow::Result<Self> {
+        let mut b = Self { bytes: HashMap::new(), requests: HashMap::new(), persist_path: Some(path.to_path_buf()) };
+        if path.exists() {
+            let data = fs::read(path).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+            let saved: Budgets = serde_json::from_slice(&data)
+                .map_err(|e| anyhow::anyhow!("deserialize: {e}"))?;
+            b.bytes = saved.bytes;
+            b.requests = saved.requests;
+        }
+        Ok(b)
+    }
+
+    /// Persist current budget state to disk atomically.
+    fn save(&self) -> anyhow::Result<()> {
+        let path = self.persist_path.as_ref().ok_or_else(|| anyhow::anyhow!("no persist path"))?;
+        let data = serde_json::to_vec_pretty(self)
+            .map_err(|e| anyhow::anyhow!("serialize: {e}"))?;
+        let tmp = path.with_extension("tmp");
+        fs::write(&tmp, data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+        fs::rename(&tmp, path).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+        Ok(())
+    }
+
     pub fn check(&mut self, dest: &str, bytes: u64, max_bytes: u64, max_req: u64) -> bool {
         let b = self.bytes.entry(dest.to_string()).or_insert(0);
         let r = self.requests.entry(dest.to_string()).or_insert(0);
@@ -288,6 +321,12 @@ impl Budgets {
         }
         *b += bytes;
         *r += 1;
+        // Persist after every successful charge so damage bounds survive restarts.
+        if let Some(_path) = &self.persist_path {
+            if let Err(e) = self.save() {
+                eprintln!("budget persist failed: {e}");
+            }
+        }
         true
     }
 }
