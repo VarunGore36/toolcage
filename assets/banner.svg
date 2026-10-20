@@ -1,0 +1,68 @@
+<svg width="1200" height="280" viewBox="0 0 1200 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="toolcage banner">
+  <defs>
+    <linearGradient id="meshBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="33%" stop-color="#1e1b4b"/>
+      <stop offset="66%" stop-color="#0e7490"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="50%" stop-color="#a78bfa"/>
+      <stop offset="100%" stop-color="#f472b6"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="15" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <filter id="glowSoft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="25" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="280" fill="url(#meshBg)" rx="24"/>
+
+  <!-- Floating orbs -->
+  <circle cx="100" cy="60" r="120" fill="url(#accentGrad)" opacity="0.15" filter="url(#glow)">
+    <animate attributeName="cy" values="60;120;60" dur="4s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="1100" cy="200" r="140" fill="url(#accentGrad)" opacity="0.1" filter="url(#glow)">
+    <animate attributeName="cy" values="200;180;200" dur="5s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="200" cy="220" r="100" fill="#a78bfa" opacity="0.08" filter="url(#glow)">
+    <animate attributeName="cy" values="220;200;220" dur="6s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- Logo: Cage icon -->
+  <g transform="translate(80, 90)">
+    <rect x="0" y="0" width="100" height="100" rx="16" fill="none" stroke="url(#accentGrad)" stroke-width="3"/>
+    <line x1="25" y1="10" x2="75" y2="10" stroke="url(#accentGrad)" stroke-width="2"/>
+    <line x1="25" y1="30" x2="75" y2="30" stroke="url(#accentGrad)" stroke-width="2"/>
+    <line x1="25" y1="50" x2="75" y2="50" stroke="url(#accentGrad)" stroke-width="2"/>
+    <line x1="25" y1="70" x2="75" y2="70" stroke="url(#accentGrad)" stroke-width="2"/>
+    <circle cx="50" cy="50" r="16" fill="#22d3ee"/>
+    <circle cx="50" cy="50" r="7" fill="#0f172a"/>
+  </g>
+
+  <!-- Title -->
+  <text x="200" y="110" font-family="Inter, system-ui, sans-serif" font-size="52" font-weight="800" fill="#ffffff" letter-spacing="-1">toolcage</text>
+  <text x="200" y="145" font-family="Inter, system-ui, sans-serif" font-size="18" fill="#a5f3fc" letter-spacing="-0.5">isolate • attenuate • broker • prove</text>
+  <rect x="200" y="160" width="260" height="4" fill="url(#accentGrad)" rx="2"/>
+  <text x="200" y="185" font-family="Inter, system-ui, sans-serif" font-size="15" fill="#94a3b8">local-first agent sandbox</text>
+
+  <!-- Stats row -->
+  <g transform="translate(560, 90)">
+    <text x="0" y="25" font-family="Inter, system-ui, sans-serif" font-size="24" font-weight="700" fill="#ffffff">72</text>
+    <text x="0" y="45" font-family="Inter, system-ui, sans-serif" font-size="11" fill="#94a3b8" letter-spacing="0.5">tests passing</text>
+  </g>
+  <g transform="translate(700, 90)">
+    <text x="0" y="25" font-family="Inter, system-ui, sans-serif" font-size="24" font-weight="700" fill="#ffffff">3</text>
+    <text x="0" y="45" font-family="Inter, system-ui, sans-serif" font-size="11" fill="#94a3b8" letter-spacing="0.5">isolation tiers</text>
+  </g>
+  <g transform="translate(830, 90)">
+    <text x="0" y="25" font-family="Inter, system-ui, sans-serif" font-size="24" font-weight="700" fill="#ffffff">7</text>
+    <text x="0" y="45" font-family="Inter, system-ui, sans-serif" font-size="11" fill="#94a3b8" letter-spacing="0.5">invariants</text>
+  </g>
+</svg>

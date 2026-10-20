@@ -1,8 +1,6 @@
 <div align="center">
 
-# toolcage
-
-**Every agent tool call runs inside a disposable cage — least-privilege capabilities, zero visible secrets, and a verifiable receipt.**
+![toolcage banner](assets/banner.svg)
 
 [Quickstart](#-quickstart-60-seconds) • [How it works](#-how-it-works) • [Guarantees](#-the-four-guarantees) • [Policy](#-policy-in-one-file) • [CLI](#-cli-reference) • [MCP](#-mcp-front-door) • [Threat model](docs/THREAT_MODEL.md) • [Test results](docs/TEST_RESULTS.md)
 
@@ -20,7 +18,7 @@ Agents don't just run code — they read untrusted content, call third-party too
 | Malicious MCP server / poisoned package | Runs as a contained guest process under the same policy + audit trail |
 | "It worked on my machine" / "who did what?" | Every decision is hash-chained and checkpoint-signed — `audit verify` proves it |
 
-**Design center:** not another code-interpreter box. toolcage is the **policy + secrets + evidence layer** on top of isolation.
+> **Design center:** not another code-interpreter box. toolcage is the **policy + secrets + evidence layer** on top of isolation.
 
 ---
 
@@ -66,48 +64,7 @@ cargo build --release
 
 Every agent tool call crosses one small trusted core — the supervisor — which decides, records, isolates, proxies, and proves.
 
-```
-┌─────────┐    exec + token    ┌─────────────┐
-│ Agent   │ ──────────────────►│ Front Door  │
-└─────────┘                    └──────┬──────┘
-                                      │
-                                      ▼
-                               ┌─────────┴─────────┐
-                               │   Policy Engine   │◄─────────┐
-                               └─────────┬─────────┘          │
-                                         │                   │
-                                         ▼                   │
-                               ┌─────────┴─────────┐         │
-                               │   Audit Log       │◄────────┘
-                               │   (intent)        │
-                               └─────────┬─────────┘
-                                         │
-                                         ▼
-                               ┌─────────┴─────────┐
-                               │   Cage (T0/T1/T2) │
-                               │   namespaces      │
-                               │   Landlock        │
-                               │   seccomp         │
-                               └─────────┬─────────┘
-                                         │
-                                         ▼
-                               ┌─────────┴─────────┐
-                               │   Egress Proxy    │
-                               │   DNS + method +  │
-                               │   path check      │
-                               └─────────┬─────────┘
-                                         │
-                                         ▼
-                               ┌─────────┴─────────┐
-                               │ Credential Broker │
-                               │   inject at proxy │
-                               └─────────┬─────────┘
-                                         │
-                                         ▼
-                               ┌─────────┴─────────┐
-                               │   Internet        │
-                               └───────────────────┘
-```
+![](assets/how-it-works.svg)
 
 Three rules with no exceptions:
 
@@ -121,20 +78,16 @@ Three rules with no exceptions:
 
 | Guarantee | How |
 |-----------|-----|
-| **1. Disposable isolation** | One API, three backends — picked per-tool by risk. Fail-closed — never silently downgraded. |
-| **2. Capabilities, not ACLs** | Tokens narrow on delegate. Never widen. Expiry enforced, traversal-normalized, revocable. |
-| **3. Secret-free guest** | Broker holds secrets, injects at proxy for allowed dests only. Echoes scrubbed. |
-| **4. Tamper-evident log** | `hash = H(prev_hash, canonical(event))` + Ed25519 checkpoints bound to `(seq, head)`. |
+| **Disposable isolation** | One API, three backends — picked per-tool by risk. Fail-closed — never silently downgraded. |
+| **Capabilities, not ACLs** | Tokens narrow on delegate. Never widen. Expiry enforced, traversal-normalized, revocable. |
+| **Secret-free guest** | Broker holds secrets, injects at proxy for allowed dests only. Echoes scrubbed. |
+| **Tamper-evident log** | `hash = H(prev_hash, canonical(event))` + Ed25519 checkpoints bound to `(seq, head)`. |
 
 ---
 
 ## 🧊 Isolation Tiers
 
-| Tier | Mechanism | Best for | Cost |
-|------|-----------|----------|------|
-| **T0** | namespaces + Landlock + seccomp | formatters, linters, read-only git | ~50 ms |
-| **T1** | gVisor runsc | untrusted code where KVM unavailable | ~300 ms |
-| **T2** | Firecracker µVM | untrusted code, package installs, network | snapshot pool |
+![Isolation tiers](assets/tiers.svg)
 
 > A tool declares `min_isolation`. If the host can't provide it, the call is **denied and audited**. Never silently downgraded.
 
@@ -142,21 +95,26 @@ Three rules with no exceptions:
 
 ## 🔐 Secrets Never Cross the Boundary
 
-The guest holds `secret:name` placeholders — never values in env, args, files, or memory. The proxy resolves DNS, enforces `host + method + path`, attaches the credential upstream, and scrubs echoes.
+![Credential flow](assets/secrets.svg)
 
-Two-phase sessions: setup talks only to a pinned package mirror, run phase uses a narrowed or closed network.
+- Guest holds `secret:name` placeholders. Never values in env, args, files, or memory.
+- Proxy resolves DNS, enforces `host + method + path`, attaches the credential upstream.
+- Responses are scrubbed — if an API echoes the token, it's stripped before the guest sees it.
+- Two-phase sessions: setup talks only to a pinned package mirror, run phase uses a narrowed or closed network.
 
 ---
 
 ## 🧾 Every Action Leaves a Receipt
 
-Intent is logged *before* the action runs. If the write fails, the action is denied. The writer re-verifies the chain on open, so a corrupt log is never extended. Checkpoints bind `(seq, head, time)` with Ed25519 — flip one byte, delete, or reorder, verification fails.
+![Hash chain](assets/audit.svg)
+
+Write-ahead: intent is logged *before* the action runs. If the write fails, the action is denied. The writer re-verifies the chain on open, so a corrupt log is never extended. Checkpoints bind `(seq, head, time)` with Ed25519 — flip one byte, delete, or reorder, verification fails.
 
 ```bash
 toolcage audit keygen --out-prefix /tmp/k
 toolcage audit checkpoint --log /tmp/tc.jsonl --key-hex /tmp/k.secret.hex
 toolcage audit verify --log /tmp/tc.jsonl --pubkey /tmp/k.pub.hex
-# ok: N events, head ... (checkpoints verified)
+# chain continuity ✓  seq monotonic ✓ no gaps ✓ re-hash every event ✓ checkpoint sigs ✓
 ```
 
 ---
@@ -198,7 +156,7 @@ Decision order: `canonicalize at enforcement point → operator forbid wins → 
 | Command | What it does |
 |---------|-------------|
 | `toolcage doctor` | Probe userns, cgroup v2, Landlock ABI, seccomp, `/dev/kvm` |
-| `toolcage run --tier tier0 -- <argv>` | Policy check → audit intent → `env_clear` exec (streaming 1 MiB cap, 30 s kill) → audit outcome |
+| `toolcage run --tier tier0 -- <argv>` | Policy check → audit intent → `env_clear` exec (streaming 1 MiB cap, 30 s kill) → audit outcome. Fail-closed vs `min_isolation`; `sh -c` denied |
 | `toolcage check-net --host H --method M --path P` | Proxy decision + upstream resolution, no network touched |
 | `toolcage fetch [--token T] [--approve]` | Proxy + broker fetch with dual-auth (policy AND token) and approval pause (exit 3); scrubbed body, both steps audited |
 | `toolcage token mint --rev ID --out F` | Mint a root capability token |
@@ -236,7 +194,7 @@ Third-party MCP servers run as **guest processes** under the same policy and aud
 | Lateral movement | No guest-reachable control socket |
 | Log tampering | Hash chain + head-bound signed checkpoints |
 
-Full model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) · Results: [`docs/TEST_RESULTS.md`](docs/TEST_RESULTS.md)
+Full model: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) · Results: [`docs/TEST_RESULTS.md`](docs/TEST_RESULTS.md) (72 tests, 0 failures, clippy clean).
 
 ---
 
@@ -276,6 +234,7 @@ scripts/         doctor.sh, bench.sh
 docs/            THREAT_MODEL.md, TEST_RESULTS.md, REVIEW.md
 images/          build.sh (manifest + sha256, per-host-class goldens)
 clients/         python/toolcage.py, ts/toolcage.ts
+assets/          banner.svg, tier.svg, secrets.svg, receipt.svg, how-it-works.svg
 ```
 
 ---
@@ -283,5 +242,3 @@ clients/         python/toolcage.py, ts/toolcage.ts
 ## 📄 License
 
 Apache-2.0. See [LICENSE](LICENSE).
-
-</div>
