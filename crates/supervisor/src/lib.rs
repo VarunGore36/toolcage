@@ -290,8 +290,8 @@ impl Supervisor {
             }
         };
         let safe_body = broker.scrub(&String::from_utf8_lossy(&resp.body));
-        // Egress damage bound (§8): per-destination byte + request budgets.
-        // Zero limit = unbounded (back-compat); over-budget denies fail-closed.
+        // Egress damage bound (§8): charge bytes + request after proxy call,
+        // fail-closed if over budget. Zero limit = unbounded (back-compat).
         {
             let max_bytes = if self.policy.limits.egress_bytes == 0 { u64::MAX } else { self.policy.limits.egress_bytes };
             let max_req = if self.policy.limits.egress_requests == 0 { u64::MAX } else { self.policy.limits.egress_requests };
