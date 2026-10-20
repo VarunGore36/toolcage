@@ -92,20 +92,22 @@ pub fn decide(policy: &Policy, alias_or_host: &str, method: &str, path: &str) ->
     let key = alias_or_host.to_ascii_lowercase();
     // Resolve alias first: guest uses alias, proxy maps to real host for upstream,
     // but policy is checked against the alias the operator wrote.
-    let policy_host = if aliases.contains_key(&key) {
-        // Find the operator-facing alias name (e.g. "github").
-        // If guest used "github.internal", check policy for "github".
-        if policy.net.hosts.iter().any(|h| {
-            h.alias.as_deref().is_some_and(|a| a.eq_ignore_ascii_case("github"))
-        }) && key.starts_with("github")
-        {
-            "github".to_string()
-        } else {
-            key.clone()
-        }
-    } else {
-        key.clone()
-    };
+    //
+    // Look up the guest's alias to get the upstream, then find which operator
+    // alias maps to that same upstream for policy checking.
+    // E.g. guest uses "github.internal" → upstream "api.github.com" → policy
+    // checks against operator alias "github".
+    let policy_host = aliases.get(&key)
+        .cloned()
+        .and_then(|upstream| {
+            aliases.iter()
+                .find(|(alias, up)| {
+                    up.as_str() == upstream.as_str()
+                        && policy.net.hosts.iter().any(|h| h.alias.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(alias)))
+                })
+                .map(|(alias, _)| alias.clone())
+        })
+        .unwrap_or_else(|| key.clone());
     let req = Request {
         action: "http.request".into(),
         host: Some(policy_host),
