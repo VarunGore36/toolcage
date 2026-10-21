@@ -496,6 +496,16 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
             let _ = unsafe { libc::setresgid(0, 0, 0) };
             let _ = unsafe { libc::setresuid(0, 0, 0) };
 
+            // no_new_privs BEFORE the sandbox layers: landlock restrict_self
+            // and seccomp both require it (or CAP_SYS_ADMIN in the userns), and
+            // some hosts deny the capability path (restrict_self failed EPERM
+            // on GitHub's runners while the capability-free NNP path works).
+            // Fail closed: without it nothing below can be enforced.
+            if unsafe { prctl(38, 1, 0, 0, 0) } != 0 {
+                // PR_SET_NO_NEW_PRIVS = 38
+                child_die(123, b"toolcage: no_new_privs failed; refusing to run");
+            }
+
             // 3. Private mount tree: nothing propagates to the host.
             unsafe {
                 libc::mount(
@@ -617,7 +627,8 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
 /// Report a fatal child-side failure, then terminate THIS process. Appends
 /// " errno=N" (best-effort context, zero-alloc itoa) so a CI log or operator
 /// can tell EPERM from EINVAL/ENOSPC without reproducing locally.
-/// Exit codes: 124 Landlock boundary, 125 chdir, 126 namespace setup, 127 exec.
+/// Exit codes: 123 no_new_privs, 124 Landlock boundary, 125 chdir,
+/// 126 namespace setup, 127 exec.
 fn child_die(code: i32, msg: &[u8]) -> ! {
     let e = unsafe { *libc::__errno_location() };
     unsafe {
@@ -717,12 +728,8 @@ fn apply_seccomp(insns: &[sock_filter]) {
             len: insns.len() as u16,
             filter: insns.as_ptr() as *mut sock_filter,
         };
-        // Make sure no_new_privs is set (required for unprivileged seccomp).
-        let r1 = unsafe { prctl(38, 1, 0, 0, 0) }; // PR_SET_NO_NEW_PRIVS = 38
-        if r1 != 0 {
-            child_warn(b"toolcage: no_new_privs unavailable, seccomp skipped\n");
-            return;
-        }
+        // no_new_privs is already set (see isolated_exec) — it is what makes
+        // unprivileged seccomp installation work.
         let rc = unsafe {
             prctl(
                 22, // PR_SET_SECCOMP
