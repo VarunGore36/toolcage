@@ -493,6 +493,8 @@ fn main() -> anyhow::Result<()> {
                 let pol = toolcage_policy::load_yaml(&text)?;
                 let t = toolcage_backend::Tier::parse(&tier)?;
                 let cap_key = load_key(&key_hex)?;
+                // Persistent egress budget store, derived from the audit log.
+                let budget_file = audit.with_extension("budgets.json");
                 let workspace =
                     std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
                 let spec = toolcage_backend::SessionSpec {
@@ -516,6 +518,11 @@ fn main() -> anyhow::Result<()> {
                 };
                 let broker = toolcage_broker::Broker::new();
                 let mut proxy = toolcage_proxy::Proxy::new()?;
+                let mut budgets =
+                    toolcage_proxy::Budgets::with_path(&budget_file).unwrap_or_else(|e| {
+                        eprintln!("warning: budget persistence unavailable (in-memory): {e}");
+                        toolcage_proxy::Budgets::default()
+                    });
                 let stdin = std::io::stdin();
                 use std::io::BufRead;
                 for line in stdin.lock().lines() {
@@ -540,7 +547,7 @@ fn main() -> anyhow::Result<()> {
                                 &mut sup,
                                 &broker,
                                 &mut proxy,
-                                &mut toolcage_proxy::Budgets::default(),
+                                &mut budgets,
                                 None,
                                 &toolcage_capability::RevocationList::default(),
                                 &cp.name,
@@ -578,6 +585,8 @@ fn main() -> anyhow::Result<()> {
                 let pol = toolcage_policy::load_yaml(&text)?;
                 let t = toolcage_backend::Tier::parse(&tier)?;
                 let cap_key = load_key(&key_hex)?;
+                // Persistent egress budget store, derived from the audit log.
+                let budget_file = audit.with_extension("budgets.json");
                 let workspace =
                     std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
                 let spec = toolcage_backend::SessionSpec {
@@ -599,12 +608,17 @@ fn main() -> anyhow::Result<()> {
                 };
                 let broker = toolcage_broker::Broker::new();
                 let mut proxy = toolcage_proxy::Proxy::new()?;
+                let mut budgets =
+                    toolcage_proxy::Budgets::with_path(&budget_file).unwrap_or_else(|e| {
+                        eprintln!("warning: budget persistence unavailable (in-memory): {e}");
+                        toolcage_proxy::Budgets::default()
+                    });
                 let args: serde_json::Value = serde_json::from_str(&args_json)?;
                 match toolcage_mcp::route(
                     &mut sup,
                     &broker,
                     &mut proxy,
-                    &mut toolcage_proxy::Budgets::default(),
+                    &mut budgets,
                     None,
                     &toolcage_capability::RevocationList::default(),
                     &name,
