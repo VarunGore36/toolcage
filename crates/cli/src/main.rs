@@ -62,6 +62,9 @@ enum Cmd {
         /// Optional capability token JSON file (dual-auth: policy AND token).
         #[arg(long)]
         token: Option<PathBuf>,
+        /// Capability HMAC key file (64 hex chars), required to verify --token.
+        #[arg(long)]
+        key_hex: Option<PathBuf>,
     },
     /// Mint root token / attenuate child (never widens).
     Token {
@@ -107,6 +110,8 @@ enum McpOp {
         #[arg(long, default_value = ".")] workspace: PathBuf,
         /// ESCAPE HATCH: run tools UNCONFINED on the host (tier0 only, never tier1/2).
         #[arg(long, default_value_t = false)] unsafe_no_isolation: bool,
+        /// Capability HMAC key file (64 hex chars) for token verification.
+        #[arg(long)] key_hex: Option<PathBuf>,
     },
     /// Single call (for tests): --name run_command --args-json '{...}'.
     Call {
@@ -120,6 +125,8 @@ enum McpOp {
         #[arg(long, default_value = ".")] workspace: PathBuf,
         /// ESCAPE HATCH: run tools UNCONFINED on the host (tier0 only, never tier1/2).
         #[arg(long, default_value_t = false)] unsafe_no_isolation: bool,
+        /// Capability HMAC key file (64 hex chars) for token verification.
+        #[arg(long)] key_hex: Option<PathBuf>,
     },
 }
 
@@ -173,10 +180,16 @@ fn load_token(p: &Option<PathBuf>) -> anyhow::Result<Option<toolcage_capability:
 
 #[derive(Subcommand)]
 enum TokenOp {
-    /// Mint a root token.
+    /// Generate the capability HMAC key (host-side secret, 64 hex chars).
+    Keygen {
+        #[arg(long)] out_prefix: PathBuf,
+    },
+    /// Mint a root token (signed with the host key).
     Mint {
         #[arg(long)] rev: String,
         #[arg(long)] out: PathBuf,
+        /// Host key file (64 hex chars), from `token keygen`.
+        #[arg(long)] key_hex: PathBuf,
     },
     /// Attenuate parent token into narrower child.
     Attenuate {
@@ -184,8 +197,20 @@ enum TokenOp {
         #[arg(long)] rev: String,
         #[arg(long)] out: PathBuf,
         #[arg(long, default_value = "")] hosts: String,
+        /// Methods to keep (comma-separated). Empty = inherit the parent's
+        /// methods unchanged; an empty set grants nothing on this axis.
+        #[arg(long, default_value = "")] methods: String,
         #[arg(long, default_value_t = 100)] budget: u64,
+        /// Host key file (64 hex chars), from `token keygen`.
+        #[arg(long)] key_hex: PathBuf,
     },
+}
+
+fn load_key(p: &Option<PathBuf>) -> anyhow::Result<Option<toolcage_capability::Key>> {
+    match p {
+        Some(f) => Ok(Some(toolcage_capability::Key::from_hex(&std::fs::read_to_string(f)?)?)),
+        None => Ok(None),
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -214,6 +239,7 @@ fn main() -> anyhow::Result<()> {
                 tier: t,
                 backend,
                 allow_unisolated: unsafe_no_isolation,
+                cap_key: None,
             };
             let o = sup.exec(&argv)?;
             if let Some(mut b) = sup.backend.take() {
@@ -239,10 +265,11 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(2);
             }
         }
-        Cmd::Fetch { policy, audit, host, method, path, cred, secret_value, approve, token } => {
+        Cmd::Fetch { policy, audit, host, method, path, cred, secret_value, approve, token, key_hex } => {
             let text = std::fs::read_to_string(&policy)?;
             let pol = toolcage_policy::load_yaml(&text)?;
-            let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "cli".into(), tier: toolcage_backend::Tier::Tier0, backend: None, allow_unisolated: false };
+            let cap_key = load_key(&key_hex)?;
+            let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "cli".into(), tier: toolcage_backend::Tier::Tier0, backend: None, allow_unisolated: false, cap_key };
             let mut broker = toolcage_broker::Broker::new();
             if !secret_value.is_empty() {
                 broker.insert(toolcage_broker::Credential { name: cred, value: secret_value, use_with: "github".into(), methods: vec![], paths: vec![], expires_at: None, encrypted_value: None });
@@ -264,9 +291,23 @@ fn main() -> anyhow::Result<()> {
             println!("{}", o.body);
         }
         Cmd::Token { op } => match op {
-            TokenOp::Mint { rev, out } => {
+            TokenOp::Keygen { out_prefix } => {
+                // Read exactly 32 bytes from urandom (fs::read would block forever).
+                use std::io::Read;
+                let mut rnd = std::fs::File::open("/dev/urandom")?;
+                let mut kb = [0u8; 32];
+                rnd.read_exact(&mut kb)?;
+                let k = toolcage_capability::Key::from_bytes(kb);
+                // REVIEW: key file stays host-side (never a guest, never a
+                // token). Never commit *.key.hex.
+                let dest = out_prefix.with_extension("key.hex");
+                std::fs::write(&dest, k.to_hex())?;
+                println!("wrote {}", dest.display());
+            }
+            TokenOp::Mint { rev, out, key_hex } => {
+                let key = toolcage_capability::Key::from_hex(&std::fs::read_to_string(&key_hex)?)?;
                 // Far-future expiry: allows() enforces wall-clock expiry fail-closed.
-                let t = toolcage_capability::Token::root(&rev, toolcage_capability::Rights {
+                let t = toolcage_capability::Token::root(&key, &rev, toolcage_capability::Rights {
                     fs_prefixes: vec!["/workspace".into()],
                     net_hosts: vec!["github".into(), "registry.npmjs.org".into()],
                     methods: vec!["GET".into(), "POST".into()],
@@ -277,17 +318,25 @@ fn main() -> anyhow::Result<()> {
                 std::fs::write(&out, serde_json::to_string_pretty(&t)?)?;
                 println!("minted {rev} -> {}", out.display());
             }
-            TokenOp::Attenuate { parent, rev, out, hosts, budget } => {
+            TokenOp::Attenuate { parent, rev, out, hosts, methods, budget, key_hex } => {
+                let key = toolcage_capability::Key::from_hex(&std::fs::read_to_string(&key_hex)?)?;
                 let p: toolcage_capability::Token = serde_json::from_str(&std::fs::read_to_string(&parent)?)?;
                 let hs: Vec<String> = if hosts.is_empty() { vec![] } else { hosts.split(',').map(|s| s.to_string()).collect() };
+                // Empty --methods = inherit parent's methods (narrowing is
+                // per-axis: unchanged on an axis is still <= the parent).
+                let ms: Vec<String> = if methods.is_empty() {
+                    p.rights.methods.clone()
+                } else {
+                    methods.split(',').map(|s| s.to_string()).collect()
+                };
                 // Child expiry: 1h from now, clamped to parent expiry so attenuation
                 // never widens (and stays usable with wall-clock enforcement).
                 let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
                 let child_exp = if p.rights.expires_at == 0 { now + 3600 } else { p.rights.expires_at.min(now + 3600) };
-                let c = p.attenuate(&rev, toolcage_capability::Rights {
+                let c = p.attenuate(&key, &rev, toolcage_capability::Rights {
                     fs_prefixes: vec![],
                     net_hosts: hs,
-                    methods: vec![],
+                    methods: ms,
                     cred_use: vec![],
                     budget_bytes: budget.min(p.rights.budget_bytes),
                     expires_at: child_exp,
@@ -297,10 +346,11 @@ fn main() -> anyhow::Result<()> {
             }
         },
         Cmd::Mcp { op } => match op {
-            McpOp::Serve { policy, audit, tier, workspace, unsafe_no_isolation } => {
+            McpOp::Serve { policy, audit, tier, workspace, unsafe_no_isolation, key_hex } => {
                 let text = std::fs::read_to_string(&policy)?;
                 let pol = toolcage_policy::load_yaml(&text)?;
                 let t = toolcage_backend::Tier::parse(&tier)?;
+                let cap_key = load_key(&key_hex)?;
                 let workspace = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
                 let spec = toolcage_backend::SessionSpec {
                     id: format!("mcp-{}", std::process::id()),
@@ -314,7 +364,7 @@ fn main() -> anyhow::Result<()> {
                 let backend = wire_backend(&tier, t, &pol, &spec, unsafe_no_isolation);
                 let mut sup = toolcage_supervisor::Supervisor {
                     policy: pol, audit_path: audit, session: spec.id.clone(), tier: t,
-                    backend, allow_unisolated: unsafe_no_isolation,
+                    backend, allow_unisolated: unsafe_no_isolation, cap_key,
                 };
                 let broker = toolcage_broker::Broker::new();
                 let mut proxy = toolcage_proxy::Proxy::new()?;
@@ -349,10 +399,11 @@ fn main() -> anyhow::Result<()> {
                     println!("{}", serde_json::to_string(&resp)?);
                 }
             }
-            McpOp::Call { policy, audit, name, args_json, tier, workspace, unsafe_no_isolation } => {
+            McpOp::Call { policy, audit, name, args_json, tier, workspace, unsafe_no_isolation, key_hex } => {
                 let text = std::fs::read_to_string(&policy)?;
                 let pol = toolcage_policy::load_yaml(&text)?;
                 let t = toolcage_backend::Tier::parse(&tier)?;
+                let cap_key = load_key(&key_hex)?;
                 let workspace = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
                 let spec = toolcage_backend::SessionSpec {
                     id: format!("mcp-call-{}", std::process::id()),
@@ -364,7 +415,7 @@ fn main() -> anyhow::Result<()> {
                 let backend = wire_backend(&tier, t, &pol, &spec, unsafe_no_isolation);
                 let mut sup = toolcage_supervisor::Supervisor {
                     policy: pol, audit_path: audit, session: spec.id.clone(), tier: t,
-                    backend, allow_unisolated: unsafe_no_isolation,
+                    backend, allow_unisolated: unsafe_no_isolation, cap_key,
                 };
                 let broker = toolcage_broker::Broker::new();
                 let mut proxy = toolcage_proxy::Proxy::new()?;

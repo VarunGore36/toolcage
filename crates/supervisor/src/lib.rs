@@ -44,6 +44,9 @@ pub struct Supervisor {
     /// The ONLY route to a host spawn: with `backend: None` and this flag false,
     /// `exec` denies (`isolation:unavailable`) instead of falling back.
     pub allow_unisolated: bool,
+    /// Host key for capability-token tags (I3). Tokens presented without a
+    /// verifiable key are denied — fail closed, never "unverified but allowed".
+    pub cap_key: Option<toolcage_capability::Key>,
 }
 
 pub struct ExecOutcome {
@@ -257,9 +260,17 @@ impl Supervisor {
     ) -> anyhow::Result<FetchOutcome> {
         let pd = toolcage_proxy::decide(&self.policy, alias_or_host, method, path);
         let mut w = Writer::open(&self.audit_path)?;
-        // Token check (I3): narrow rights, valid tag, unexpired, not revoked.
+        // Token check (I3): valid keyed tag, narrow rights, unexpired, not
+        // revoked. Fail closed: with no host key the tag cannot be verified,
+        // so a presented token is denied, never waved through.
         if let Some(t) = token {
-            if revocation.is_revoked(t) || !t.verify_tag() || !t.allows(None, Some(alias_or_host), Some(method), None) {
+            let authorized = match &self.cap_key {
+                Some(k) => {
+                    t.verify_tag(k) && t.allows(k, None, Some(alias_or_host), Some(method), None)
+                }
+                None => false,
+            };
+            if revocation.is_revoked(t) || !authorized {
                 w.append(Event {
                     seq: 0, ts_wall: now_wall(), session: self.session.clone(),
                     actor: "agent".into(), action: format!("http.request {method} {alias_or_host}{path}"),

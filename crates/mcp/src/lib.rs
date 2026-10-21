@@ -104,7 +104,13 @@ pub fn route(
                 anyhow::bail!("denied {:?}", d.rule_ids);
             }
             if let Some(t) = token {
-                if !t.allows(Some(path), None, None, None) {
+                // Fail closed: no host key means the tag cannot be verified.
+                let ok = sup
+                    .cap_key
+                    .as_ref()
+                    .map(|k| t.allows(k, Some(path), None, None, None))
+                    .unwrap_or(false);
+                if !ok {
                     anyhow::bail!("denied [token:deny]");
                 }
             }
@@ -200,6 +206,7 @@ mod tests {
             tier: toolcage_backend::Tier::Tier0,
             backend: None,
             allow_unisolated: true,
+            cap_key: None,
         };
         let b = toolcage_broker::Broker::new();
         let mut budgets = toolcage_proxy::Budgets::default();
@@ -218,6 +225,7 @@ mod tests {
             tier: toolcage_backend::Tier::Tier0,
             backend: None,
             allow_unisolated: false,
+            cap_key: None,
         };
         let b = toolcage_broker::Broker::new();
         let mut budgets = toolcage_proxy::Budgets::default();
@@ -226,6 +234,33 @@ mod tests {
         let args = serde_json::json!({"argv": ["/bin/echo", "pwned"]});
         let e = route(&mut sup, &b, &mut proxy, &mut budgets, None, &rl, "run_command", &args).unwrap_err();
         assert!(e.to_string().contains("isolation:unavailable"), "got: {e}");
+    }
+    #[test]
+    fn fs_token_without_host_key_denies() {
+        // I3 fail-closed: a presented token whose keyed tag cannot be verified
+        // (no cap_key wired, or minted under another key) is denied.
+        use toolcage_capability::{Key, Rights, Token};
+        let mut sup = toolcage_supervisor::Supervisor {
+            policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+            audit_path: std::env::temp_dir().join("tc-mcp-token-test.jsonl"),
+            session: "t".into(),
+            tier: toolcage_backend::Tier::Tier0,
+            backend: None,
+            allow_unisolated: true,
+            cap_key: None,
+        };
+        let b = toolcage_broker::Broker::new();
+        let mut budgets = toolcage_proxy::Budgets::default();
+        let mut proxy = toolcage_proxy::Proxy::new().unwrap();
+        let rl = toolcage_capability::RevocationList::default();
+        let tok = Token::root(&Key::from_bytes([1u8; 32]), "r0", Rights {
+            fs_prefixes: vec!["/workspace".into()],
+            net_hosts: vec![], methods: vec![], cred_use: vec![],
+            budget_bytes: 1, expires_at: 9_999_999_999,
+        });
+        let args = serde_json::json!({"path": "/workspace/f"});
+        let e = route(&mut sup, &b, &mut proxy, &mut budgets, Some(&tok), &rl, "read_file", &args).unwrap_err();
+        assert!(e.to_string().contains("token:deny"), "got: {e}");
     }
     #[test]
     fn learn_proposes_denials() {

@@ -6,7 +6,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Status: alpha](https://img.shields.io/badge/status-alpha%20%C2%B7%20not%20independently%20reviewed-orange.svg)
-![Tests: 80 passing](https://img.shields.io/badge/tests-80%20passing-brightgreen.svg)
+![Tests: 84 passing](https://img.shields.io/badge/tests-84%20passing-brightgreen.svg)
 ![Rust](https://img.shields.io/badge/built%20with-Rust-black.svg)
 
 [Quickstart](#quickstart) · [Why](#why-toolcage) · [Architecture](#architecture) · [Invariants](#the-seven-invariants) · [Policy](#policy) · [CLI](#cli-reference) · [MCP](#mcp-front-door) · [Limits](#status-and-known-limits) · [Threat model](docs/THREAT_MODEL.md)
@@ -113,7 +113,7 @@ These are the security claims toolcage makes. Each one is tied to a test suite, 
 |---|---|---|
 | **I1** | No guest process reaches any network except through the egress proxy | Escape suite: raw sockets, DNS, ICMP, IPv6, tunnels; proxy alias, metadata, and budget tests |
 | **I2** | No credential value appears in guest memory, files, environment, or arguments | Planted canary secrets scanned for; broker encryption and rotation tests |
-| **I3** | A token can only be narrowed on delegation, never widened | 200-seed property test; narrow / widen / revoke / tamper tests |
+| **I3** | A token can only be narrowed on delegation, never widened — and can't be minted without the host key | 200-seed multi-hop property test; narrow / widen / revoke / tamper / forgery tests |
 | **I4** | Every decision is recorded before the action runs | Write-ahead intent logging; chaos tests that kill the supervisor mid-action |
 | **I5** | Any edit, deletion, or reordering of the log is detected by `audit verify` | Mutation tests; checkpoint truncation and old-checkpoint tests |
 | **I6** | The guest cannot loosen its own policy or reach the policy engine | `sh -c` denial, path traversal, mount checks, adversarial guest-agent validation |
@@ -156,11 +156,13 @@ approval:
 ### Capability tokens
 
 ```bash
-$TC token mint      --rev root-1  --out root.tok
-$TC token attenuate --parent root.tok --rev child-1 --out child.tok   # narrow only
+$TC token keygen    --out-prefix /tmp/k                          # host secret
+$TC token mint      --rev root-1  --out root.tok  --key-hex /tmp/k.key.hex
+$TC token attenuate --parent root.tok --rev child-1 --out child.tok \
+                    --hosts github --key-hex /tmp/k.key.hex      # narrow only
 ```
 
-Tokens carry scoped, expiring authority and are revocable. Expiry is enforced and paths are traversal-normalized. `fetch` requires **both** a policy allow and a valid token.
+Tokens carry scoped, expiring authority and are revocable. Tags are **HMAC-SHA256 keyed with the host secret**, so a guest that reads a token can neither mint a sibling nor widen anything: forged and hand-edited tokens fail verification and are denied. Expiry is enforced, paths are traversal-normalized, and an empty rights list grants nothing on that axis. `fetch` requires a policy allow **and** a token that verifies against `--key-hex` — without a key, a presented token is denied, never waved through.
 
 ## Secrets
 
@@ -191,7 +193,7 @@ This is **tamper evidence, not tamper prevention.** An attacker who controls the
 | `$TC run --tier T -- <argv>` | Policy check, audit intent, exec with cleared env (1 MiB streaming output cap, 30 s kill), audit outcome. `--unsafe-no-isolation` opts out of the cage (tier0 only, audited) |
 | `$TC check-net --host H --method M --path P` | Proxy decision and upstream resolution, no network touched |
 | `$TC fetch [--token T] [--approve]` | Proxy + broker fetch with dual auth and approval pause; scrubbed body; both steps audited |
-| `$TC token mint / attenuate` | Create root tokens; delegate narrower ones |
+| `$TC token keygen / mint / attenuate` | Host MAC key; create root tokens; delegate narrower ones |
 | `$TC mcp serve / call` | Stdio JSON-RPC front door |
 | `$TC audit keygen / checkpoint / verify` | Keys, signed checkpoints, pinned-key verification |
 | `$TC panic --audit LOG` | Freeze a log after a suspected compromise |
@@ -215,7 +217,7 @@ Third-party MCP servers run as **guest processes** under the same policy and aud
 
 ## Tests
 
-`cargo test --workspace` runs **80 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
+`cargo test --workspace` runs **84 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
 
 - **Escape suite** against the policy and proxy (I1, I6)
 - **Fuzzing** of the policy, guest-agent, audit, and proxy parsers

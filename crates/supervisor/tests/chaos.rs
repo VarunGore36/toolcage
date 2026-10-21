@@ -13,6 +13,7 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         tier: toolcage_backend::Tier::Tier0,
         backend: None,
         allow_unisolated: false,
+        cap_key: None,
     }
 }
 
@@ -30,6 +31,7 @@ fn audit_write_failure_denies_action() {
         tier: toolcage_backend::Tier::Tier0,
         backend: None,
         allow_unisolated: false,
+        cap_key: None,
     };
     let b = toolcage_broker::Broker::new();
     // open("not-a-dir/audit.jsonl") fails -> propagate as Err, caller must not act.
@@ -64,12 +66,15 @@ fn broker_unreachable_denies_cred_use() {
 #[test]
 fn revoked_token_denied_and_audited() {
     // I3: revoke(parent) kills fetch even with an otherwise-valid child token.
-    use toolcage_capability::{RevocationList, Rights, Token};
+    // The supervisor holds the host key so the tag verifies — the denial must
+    // come from revocation, not from fail-closed tag verification.
+    use toolcage_capability::{Key, RevocationList, Rights, Token};
+    let key = Key::from_bytes([5u8; 32]);
     let dir = std::env::temp_dir().join("tc-chaos-revoked");
     std::fs::create_dir_all(&dir).unwrap();
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
-    let root = Token::root("r0", Rights {
+    let root = Token::root(&key, "r0", Rights {
         fs_prefixes: vec!["/workspace".into()],
         net_hosts: vec!["github".into()],
         methods: vec!["GET".into()],
@@ -77,7 +82,7 @@ fn revoked_token_denied_and_audited() {
         budget_bytes: 1000,
         expires_at: 9_999_999_999,
     });
-    let child = root.attenuate("r1", Rights {
+    let child = root.attenuate(&key, "r1", Rights {
         fs_prefixes: vec![],
         net_hosts: vec!["github".into()],
         methods: vec!["GET".into()],
@@ -88,7 +93,9 @@ fn revoked_token_denied_and_audited() {
     let mut rl = RevocationList::default();
     rl.track(&child);
     rl.revoke("r0");
-    let o = sup_at(&audit)
+    let mut s = sup_at(&audit);
+    s.cap_key = Some(key);
+    let o = s
         .fetch_via_proxy(&toolcage_broker::Broker::new(), &mut toolcage_proxy::Budgets::default(), &mut toolcage_proxy::Proxy::new().unwrap(), "github", "GET", "/", Some(&child), &rl, true)
         .unwrap();
     assert!(!o.allowed && !o.need_approval);
@@ -106,7 +113,7 @@ fn over_egress_budget_denies_fail_closed() {
     std::fs::create_dir_all(&dir).unwrap();
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
-    let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "c".into(), tier: toolcage_backend::Tier::Tier0, backend: None, allow_unisolated: false };
+    let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "c".into(), tier: toolcage_backend::Tier::Tier0, backend: None, allow_unisolated: false, cap_key: None };
     let b = toolcage_broker::Broker::new();
     let rl = toolcage_capability::RevocationList::default();
     let mut budgets = toolcage_proxy::Budgets::default();
