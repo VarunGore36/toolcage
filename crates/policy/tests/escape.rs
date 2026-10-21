@@ -52,6 +52,86 @@ fn proxy_alias_cannot_smuggle_host() {
 }
 
 #[test]
+fn shell_and_interpreter_inline_blocked() {
+    let p = sample();
+    // Shells with any inline-command flag (-c, -lc, -cic, ...) are denied,
+    // not just the old exact `-c`/`-lc` match.
+    for argv in [
+        vec!["bash".to_string(), "-ic".to_string(), "id".to_string()],
+        vec!["dash".to_string(), "-c".to_string(), "id".to_string()],
+        vec!["zsh".to_string(), "-c".to_string(), "id".to_string()],
+        vec!["ksh".to_string(), "-c".to_string(), "id".to_string()],
+        vec![
+            "/bin/busybox".to_string(),
+            "sh".to_string(),
+            "-c".to_string(),
+            "id".to_string(),
+        ],
+    ] {
+        let d = policy::decide(
+            &p,
+            &policy::Request {
+                action: "proc.exec".into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: None,
+                argv: Some(argv.clone()),
+            },
+        );
+        assert!(!d.allow, "{argv:?} must be denied");
+    }
+    // Interpreters fed inline code are denied.
+    for (bin, flag, code) in [
+        ("python", "-c", "print(1)"),
+        ("python3", "-c", "print(1)"),
+        ("perl", "-e", "print 1"),
+        ("ruby", "-e", "puts 1"),
+        ("node", "-e", "console.log(1)"),
+        ("lua", "-e", "print(1)"),
+        ("php", "-r", "echo 1;"),
+    ] {
+        let d = policy::decide(
+            &p,
+            &policy::Request {
+                action: "proc.exec".into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: None,
+                argv: Some(vec![bin.to_string(), flag.to_string(), code.to_string()]),
+            },
+        );
+        assert!(!d.allow, "{bin} {flag} must be denied");
+    }
+}
+
+#[test]
+fn shell_flags_without_inline_code_allowed() {
+    let p = sample();
+    // Options that don't run a string must not be false-positively denied.
+    for argv in [
+        vec!["bash".to_string(), "--noprofile".to_string()],
+        vec!["bash".to_string(), "-x".to_string()],
+        vec!["/bin/ls".to_string(), "-la".to_string()],
+        vec!["python".to_string(), "script.py".to_string()],
+    ] {
+        let d = policy::decide(
+            &p,
+            &policy::Request {
+                action: "proc.exec".into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: None,
+                argv: Some(argv.clone()),
+            },
+        );
+        assert!(d.allow, "{argv:?} must be allowed");
+    }
+}
+
+#[test]
 fn shell_escape_blocked() {
     let p = sample();
     for argv in [

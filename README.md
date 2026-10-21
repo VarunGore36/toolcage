@@ -6,7 +6,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Status: alpha](https://img.shields.io/badge/status-alpha%20%C2%B7%20not%20independently%20reviewed-orange.svg)
-![Tests: 86 passing](https://img.shields.io/badge/tests-86%20passing-brightgreen.svg)
+![Tests: 91 passing](https://img.shields.io/badge/tests-91%20passing-brightgreen.svg)
 ![Rust](https://img.shields.io/badge/built%20with-Rust-black.svg)
 
 [Quickstart](#quickstart) · [Why](#why-toolcage) · [Architecture](#architecture) · [Invariants](#the-seven-invariants) · [Policy](#policy) · [CLI](#cli-reference) · [MCP](#mcp-front-door) · [Limits](#status-and-known-limits) · [Threat model](docs/THREAT_MODEL.md)
@@ -217,7 +217,7 @@ Third-party MCP servers run as **guest processes** under the same policy and aud
 
 ## Tests
 
-`cargo test --workspace` runs **86 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
+`cargo test --workspace` runs **91 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
 
 - **Escape suite** against the policy and proxy (I1, I6)
 - **Fuzzing** of the policy, guest-agent, audit, and proxy parsers

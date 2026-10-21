@@ -14,8 +14,10 @@
 //!   fail-closed on mismatch.
 //! - Glob: only trailing `/**` supported. `*` mid-pattern is literal — do not
 //!   assume shell glob semantics when writing paths.
-//! - Shell: proc.exec allows argv arrays but denies `sh|bash|zsh|fish -c|-lc`.
-//!   Any new shell must be added to the denylist AND audited; prefer an
+//! - Shell: proc.exec allows argv arrays but denies shells
+//!   (sh, bash, dash, zsh, fish, ksh, tcsh, csh, busybox) given any inline
+//!   command flag (-c, -lc, -cic, ...), and interpreters (python, perl, ruby,
+//!   node, lua, php) given their inline-code flag (-c/-e/-r). Prefer an
 //!   explicit allowlist of binaries in a later milestone.
 //! - Approval: require_for is data only; enforcement lives in supervisor
 //!   (pause + audit). An empty methods/hosts list means "all of that action".
@@ -186,6 +188,33 @@ fn path_match(pattern: &str, path: &str) -> bool {
     }
 }
 
+/// Shell binaries whose `-c`-style flag executes an arbitrary command string.
+/// A bare denylist is inherently incomplete; prefer an explicit exec allowlist
+/// in a later milestone. Until then, deny these plus any inline-code flag.
+const SHELL_BINS: &[&str] = &[
+    "sh", "bash", "dash", "zsh", "fish", "ksh", "tcsh", "csh", "busybox",
+];
+
+/// Interpreters and the flag that feeds them an inline code string.
+fn interpreter_inline_flag(bin: &str) -> Option<&'static str> {
+    match bin {
+        "python" | "python3" => Some("-c"),
+        "perl" => Some("-e"),
+        "ruby" => Some("-e"),
+        "node" => Some("-e"),
+        "lua" => Some("-e"),
+        "php" => Some("-r"),
+        _ => None,
+    }
+}
+
+/// True for shell short-flag args that run an inline command string:
+/// `-c`, `-lc`, `-cic`, etc. Single-dash flags only (not `--long`).
+fn shell_inline_flag(a: &str) -> bool {
+    let b = a.as_bytes();
+    b.len() >= 2 && b[0] == b'-' && b[1] != b'-' && a.contains('c')
+}
+
 pub fn decide(policy: &Policy, req: &Request) -> Decision {
     let deny = |rule: &str, reason: &str| Decision {
         allow: false,
@@ -263,14 +292,24 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
         }
         "proc.exec" => {
             // argv smuggling: `sh -c` / `bash -c` is its own gated capability.
-            // v0 has no shell policy, so deny shell-with-command-string fail-closed.
+            // Deny shells and interpreters given an inline command string
+            // fail-closed, since the guest could otherwise run arbitrary code
+            // outside argv-array scrutiny. v0 has no shell policy, so deny here;
+            // prefer an explicit exec allowlist in a later milestone.
             if let Some(argv) = &req.argv {
                 if argv.len() >= 2 {
                     let bin = argv[0].rsplit('/').next().unwrap_or(&argv[0]);
-                    if (bin == "sh" || bin == "bash" || bin == "zsh" || bin == "fish")
-                        && argv[1..].iter().any(|a| a == "-c" || a == "-lc")
-                    {
+                    let rest = &argv[1..];
+                    if SHELL_BINS.contains(&bin) && rest.iter().any(|a| shell_inline_flag(a)) {
                         return deny("deny:shell", "shell -c is not allowed; use argv arrays");
+                    }
+                    if let Some(flag) = interpreter_inline_flag(bin) {
+                        if rest.iter().any(|a| a == flag) {
+                            return deny(
+                                "deny:shell",
+                                "interpreter inline code is not allowed; use argv arrays",
+                            );
+                        }
                     }
                 }
             }
