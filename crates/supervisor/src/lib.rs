@@ -75,6 +75,17 @@ fn hash_argv(argv: &[String]) -> String {
     h.finalize().iter().map(|x| format!("{:02x}", x)).collect()
 }
 
+/// Upper-bound estimate of the HTTP request bytes we are about to send to the
+/// upstream. Over-estimates on purpose (fail-closed): better to deny a valid
+/// request than to let a credential-bearing request leave when over budget.
+fn request_size_estimate(method: &str, path: &str, headers: &[(String, String)]) -> u64 {
+    let mut n = method.len() + path.len() + 96; // request line + CRLFs + framing
+    for (k, v) in headers {
+        n += k.len() + 2 + v.len() + 2; // "k: v\r\n"
+    }
+    (n + 256) as u64 // safety margin
+}
+
 impl Supervisor {
     pub fn check(&self, req: &Request) -> Decision {
         toolcage_policy::decide(&self.policy, req)
@@ -439,6 +450,47 @@ impl Supervisor {
                 headers.push(("Authorization".to_string(), format!("Bearer {secret}")));
             }
         }
+        // Egress damage bound (§8): reserve budget for the outgoing request BEFORE
+        // dialing, so a credential-bearing request never leaves the supervisor when
+        // over budget. Zero limit = unbounded (back-compat).
+        let max_bytes = if self.policy.limits.egress_bytes == 0 {
+            u64::MAX
+        } else {
+            self.policy.limits.egress_bytes
+        };
+        let max_req = if self.policy.limits.egress_requests == 0 {
+            u64::MAX
+        } else {
+            self.policy.limits.egress_requests
+        };
+        let req_est = request_size_estimate(method, path, &headers);
+        match budgets.check(alias_or_host, req_est, max_bytes, max_req) {
+            Ok(true) => {}
+            Ok(false) | Err(_) => {
+                w.append(Event {
+                    seq: 0,
+                    ts_wall: now_wall(),
+                    session: self.session.clone(),
+                    actor: "proxy".into(),
+                    action: format!("http.request {method} {alias_or_host}{path}"),
+                    request_hash: "net".into(),
+                    decision: "deny".into(),
+                    rule_ids: vec!["budget:exceeded".into()],
+                    token_rev_id: token.map(|t| t.rev_id.clone()).unwrap_or_default(),
+                    result: "over-egress-budget(precharge)".into(),
+                    bytes: req_est,
+                    claimed_by: "host".into(),
+                    prev_hash: String::new(),
+                    hash: String::new(),
+                })?;
+                return Ok(FetchOutcome {
+                    allowed: false,
+                    need_approval: false,
+                    rule_ids: vec!["budget:exceeded".into()],
+                    body: String::new(),
+                });
+            }
+        }
         // Real dial: proxy resolves DNS, connects (TLS if https), sends request.
         let resp = match proxy.fetch(&upstream, method, path, &headers) {
             Ok(r) => r,
@@ -468,43 +520,37 @@ impl Supervisor {
             }
         };
         let safe_body = broker.scrub(&String::from_utf8_lossy(&resp.body));
-        // Egress damage bound (§8): charge bytes + request after proxy call,
+        // Egress damage bound (§8): request bytes were reserved before dialing
+        // (pre-charge above). True-up with actual response bytes now;
         // fail-closed if over budget. Zero limit = unbounded (back-compat).
-        {
-            let max_bytes = if self.policy.limits.egress_bytes == 0 {
-                u64::MAX
-            } else {
-                self.policy.limits.egress_bytes
-            };
-            let max_req = if self.policy.limits.egress_requests == 0 {
-                u64::MAX
-            } else {
-                self.policy.limits.egress_requests
-            };
-            if !budgets.check(alias_or_host, safe_body.len() as u64, max_bytes, max_req)? {
-                w.append(Event {
-                    seq: 0,
-                    ts_wall: now_wall(),
-                    session: self.session.clone(),
-                    actor: "proxy".into(),
-                    action: format!("http.request {method} {alias_or_host}{path}"),
-                    request_hash: "net".into(),
-                    decision: "deny".into(),
-                    rule_ids: vec!["budget:exceeded".into()],
-                    token_rev_id: token.map(|t| t.rev_id.clone()).unwrap_or_default(),
-                    result: "over-egress-budget".into(),
-                    bytes: safe_body.len() as u64,
-                    claimed_by: "host".into(),
-                    prev_hash: String::new(),
-                    hash: String::new(),
-                })?;
-                return Ok(FetchOutcome {
-                    allowed: false,
-                    need_approval: false,
-                    rule_ids: vec!["budget:exceeded".into()],
-                    body: String::new(),
-                });
-            }
+        let max_bytes = if self.policy.limits.egress_bytes == 0 {
+            u64::MAX
+        } else {
+            self.policy.limits.egress_bytes
+        };
+        if !budgets.charge_bytes(alias_or_host, safe_body.len() as u64, max_bytes)? {
+            w.append(Event {
+                seq: 0,
+                ts_wall: now_wall(),
+                session: self.session.clone(),
+                actor: "proxy".into(),
+                action: format!("http.request {method} {alias_or_host}{path}"),
+                request_hash: "net".into(),
+                decision: "deny".into(),
+                rule_ids: vec!["budget:exceeded".into()],
+                token_rev_id: token.map(|t| t.rev_id.clone()).unwrap_or_default(),
+                result: "over-egress-budget(true-up)".into(),
+                bytes: safe_body.len() as u64,
+                claimed_by: "host".into(),
+                prev_hash: String::new(),
+                hash: String::new(),
+            })?;
+            return Ok(FetchOutcome {
+                allowed: false,
+                need_approval: false,
+                rule_ids: vec!["budget:exceeded".into()],
+                body: String::new(),
+            });
         }
         w.append(Event {
             seq: 0,
