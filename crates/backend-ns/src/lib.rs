@@ -462,13 +462,27 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
             close(ready_r).ok();
             close(go_w).ok();
 
-            // 1. User namespace: root only inside it. On failure THIS process
-            // must die here: `?` would return into the caller's control flow
-            // and leave a duplicate supervisor running around (see child_die).
-            if unshare(CloneFlags::CLONE_NEWUSER).is_err() {
+            // 1. The full namespace stack in ONE unshare: user + mount + net +
+            // ipc + pid + uts. The kernel creates the userns first, so the rest
+            // are owned by it (same as `unshare -Urn`). The old two-phase split
+            // (userns, uid-map handshake, then the rest) fails on hosts where
+            // the combined call works — probe and exec use the same sequence.
+            // On failure THIS process must die here: `?` would return into the
+            // caller's control flow and leave a duplicate supervisor running
+            // around (see child_die).
+            if unshare(
+                CloneFlags::CLONE_NEWUSER
+                    | CloneFlags::CLONE_NEWNS
+                    | CloneFlags::CLONE_NEWNET
+                    | CloneFlags::CLONE_NEWIPC
+                    | CloneFlags::CLONE_NEWPID
+                    | CloneFlags::CLONE_NEWUTS,
+            )
+            .is_err()
+            {
                 child_die(
                     126,
-                    b"toolcage: unshare CLONE_NEWUSER failed (unprivileged_userns_clone?)\n",
+                    b"toolcage: unshare(userns+mount/net/ipc/pid/uts) failed",
                 );
             }
             let _ = unsafe {
@@ -477,22 +491,10 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
             let mut b = [0u8; 1];
             let _ = unsafe { libc::read(go_r.as_raw_fd(), b.as_mut_ptr() as *mut c_void, 1) };
 
-            // Root inside this namespace only.
+            // Root inside this namespace only (uid/gid maps written by the
+            // parent during the handshake above).
             let _ = unsafe { libc::setresgid(0, 0, 0) };
             let _ = unsafe { libc::setresuid(0, 0, 0) };
-
-            // 2. Remaining namespaces (backed by capabilities inside the userns).
-            if unshare(
-                CloneFlags::CLONE_NEWNS
-                    | CloneFlags::CLONE_NEWNET
-                    | CloneFlags::CLONE_NEWIPC
-                    | CloneFlags::CLONE_NEWPID
-                    | CloneFlags::CLONE_NEWUTS,
-            )
-            .is_err()
-            {
-                child_die(126, b"toolcage: unshare mount/net/ipc/pid/uts failed\n");
-            }
 
             // 3. Private mount tree: nothing propagates to the host.
             unsafe {
@@ -534,7 +536,7 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
 
             // chdir into the workspace.
             if unsafe { libc::chdir(workspace_cstr.as_ptr()) } != 0 {
-                child_die(125, b"toolcage: chdir workspace failed\n");
+                child_die(125, b"toolcage: chdir workspace failed");
             }
 
             // 4. Landlock filesystem rules (best-effort).
@@ -594,7 +596,7 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                 )
             };
             if rc == -1 {
-                child_die(127, b"toolcage: exec failed\n");
+                child_die(127, b"toolcage: exec failed");
             }
             // execve returns only on failure; the _exit is belt and braces so
             // this arm stays diverging.
@@ -612,11 +614,41 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
 // byte messages + _exit only.
 // ---------------------------------------------------------------------------
 
-/// Report a fatal child-side failure, then terminate THIS process.
+/// Report a fatal child-side failure, then terminate THIS process. Appends
+/// " errno=N" (best-effort context, zero-alloc itoa) so a CI log or operator
+/// can tell EPERM from EINVAL/ENOSPC without reproducing locally.
 /// Exit codes: 124 Landlock boundary, 125 chdir, 126 namespace setup, 127 exec.
 fn child_die(code: i32, msg: &[u8]) -> ! {
+    let e = unsafe { *libc::__errno_location() };
     unsafe {
         libc::write(2, msg.as_ptr() as *const c_void, msg.len());
+        let mut buf = [0u8; 24];
+        let mut n = 0usize;
+        for &c in b" errno=" {
+            buf[n] = c;
+            n += 1;
+        }
+        // Zero-alloc itoa (this runs between fork and execve).
+        let mut digits = [0u8; 10];
+        let mut d = 0usize;
+        let mut v: u32 = if e < 0 { (-e) as u32 } else { e as u32 };
+        if v == 0 {
+            digits[d] = b'0';
+            d += 1;
+        }
+        while v > 0 {
+            digits[d] = b'0' + (v % 10) as u8;
+            v /= 10;
+            d += 1;
+        }
+        while d > 0 {
+            d -= 1;
+            buf[n] = digits[d];
+            n += 1;
+        }
+        buf[n] = b'\n';
+        n += 1;
+        libc::write(2, buf.as_ptr() as *const c_void, n);
         libc::_exit(code as c_int);
     }
 }
@@ -720,7 +752,7 @@ fn apply_landlock(workspace: &str) {
         // to run rather than silently weaken Tier0 (see module header).
         child_die(
             124,
-            b"toolcage: landlock not ported on this arch; refusing to run without the fs boundary\n",
+            b"toolcage: landlock not ported on this arch; refusing to run without the fs boundary",
         );
     }
     #[cfg(target_arch = "x86_64")]
@@ -758,7 +790,7 @@ fn apply_landlock(workspace: &str) {
         if ruleset < 0 {
             child_die(
                 124,
-                b"toolcage: landlock create_ruleset unavailable; refusing to run without the fs boundary\n",
+                b"toolcage: landlock create_ruleset unavailable; refusing to run without the fs boundary",
             );
         }
         let add_rule = |fd: c_long, path: &str, rights: u64| -> bool {
@@ -795,14 +827,11 @@ fn apply_landlock(workspace: &str) {
             if rc < 0 {
                 child_die(
                     124,
-                    b"toolcage: landlock restrict_self failed; refusing to run\n",
+                    b"toolcage: landlock restrict_self failed; refusing to run",
                 );
             }
         } else {
-            child_die(
-                124,
-                b"toolcage: landlock add_rule failed; refusing to run\n",
-            );
+            child_die(124, b"toolcage: landlock add_rule failed; refusing to run");
         }
         let _ = unsafe { libc::close(ruleset as c_int) };
     }
@@ -812,7 +841,6 @@ fn apply_landlock(workspace: &str) {
 mod tests {
     use super::*;
     use std::io::Write;
-    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn tier0_refuses_tier2_need() {
@@ -932,9 +960,6 @@ mod tests {
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-env-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("env.sh"), "#!/bin/sh\nenv\n").unwrap();
-        let _ =
-            std::fs::set_permissions(dir.join("env.sh"), std::fs::Permissions::from_mode(0o755));
         let spec = SessionSpec {
             id: "t3".into(),
             tier: Tier::Tier0,
@@ -944,11 +969,14 @@ mod tests {
         };
         let mut b = NsBackend::new();
         b.create(&spec).unwrap();
-        let r = b.exec("t3", &["./env.sh".into()]).unwrap();
+        // Direct exec of `env`, no shell: the seccomp filter blocks fork/clone,
+        // so a shell script cannot spawn `env` on hosts where seccomp actually
+        // installs (this host returns EINVAL for seccomp; runners do not).
+        // `env` prints exactly the scrubbed environment.
+        let r = b.exec("t3", &["/usr/bin/env".into()]).unwrap();
         assert_eq!(r.exit_code, Some(0));
         let out = String::from_utf8_lossy(&r.stdout);
-        // env is cleared before exec (only PATH); a shell may add PWD/SHLVL/_,
-        // but no secret or identifying vars should leak.
+        // env is cleared before exec (only PATH); nothing else may leak.
         assert!(
             out.lines().any(|l| l.starts_with("PATH=")),
             "PATH must be present:\n{out}"
