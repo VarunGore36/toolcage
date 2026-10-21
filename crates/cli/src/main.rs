@@ -343,6 +343,9 @@ fn main() -> anyhow::Result<()> {
             let text = std::fs::read_to_string(&policy)?;
             let pol = toolcage_policy::load_yaml(&text)?;
             let cap_key = load_key(&key_hex)?;
+            // Persistent egress budget file, tied to the audit log so repeated
+            // `fetch` calls accumulate damage across invocations (restart-safe).
+            let budget_file = audit.with_extension("budgets.json");
             let sup = toolcage_supervisor::Supervisor {
                 policy: pol,
                 audit_path: audit,
@@ -366,7 +369,11 @@ fn main() -> anyhow::Result<()> {
             }
             let tok = load_token(&token)?;
             let rl = toolcage_capability::RevocationList::default();
-            let mut budgets = toolcage_proxy::Budgets::default();
+            let mut budgets =
+                toolcage_proxy::Budgets::with_path(&budget_file).unwrap_or_else(|e| {
+                    eprintln!("warning: budget persistence unavailable (in-memory): {e}");
+                    toolcage_proxy::Budgets::default()
+                });
             let mut proxy = toolcage_proxy::Proxy::new()?;
             let o = sup.fetch_via_proxy(
                 &broker,
