@@ -1,36 +1,76 @@
-<svg width="900" height="260" viewBox="0 0 900 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="hash chain">
-  <rect width="900" height="280" fill="#0f172a" rx="16"/>
-  
-  <g transform="translate(40, 40)">
-    <rect x="0" y="0" width="180" height="100" rx="10" fill="#1e293b" stroke="#22d3ee" stroke-width="2"/>
-    <text x="90" y="40" text-anchor="middle" font-family="monospace" font-size="11" fill="#22d3ee">evt #41</text>
-    <text x="90" y="58" text-anchor="middle" font-family="monospace" font-size="10" fill="#64748b">H(genesis…)</text>
-  </g>
-  
-  <g transform="translate(300, 40)">
-    <rect x="0" y="0" width="180" height="100" rx="10" fill="#1e293b" stroke="#22d3ee" stroke-width="2"/>
-    <text x="90" y="40" text-anchor="middle" font-family="monospace" font-size="11" fill="#22d3ee">evt #42</text>
-    <text x="90" y="58" text-anchor="middle" font-family="monospace" font-size="10" fill="#64748b">H(#41…)</text>
-  </g>
-  
-  <g transform="translate(560, 40)">
-    <rect x="0" y="0" width="180" height="100" rx="10" fill="#1e293b" stroke="#22d3ee" stroke-width="2"/>
-    <text x="90" y="40" text-anchor="middle" font-family="monospace" font-size="11" fill="#22d3ee">evt #43</text>
-    <text x="90" y="58" text-anchor="middle" font-family="monospace" font-size="10" fill="#64748b">H(#42…)</text>
-  </g>
-  
-  <g transform="translate(820, 40)">
-    <rect x="0" y="0" width="140" height="100" rx="10" fill="#0f172a" stroke="#a78bfa" stroke-width="2" stroke-dasharray="4 4"/>
-    <text x="70" y="40" text-anchor="middle" font-family="monospace" font-size="11" fill="#a78bfa">checkpoint</text>
-    <text x="70" y="65" text-anchor="middle" font-family="monospace" font-size="10" fill="#64748b">Ed25519(seq,head)</text>
-  </g>
-  
-  <line x1="220" y1="90" x2="300" y2="90" stroke="#22d3ee" stroke-width="2"/>
-  <polygon points="296,86 304,90 296,94" fill="#22d3ee"/>
-  
-  <line x1="480" y1="90" x2="560" y2="90" stroke="#22d3ee" stroke-width="2"/>
-  <polygon points="556,86 564,90 556,94" fill="#22d3ee"/>
-  
-  <line x1="740" y1="90" x2="820" y2="90" stroke="#a78bfa" stroke-width="2"/>
-  <polygon points="816,95 824,100 816,105" fill="#a78bfa"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 420" width="1000" height="420" role="img" aria-labelledby="t d" xmlns:c2pa="http://c2pa.org/manifest"><metadata><c2pa:manifest>AAAWgmp1bWIAAAAeanVtZGMycGEAEQAQgAAAqgA4m3EDYzJwYQAAABZcanVtYgAAAEdqdW1kYzJtYQARABCAAACqADibcQN1cm46YzJwYToyOTQ3ZDhlYy03MjBmLTRkMTktOGUwMy1kMDEwMzU3MzI3ZjIAAAADl2p1bWIAAAApanVtZGMyYXMAEQAQgAAAqgA4m3EDYzJwYS5hc3NlcnRpb25zAAAAALxqdW1iAAAARGp1bWRjYm9yABEAEIAAAKoAOJtxE2MycGEuaW5ncmVkaWVudC52MwAAAAAYYzJzaIz9g10nWIdUO22vS0MhBKEAAABwY2JvcqNpZGM6Zm9ybWF0bWltYWdlL3N2Zyt4bWxqaW5zdGFuY2VJRHgseG1wOmlpZDo5NmJhMjQ1Ny0yZGU1LTRkYzYtOWIwMC0zZWE5Zjc1MWQyNDVscmVsYXRpb25zaGlwaHBhcmVudE9mAAAB4mp1bWIAAABBanVtZGNib3IAEQAQgAAAqgA4m3ETYzJwYS5hY3Rpb25zLnYyAAAAABhjMnNoHu+1aaU/Y+JyFSrAb+fGdAAAAZljYm9yomdhY3Rpb25zgqJmYWN0aW9ua2MycGEub3BlbmVkanBhcmFtZXRlcnOha2luZ3JlZGllbnRzgaJjdXJseC1zZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmluZ3JlZGllbnQudjNkaGFzaFggqaPqej60W+CRhjft8JxRawVbn1MykjDa4QibMs2cQ/+kZmFjdGlvbngdY29tLmFudGhyb3BpYy5jbGF1ZGUucHJvdmlkZWRqcGFyYW1ldGVyc6F4H2NvbS5hbnRocm9waWMub3JpZ2luLWNvbmZpZGVuY2VndW5rbm93bmtkZXNjcmlwdGlvbnhmQ2xhdWRlIHByb3ZpZGVkIHRoaXMgZmlsZSBhdCB0aGUgcmVxdWVzdCBvZiBhIHVzZXIgYW5kIG1heSBoYXZlIGNyZWF0ZWQgb3IgbW9kaWZpZWQgdGhlIGZpbGUgY29udGVudHMubXNvZnR3YXJlQWdlbnShZG5hbWVmQ2xhdWRlcmFsbEFjdGlvbnNJbmNsdWRlZPUAAADIanVtYgAAAEBqdW1kY2JvcgARABCAAACqADibcRNjMnBhLmhhc2guZGF0YQAAAAAYYzJzaMZjZY/q5CSHk0WCA8yAkFgAAACAY2JvcqVjYWxnZnNoYTI1NmNwYWRNAAAAAAAAAAAAAAAAAGRoYXNoWCBqFyaCyKzUhL/lpSHdVmFuzeHR6fIm/9obAgyUu7PWrmRuYW1lbmp1bWJmIG1hbmlmZXN0amV4Y2x1c2lvbnOBomVzdGFydBi5Zmxlbmd0aBkeBAAAAj5qdW1iAAAAJ2p1bWRjMmNsABEAEIAAAKoAOJtxA2MycGEuY2xhaW0udjIAAAACD2Nib3KlY2FsZ2ZzaGEyNTZpc2lnbmF0dXJleE1zZWxmI2p1bWJmPS9jMnBhL3VybjpjMnBhOjI5NDdkOGVjLTcyMGYtNGQxOS04ZTAzLWQwMTAzNTczMjdmMi9jMnBhLnNpZ25hdHVyZWppbnN0YW5jZUlEeCx4bXA6aWlkOmE3YTU3MjQ5LTNmOTktNGQ2ZC1iYTk1LTkxZjg1Njg5Zjc5MXJjcmVhdGVkX2Fzc2VydGlvbnODomN1cmx4LXNlbGYjanVtYmY9YzJwYS5hc3NlcnRpb25zL2MycGEuaW5ncmVkaWVudC52M2RoYXNoWCCpo+p6PrRb4JGGN+3wnFFrBVufUzKSMNrhCJsyzZxD/6JjdXJseCpzZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmFjdGlvbnMudjJkaGFzaFggTCJVua5lfY7us11AYFB0o5L97Z/TtDokQ8vO2jwieZKiY3VybHgpc2VsZiNqdW1iZj1jMnBhLmFzc2VydGlvbnMvYzJwYS5oYXNoLmRhdGFkaGFzaFggeq8wh1S706/78SBKUZwBZLkDhUB7Ey3/K7r6Z++r55B0Y2xhaW1fZ2VuZXJhdG9yX2luZm+jZG5hbWVvQW50aHJvcGljIEZpbGVzZ3ZlcnNpb25lMS4wLjBrc3BlY1ZlcnNpb25lMi40LjAAABA4anVtYgAAAChqdW1kYzJjcwARABCAAACqADibcQNjMnBhLnNpZ25hdHVyZQAAABAIY2JvctKEWQISogEmGCFZAgowggIGMIIBjaADAgECAhRA5aAK7sI50L64g/oGQgU9Z1UTADAKBggqhkjOPQQDAzBJMRcwFQYDVQQKEw5BbnRocm9waWMsIFBCQzEuMCwGA1UEAxMlQW50aHJvcGljIENvbnRlbnQgQ3JlZGVudGlhbHMgUm9vdCBDQTAeFw0yNjA4MDcxODQzNTZaFw0yODA4MDYxOTQzNTZaMEQxFzAVBgNVBAoTDkFudGhyb3BpYywgUEJDMSkwJwYDVQQDEyBBbnRocm9waWMgQ2xhdWRlIENvbnRlbnQgU2lnbmluZzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABJh6CmvLUBgFFNU0vUKlOVtE6djd17L5SuwX0LemFisBM3dkd/3cyjxFA3Qo5S46fX0/ihY0VZ7mfb9KF703t5OjWDBWMA4GA1UdDwEB/wQEAwIHgDAVBgNVHSUEDjAMBgorBgEEAYPoXgIBMAwGA1UdEwEB/wQCMAAwHwYDVR0jBBgwFoAUzlHiBIFOZFsj+OPEz5o+nMHXXMIwCgYIKoZIzj0EAwMDZwAwZAIwMXMdFJ4BetLLVY7ORuE9noqbbAZOZn/aArXyTwFAZfKrPzxF2vPoJNf1+UCdg1XGAjBwX1zd9WGqYkqmL5SFqw1QySjr1zJfpJM9+1rdDwSPLMOPOjKuiXjoU/pUUeG9RwmhY3BhZFkNngAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPZYQHhVXlLhfIRzUK895hWJYbSkrfuKd5MBMwCxfzS9Fd1Ko0E0AxylZ6RUgjnGJ75Nz8kiVIc8iZBn85vygB0Tedg=</c2pa:manifest></metadata>
+<title id="t">Audit hash chain</title><desc id="d">Each audit event stores the hash of the previous one. Ed25519 checkpoints sign the sequence number, head hash and time. audit verify detects any edit, deletion, reordering or truncation.</desc>
+
+<style>
+  .sans{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace}
+  .t{fill:#e6edf3} .m{fill:#8b949e} .d{fill:#6e7681}
+  .g{fill:#3fb950} .b{fill:#58a6ff} .r{fill:#f85149} .a{fill:#d29922} .p{fill:#bc8cff}
+  .h1{font-size:20px;font-weight:700} .h2{font-size:15px;font-weight:700}
+  .s{font-size:12px} .xs{font-size:11px} .n{font-size:13px}
+  .bold{font-weight:700}
+</style>
+<defs>
+  <marker id="ag" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#3fb950"/></marker>
+  <marker id="ab" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#58a6ff"/></marker>
+  <marker id="am" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8b949e"/></marker>
+  <marker id="ar" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#f85149"/></marker>
+  <marker id="aa" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#d29922"/></marker>
+  <linearGradient id="hero" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0d1117"/><stop offset="1" stop-color="#13202e"/></linearGradient>
+</defs>
+<rect x="0.5" y="0.5" width="999" height="419" rx="14" fill="#0d1117" stroke="#30363d"/>
+<text x="32" y="42" class="t h1 sans" text-anchor="start" >Every action leaves a receipt</text>
+<text x="32" y="62" class="m n sans" text-anchor="start" >Write-ahead, hash-chained, checkpoint-signed. Illustrative values.</text>
+<rect x="32" y="86" width="200" height="120" rx="10" fill="#161b22" stroke="#bc8cff" stroke-width="1.5" />
+<text x="46" y="110" class="p s mono bold" text-anchor="start" >seq #41</text>
+<text x="218" y="110" class="d xs mono" text-anchor="end" >intent</text>
+<text x="46" y="132" class="t n mono bold" text-anchor="start" >proc.exec</text>
+<text x="46" y="158" class="d xs mono" text-anchor="start" >prev</text>
+<text x="84" y="158" class="m s mono" text-anchor="start" >9f2c…01</text>
+<text x="46" y="180" class="d xs mono" text-anchor="start" >hash</text>
+<text x="84" y="180" class="g s mono bold" text-anchor="start" >51ab…e7</text>
+<path d="M 232 176 H 275" fill="none" stroke="#3fb950" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ag)"/>
+<rect x="277" y="86" width="200" height="120" rx="10" fill="#161b22" stroke="#bc8cff" stroke-width="1.5" />
+<text x="291" y="110" class="p s mono bold" text-anchor="start" >seq #42</text>
+<text x="463" y="110" class="d xs mono" text-anchor="end" >outcome</text>
+<text x="291" y="132" class="t n mono bold" text-anchor="start" >proc.exec</text>
+<text x="291" y="158" class="d xs mono" text-anchor="start" >prev</text>
+<text x="329" y="158" class="m s mono" text-anchor="start" >51ab…e7</text>
+<text x="291" y="180" class="d xs mono" text-anchor="start" >hash</text>
+<text x="329" y="180" class="g s mono bold" text-anchor="start" >c07d…32</text>
+<path d="M 477 176 H 520" fill="none" stroke="#3fb950" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ag)"/>
+<rect x="522" y="86" width="200" height="120" rx="10" fill="#161b22" stroke="#bc8cff" stroke-width="1.5" />
+<text x="536" y="110" class="p s mono bold" text-anchor="start" >seq #43</text>
+<text x="708" y="110" class="d xs mono" text-anchor="end" >intent</text>
+<text x="536" y="132" class="t n mono bold" text-anchor="start" >http.request</text>
+<text x="536" y="158" class="d xs mono" text-anchor="start" >prev</text>
+<text x="574" y="158" class="m s mono" text-anchor="start" >c07d…32</text>
+<text x="536" y="180" class="d xs mono" text-anchor="start" >hash</text>
+<text x="574" y="180" class="g s mono bold" text-anchor="start" >7be1…9a</text>
+<path d="M 722 176 H 765" fill="none" stroke="#3fb950" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ag)"/>
+<rect x="767" y="86" width="200" height="120" rx="10" fill="#161b22" stroke="#bc8cff" stroke-width="1.5" />
+<text x="781" y="110" class="p s mono bold" text-anchor="start" >seq #44</text>
+<text x="953" y="110" class="d xs mono" text-anchor="end" >outcome</text>
+<text x="781" y="132" class="t n mono bold" text-anchor="start" >http.request</text>
+<text x="781" y="158" class="d xs mono" text-anchor="start" >prev</text>
+<text x="819" y="158" class="m s mono" text-anchor="start" >7be1…9a</text>
+<text x="781" y="180" class="d xs mono" text-anchor="start" >hash</text>
+<text x="819" y="180" class="g s mono bold" text-anchor="start" >e3f4…5c</text>
+<text x="500" y="232" class="g s mono" text-anchor="middle" >hash = H(prev_hash, canonical(event))</text>
+<rect x="752" y="262" width="216" height="76" rx="10" fill="#1c2230" stroke="#d29922" stroke-width="1.5" />
+<text x="860" y="286" class="t h2 sans" text-anchor="middle" >Checkpoint</text>
+<text x="860" y="306" class="a xs mono" text-anchor="middle" >Ed25519 over (seq, head, time)</text>
+<text x="860" y="324" class="m xs sans" text-anchor="middle" >pinned public key verifies</text>
+<path d="M 860 262 V 246 H 852 V 208" fill="none" stroke="#d29922" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#aa)"/>
+<rect x="32" y="262" width="690" height="76" rx="10" fill="#1c2230" stroke="#30363d" stroke-width="1.2" />
+<text x="50" y="286" class="t n mono bold" text-anchor="start" >audit verify</text>
+<text x="50" y="308" class="g s mono" text-anchor="start" >✓ chain continuity</text>
+<text x="250" y="308" class="g s mono" text-anchor="start" >✓ seq monotonic, no gaps</text>
+<text x="500" y="308" class="g s mono" text-anchor="start" >✓ re-hash every event</text>
+<text x="50" y="326" class="g s mono" text-anchor="start" >✓ checkpoint signatures</text>
+<text x="250" y="326" class="m s mono" text-anchor="start" >old checkpoint / truncated tail fail</text>
+<rect x="32" y="356" width="936" height="48" rx="10" fill="#161b22" stroke="#f85149" stroke-width="1.4" />
+<text x="52" y="377" class="r n sans bold" text-anchor="start" >Edit, delete, reorder or truncate any event</text>
+<text x="52" y="394" class="m s mono" text-anchor="start" >→ its hash no longer matches the next block's prev → audit verify fails</text>
+<text x="948" y="386" class="d xs mono" text-anchor="end" >tamper-evident, not tamper-proof</text>
 </svg>

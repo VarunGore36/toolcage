@@ -1,48 +1,74 @@
-<svg width="900" height="320" viewBox="0 0 900 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="isolation tiers">
-  <defs>
-    <linearGradient id="tierBg" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#0f172a"/>
-      <stop offset="100%" stop-color="#1e1b4b"/>
-    </linearGradient>
-  </defs>
-  <rect width="900" height="320" fill="#0f172a" rx="16"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 470" width="1000" height="470" role="img" aria-labelledby="t d" xmlns:c2pa="http://c2pa.org/manifest"><metadata><c2pa:manifest>AAAWgmp1bWIAAAAeanVtZGMycGEAEQAQgAAAqgA4m3EDYzJwYQAAABZcanVtYgAAAEdqdW1kYzJtYQARABCAAACqADibcQN1cm46YzJwYToyYzg0ZGI4MS0yNzVjLTRlYTMtODM3Ny1jZGI3MzZjNWY2ZjAAAAADl2p1bWIAAAApanVtZGMyYXMAEQAQgAAAqgA4m3EDYzJwYS5hc3NlcnRpb25zAAAAALxqdW1iAAAARGp1bWRjYm9yABEAEIAAAKoAOJtxE2MycGEuaW5ncmVkaWVudC52MwAAAAAYYzJzaIyBDwUJPw0wVdMs9V1FN3gAAABwY2JvcqNpZGM6Zm9ybWF0bWltYWdlL3N2Zyt4bWxqaW5zdGFuY2VJRHgseG1wOmlpZDpmZjA3NjllYy03NTg1LTRiOGYtYWFkNS0yNTA2MmI1NGI0MTVscmVsYXRpb25zaGlwaHBhcmVudE9mAAAB4mp1bWIAAABBanVtZGNib3IAEQAQgAAAqgA4m3ETYzJwYS5hY3Rpb25zLnYyAAAAABhjMnNo8oUBiZVxwfJR7cVFOUqYMwAAAZljYm9yomdhY3Rpb25zgqJmYWN0aW9ua2MycGEub3BlbmVkanBhcmFtZXRlcnOha2luZ3JlZGllbnRzgaJjdXJseC1zZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmluZ3JlZGllbnQudjNkaGFzaFggPpsPlseBjpq0CbVuvzGL+ySZEirVt9kZ0cS9vU8lRF+kZmFjdGlvbngdY29tLmFudGhyb3BpYy5jbGF1ZGUucHJvdmlkZWRqcGFyYW1ldGVyc6F4H2NvbS5hbnRocm9waWMub3JpZ2luLWNvbmZpZGVuY2VndW5rbm93bmtkZXNjcmlwdGlvbnhmQ2xhdWRlIHByb3ZpZGVkIHRoaXMgZmlsZSBhdCB0aGUgcmVxdWVzdCBvZiBhIHVzZXIgYW5kIG1heSBoYXZlIGNyZWF0ZWQgb3IgbW9kaWZpZWQgdGhlIGZpbGUgY29udGVudHMubXNvZnR3YXJlQWdlbnShZG5hbWVmQ2xhdWRlcmFsbEFjdGlvbnNJbmNsdWRlZPUAAADIanVtYgAAAEBqdW1kY2JvcgARABCAAACqADibcRNjMnBhLmhhc2guZGF0YQAAAAAYYzJzaJiQfCKe6yuW3Xr2zrmFfdcAAACAY2JvcqVjYWxnZnNoYTI1NmNwYWRNAAAAAAAAAAAAAAAAAGRoYXNoWCAansRbcTZ0q+BcaxFoQciLv0Lv24RCUQ3Ko6liBodi6GRuYW1lbmp1bWJmIG1hbmlmZXN0amV4Y2x1c2lvbnOBomVzdGFydBi5Zmxlbmd0aBkeBAAAAj5qdW1iAAAAJ2p1bWRjMmNsABEAEIAAAKoAOJtxA2MycGEuY2xhaW0udjIAAAACD2Nib3KlY2FsZ2ZzaGEyNTZpc2lnbmF0dXJleE1zZWxmI2p1bWJmPS9jMnBhL3VybjpjMnBhOjJjODRkYjgxLTI3NWMtNGVhMy04Mzc3LWNkYjczNmM1ZjZmMC9jMnBhLnNpZ25hdHVyZWppbnN0YW5jZUlEeCx4bXA6aWlkOjY5ZTZhOTc4LWY2NTAtNDk5OS1iNWI2LTNjNDljNzQ4M2YyMnJjcmVhdGVkX2Fzc2VydGlvbnODomN1cmx4LXNlbGYjanVtYmY9YzJwYS5hc3NlcnRpb25zL2MycGEuaW5ncmVkaWVudC52M2RoYXNoWCA+mw+Wx4GOmrQJtW6/MYv7JJkSKtW32RnRxL29TyVEX6JjdXJseCpzZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmFjdGlvbnMudjJkaGFzaFggO1W9L8MINfXau0q91zz94IHMM/v72Ca46/D4mqjM6saiY3VybHgpc2VsZiNqdW1iZj1jMnBhLmFzc2VydGlvbnMvYzJwYS5oYXNoLmRhdGFkaGFzaFggqUa8O9QaV7mrMwyUzOaTmCFtX8EgOkNO9MqjVUaxNH10Y2xhaW1fZ2VuZXJhdG9yX2luZm+jZG5hbWVvQW50aHJvcGljIEZpbGVzZ3ZlcnNpb25lMS4wLjBrc3BlY1ZlcnNpb25lMi40LjAAABA4anVtYgAAAChqdW1kYzJjcwARABCAAACqADibcQNjMnBhLnNpZ25hdHVyZQAAABAIY2JvctKEWQISogEmGCFZAgowggIGMIIBjaADAgECAhRA5aAK7sI50L64g/oGQgU9Z1UTADAKBggqhkjOPQQDAzBJMRcwFQYDVQQKEw5BbnRocm9waWMsIFBCQzEuMCwGA1UEAxMlQW50aHJvcGljIENvbnRlbnQgQ3JlZGVudGlhbHMgUm9vdCBDQTAeFw0yNjA4MDcxODQzNTZaFw0yODA4MDYxOTQzNTZaMEQxFzAVBgNVBAoTDkFudGhyb3BpYywgUEJDMSkwJwYDVQQDEyBBbnRocm9waWMgQ2xhdWRlIENvbnRlbnQgU2lnbmluZzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABJh6CmvLUBgFFNU0vUKlOVtE6djd17L5SuwX0LemFisBM3dkd/3cyjxFA3Qo5S46fX0/ihY0VZ7mfb9KF703t5OjWDBWMA4GA1UdDwEB/wQEAwIHgDAVBgNVHSUEDjAMBgorBgEEAYPoXgIBMAwGA1UdEwEB/wQCMAAwHwYDVR0jBBgwFoAUzlHiBIFOZFsj+OPEz5o+nMHXXMIwCgYIKoZIzj0EAwMDZwAwZAIwMXMdFJ4BetLLVY7ORuE9noqbbAZOZn/aArXyTwFAZfKrPzxF2vPoJNf1+UCdg1XGAjBwX1zd9WGqYkqmL5SFqw1QySjr1zJfpJM9+1rdDwSPLMOPOjKuiXjoU/pUUeG9RwmhY3BhZFkNngAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPZYQHFgtFPtrN+OsaSSzDNPVElyKZSHHiiyhBFlzMx4SBE5+IGXmLQS1SRbaoAQc1qwp3e9a7wBlq+t+0o0goovBYI=</c2pa:manifest></metadata>
+<title id="t">Isolation tiers</title><desc id="d">Tier 0 namespaces and Landlock, Tier 1 gVisor, Tier 2 Firecracker. If the host cannot meet a tool's minimum isolation the call is denied and audited.</desc>
 
-  <!-- Tier 0 -->
-  <g transform="translate(40, 40)">
-    <rect x="0" y="0" width="260" height="240" rx="16" fill="#1e293b" stroke="rgba(255,255,255,0.05)" stroke-width="1"/>
-    <circle cx="40" cy="40" r="24" fill="#22d3ee" opacity="0.2"/>
-    <text x="130" y="70" text-anchor="middle" font-family="monospace" font-size="16" font-weight="bold" fill="#22d3ee">Tier 0</text>
-    <text x="130" y="90" text-anchor="middle" font-family="monospace" font-size="13" fill="#94a3b8">Namespaces + Landlock + seccomp</text>
-    <text x="130" y="115" text-anchor="middle" font-family="monospace" font-size="11" fill="#64748b">shared kernel · ~50ms</text>
-    <rect x="20" y="140" width="220" height="80" rx="8" fill="#0f172a"/>
-    <text x="130" y="165" text-anchor="middle" font-family="monospace" font-size="10" fill="#94a3b8">· formatters · linters · read-only git</text>
-    <text x="130" y="205" text-anchor="middle" font-family="monospace" font-size="11" fill="#64748b">~50 ms start</text>
-    <text x="130" y="225" text-anchor="middle" font-family="monospace" font-size="11" fill="#64748b">shared kernel · ~50ms</text>
-  </g>
-
-  <!-- Tier 1 -->
-  <g transform="translate(370, 40)">
-    <rect x="0" y="0" width="260" height="240" rx="16" fill="#1e293b" stroke="rgba(255,255,255,0.05)" stroke-width="1"/>
-    <circle cx="40" cy="40" r="24" fill="#a78bfa" opacity="0.2"/>
-    <text x="130" y="70" text-anchor="middle" font-family="monospace" font-size="16" font-weight="bold" fill="#a78bfa">Tier 1</text>
-    <text x="130" y="90" text-anchor="middle" font-family="monospace" font-size="13" fill="#94a3b8">gVisor runsc</text>
-    <text x="130" y="115" text-anchor="middle" font-family="monospace" font-size="11" fill="#64748b">user-space kernel · ~300ms</text>
-    <rect x="20" y="140" width="220" height="80" rx="8" fill="#0f172a"/>
-    <text x="130" y="165" text-anchor="middle" font-family="monospace" font-size="10" fill="#94a3b8">· untrusted code where KVM unavailable</text>
-    <text x="130" y="205" text-anchor="middle" font-family="monospace" font-size="11" fill="#64748b">~300 ms start</text>
-    <text x="130" y="225" text-anchor="middle" font-family="monospace" font-size="11" fill="#64748b">user-space kernel</text>
-  </g>
-
-  <!-- Tier 2 -->
-  <g transform="translate(700, 40)">
-    <rect x="0" y="0" width="260" height="240" rx="16" fill="#1e293b" stroke="#f472b6" stroke-width="2"/>
-    <circle cx="40" cy="40" r="24" fill="#f472b6" opacity="0.2"/>
-    <text x="130" y="70" text-anchor="middle" font-family="monospace" font-size="16" font-weight="bold" fill="#f472b6">Tier 2</text>
-    <text x="130" y="90" text-anchor="middle" font-family="monospace" font-size="13" fill="#94a3b8">Firecracker µVM</text>
-    <text x="130" y="115" text-anchor="middle" font-family="monospace" font-size="11" fill="#64748b">separate guest kernel · vsock-only net</text>
-    <rect x="20" y="140" width="220" height="80" rx="8" fill="#0f172a"/>
-    <text x="130" y="165" text-anchor="middle" font-family="monospace" font-size="10" fill="#94a3b8">· untrusted code · package installs · network</text>
-    <text x="130" y="205" text-anchor="middle" font-family="monospace" font-size="11" fill="#64748b">~500 ms start</text>
-    <text x="130" y="225" text-anchor="middle" font-family="monospace" font-size="11" fill="#64748b">separate guest kernel</text>
-  </g>
+<style>
+  .sans{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace}
+  .t{fill:#e6edf3} .m{fill:#8b949e} .d{fill:#6e7681}
+  .g{fill:#3fb950} .b{fill:#58a6ff} .r{fill:#f85149} .a{fill:#d29922} .p{fill:#bc8cff}
+  .h1{font-size:20px;font-weight:700} .h2{font-size:15px;font-weight:700}
+  .s{font-size:12px} .xs{font-size:11px} .n{font-size:13px}
+  .bold{font-weight:700}
+</style>
+<defs>
+  <marker id="ag" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#3fb950"/></marker>
+  <marker id="ab" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#58a6ff"/></marker>
+  <marker id="am" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#8b949e"/></marker>
+  <marker id="ar" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#f85149"/></marker>
+  <marker id="aa" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#d29922"/></marker>
+  <linearGradient id="hero" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0d1117"/><stop offset="1" stop-color="#13202e"/></linearGradient>
+</defs>
+<rect x="0.5" y="0.5" width="999" height="469" rx="14" fill="#0d1117" stroke="#30363d"/>
+<text x="32" y="42" class="t h1 sans" text-anchor="start" >Isolation tiers</text>
+<text x="32" y="62" class="m n sans" text-anchor="start" >One API, three backends. The tool declares a minimum; the host must meet it.</text>
+<rect x="32" y="86" width="300" height="238" rx="10" fill="#161b22" stroke="#3fb950" stroke-width="1.6" />
+<rect x="46" y="86" width="272" height="4" rx="2" fill="#3fb950"/>
+<text x="50" y="124" class="sans bold" text-anchor="start" fill="#3fb950" style="font-size:24px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace">tier0</text>
+<text x="50" y="148" class="t h2 sans" text-anchor="start" >Namespaces + Landlock</text>
+<text x="314" y="124" class="d xs mono" text-anchor="end" >backend-ns</text>
+<text x="50" y="180" class="d xs mono bold" text-anchor="start" >BOUNDARY</text>
+<text x="120" y="180" class="t s sans" text-anchor="start" >user + net namespaces, cgroup v2,</text>
+<text x="120" y="200" class="t s sans" text-anchor="start" >Landlock, seccomp</text>
+<text x="50" y="220" class="d xs mono bold" text-anchor="start" >KERNEL</text>
+<text x="120" y="220" class="t s sans" text-anchor="start" >shared with the host</text>
+<text x="50" y="240" class="d xs mono bold" text-anchor="start" >NEEDS</text>
+<text x="120" y="240" class="t s sans" text-anchor="start" >userns · cgroup v2 · Landlock</text>
+<rect x="50" y="284" width="264" height="26" rx="13.0" fill="none" stroke="#3fb950" stroke-width="1.2" /><text x="182.0" y="301.0" text-anchor="middle" class="xs mono" fill="#3fb950">live isolation tests</text>
+<line x1="336" y1="205" x2="360" y2="205" stroke="#8b949e" stroke-width="1.6" marker-end="url(#am)"/>
+<rect x="364" y="86" width="300" height="238" rx="10" fill="#161b22" stroke="#58a6ff" stroke-width="1.6" />
+<rect x="378" y="86" width="272" height="4" rx="2" fill="#58a6ff"/>
+<text x="382" y="124" class="sans bold" text-anchor="start" fill="#58a6ff" style="font-size:24px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace">tier1</text>
+<text x="382" y="148" class="t h2 sans" text-anchor="start" >gVisor</text>
+<text x="646" y="124" class="d xs mono" text-anchor="end" >backend-gv</text>
+<text x="382" y="180" class="d xs mono bold" text-anchor="start" >BOUNDARY</text>
+<text x="452" y="180" class="t s sans" text-anchor="start" >user-space kernel (runsc)</text>
+<text x="452" y="200" class="t s sans" text-anchor="start" >from an OCI bundle</text>
+<text x="382" y="220" class="d xs mono bold" text-anchor="start" >KERNEL</text>
+<text x="452" y="220" class="t s sans" text-anchor="start" >intercepted by gVisor</text>
+<text x="382" y="240" class="d xs mono bold" text-anchor="start" >NEEDS</text>
+<text x="452" y="240" class="t s sans" text-anchor="start" >runsc installed</text>
+<rect x="382" y="284" width="264" height="26" rx="13.0" fill="none" stroke="#58a6ff" stroke-width="1.2" /><text x="514.0" y="301.0" text-anchor="middle" class="xs mono" fill="#58a6ff">config + fail-closed tests</text>
+<line x1="668" y1="205" x2="692" y2="205" stroke="#8b949e" stroke-width="1.6" marker-end="url(#am)"/>
+<rect x="696" y="86" width="300" height="238" rx="10" fill="#161b22" stroke="#bc8cff" stroke-width="1.6" />
+<rect x="710" y="86" width="272" height="4" rx="2" fill="#bc8cff"/>
+<text x="714" y="124" class="sans bold" text-anchor="start" fill="#bc8cff" style="font-size:24px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace">tier2</text>
+<text x="714" y="148" class="t h2 sans" text-anchor="start" >Firecracker microVM</text>
+<text x="978" y="124" class="d xs mono" text-anchor="end" >backend-fc</text>
+<text x="714" y="180" class="d xs mono bold" text-anchor="start" >BOUNDARY</text>
+<text x="784" y="180" class="t s sans" text-anchor="start" >jailed VMM, vsock-only guest</text>
+<text x="784" y="200" class="t s sans" text-anchor="start" >warm pool, golden images</text>
+<text x="714" y="220" class="d xs mono bold" text-anchor="start" >KERNEL</text>
+<text x="784" y="220" class="t s sans" text-anchor="start" >separate guest kernel</text>
+<text x="714" y="240" class="d xs mono bold" text-anchor="start" >NEEDS</text>
+<text x="784" y="240" class="t s sans" text-anchor="start" >Firecracker + /dev/kvm</text>
+<rect x="714" y="284" width="264" height="26" rx="13.0" fill="none" stroke="#bc8cff" stroke-width="1.2" /><text x="846.0" y="301.0" text-anchor="middle" class="xs mono" fill="#bc8cff">config + fail-closed tests</text>
+<line x1="60" y1="345" x2="940" y2="345" stroke="#8b949e" stroke-width="1.4" marker-end="url(#am)"/>
+<text x="60" y="340" class="d xs mono" text-anchor="start" >weaker boundary</text>
+<text x="940" y="340" class="d xs mono" text-anchor="end" >stronger boundary</text>
+<rect x="32" y="366" width="936" height="76" rx="10" fill="#1c2230" stroke="#f85149" stroke-width="1.4" />
+<text x="52" y="392" class="r h2 sans" text-anchor="start" >Fail closed, never downgraded</text>
+<text x="52" y="414" class="t s mono" text-anchor="start" >min_isolation: firecracker</text>
+<text x="270" y="414" class="m s mono" text-anchor="start" >→  host has no /dev/kvm</text>
+<text x="470" y="414" class="r s mono bold" text-anchor="start" >→  call DENIED and audited</text>
+<text x="52" y="432" class="m s sans" text-anchor="start" >It is never silently run at a weaker tier.</text>
 </svg>

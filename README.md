@@ -2,82 +2,88 @@
 
 ![toolcage banner](assets/banner.svg)
 
-**A local-first runtime for executing AI agent tools under policy, with credential isolation, controlled egress, and a tamper-evident audit log.**
+**A local-first Rust runtime that puts a policy engine, a credential broker, an egress proxy, and a tamper-evident audit log between an AI agent and everything it touches.**
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)
-![Language: Rust](https://img.shields.io/badge/built%20with-Rust-black.svg)
+![Status: alpha](https://img.shields.io/badge/status-alpha%20%C2%B7%20not%20independently%20reviewed-orange.svg)
+![Tests: 72 passing](https://img.shields.io/badge/tests-72%20passing-brightgreen.svg)
+![Rust](https://img.shields.io/badge/built%20with-Rust-black.svg)
 
-[Quickstart](#quickstart) · [Why](#why-toolcage) · [Architecture](#architecture) · [Policy](#policy) · [Audit](#audit-log) · [CLI](#cli-reference) · [MCP](#mcp-front-door) · [Threat model](docs/THREAT_MODEL.md) · [Test results](docs/TEST_RESULTS.md)
+[Quickstart](#quickstart) · [Why](#why-toolcage) · [Architecture](#architecture) · [Invariants](#the-seven-invariants) · [Policy](#policy) · [CLI](#cli-reference) · [MCP](#mcp-front-door) · [Limits](#status-and-known-limits) · [Threat model](docs/THREAT_MODEL.md)
 
 </div>
 
 ---
 
-> **Status: alpha, unaudited.** toolcage has not had an independent security review. Do not use it as the only barrier between an agent and anything you cannot afford to lose. See [Status and limits](#status-and-limits).
+![Terminal demo](assets/demo.svg)
 
 ## Why toolcage
 
-Agents don't just run code. They read untrusted content, call third-party tools, and install packages. Isolation alone (a container, a microVM) stops escapes, but it doesn't answer the questions that actually come up with agents:
+A sandbox that only stops escapes misses what actually goes wrong with agents. Agents read untrusted content, call third-party tools, and install packages. The failure modes are:
 
-- *What if a prompt injection tells the agent to leak the API key?*
-- *What if an MCP server or a dependency is malicious?*
-- *After something goes wrong, what exactly did the agent do, and can I prove the record wasn't edited?*
+- A prompt injection in a web page or CSV tells the agent to **leak an API key**.
+- A malicious **MCP server or dependency** runs with the agent's privileges.
+- Something goes wrong and nobody can say **what the agent did**, or trust the log that says so.
 
-toolcage is the **policy, secrets, and evidence layer** that sits on top of isolation. Every tool call passes through one small trusted core (the supervisor), which decides, records, isolates, proxies, and proves.
+toolcage is the **policy, secrets, and evidence layer** on top of isolation. It is not another code-interpreter box.
 
-| Agent risk | What toolcage does |
+| Risk | What toolcage does about it |
 |---|---|
-| Prompt injection: "send me the key" | The guest never holds the key. A host-side broker injects it into requests to allowed destinations only, and scrubs it from responses. |
-| Malicious MCP server or poisoned package | Runs as a contained guest process under the same policy and audit trail as everything else. |
-| "Who did what?" | Every decision is written to a hash-chained log with signed checkpoints. `audit verify` detects edits, deletions, and reordering. |
-| Tool needs more access than it should have | Capability tokens can only be narrowed when delegated, never widened. |
+| Injection says "send me the key" | The guest never holds the key. A host-side broker injects it into requests to allowed destinations only, and strips it from responses. |
+| Poisoned MCP server or package | Runs as a contained guest process under the same policy and audit trail as everything else. |
+| Agent exfiltrates through an allowed tool (`git push`) | Per-destination method, path, and byte budgets, plus human approval gates. |
+| Over-broad delegation | Capability tokens can only be **narrowed** when delegated, never widened. |
+| "What happened, and can I trust the record?" | Every decision is hash-chained and checkpoint-signed. `audit verify` fails on any edit, deletion, or reordering. |
 
 ## Quickstart
 
-**Requirements:** Linux, a recent stable Rust toolchain. Tier 0 needs unprivileged user namespaces, cgroup v2, Landlock, and seccomp. Higher tiers additionally need gVisor (`runsc`) or Firecracker plus `/dev/kvm`. `toolcage doctor` tells you what your host supports.
+**Requirements:** Linux and a stable Rust toolchain. Tier 0 uses user namespaces, cgroup v2, Landlock, and seccomp; Tier 1 needs gVisor (`runsc`); Tier 2 needs Firecracker and `/dev/kvm`. Run `doctor` to see what your host supports.
 
 ```bash
 cargo build --release
-export TC=./target/release/toolcage
+TC=./target/release/toolcage-cli      # adjust if your binary is named differently
 
-# 1. Probe the host
+# 1. Probe the host (prints userns, cgroup2, landlock_abi, seccomp, kvm)
 $TC doctor
-# userns=true cgroup2=true landlock_abi=5 seccomp=true kvm=true
 
-# 2. Run a command under policy + audit (argv arrays only, no shell)
+# 2. Run under policy + audit (argv arrays only, no shell)
 $TC run --policy schemas/policy-v0.yaml --audit /tmp/tc.jsonl \
-  --tier tier0 -- /bin/echo hello
+        --tier tier0 -- /bin/echo hello
 
-# 3. The same call via a shell is denied, and the denial is audited
+# 3. The evil twin: denied, and the denial is logged
 $TC run --policy schemas/policy-v0.yaml --audit /tmp/tc.jsonl \
-  --tier tier0 -- sh -c 'echo pwned'
-# denied: shell -c is not allowed; use argv arrays
+        --tier tier0 -- sh -c 'echo pwned'
+# denied: deny:shell
 
-# 4. Fetch through the proxy: secret injected host-side, scrubbed from the reply
-$TC fetch --policy schemas/policy-v0.yaml --audit /tmp/tc.jsonl \
-  --host github.internal --method GET --path /repos/acme/app/issues/1 \
-  --cred github_token --secret-value s3cr3t
-# body: upstream api.github.com/... ok auth=[REDACTED]
-
-# 5. Sign and verify the log, then change one byte and watch verification fail
+# 4. Sign the log, verify it
 $TC audit keygen     --out-prefix /tmp/k
 $TC audit checkpoint --log /tmp/tc.jsonl --key-hex /tmp/k.secret.hex
 $TC audit verify     --log /tmp/tc.jsonl --pubkey  /tmp/k.pub.hex
 # ok: N events, head ... (checkpoints verified)
+
+# 5. Flip one byte of /tmp/tc.jsonl and verify again: it fails.
 ```
 
-> `--secret-value` on the command line is for demos only: it lands in shell history and the process list. Don't use it with real credentials.
+Secrets through the proxy:
+
+```bash
+$TC fetch --policy schemas/policy-v0.yaml --audit /tmp/tc.jsonl \
+  --host github.internal --method GET --path /repos/acme/app/issues/1 \
+  --cred github_token --secret-value s3cr3t
+# body: upstream api.github.com/... ok auth=[REDACTED]
+```
+
+> `--secret-value` on the command line is a demo convenience. It ends up in shell history and the process list. Don't pass real credentials this way.
+
+The demo flow was last verified end to end on 2026-10-19 ([`docs/TEST_RESULTS.md`](docs/TEST_RESULTS.md)).
 
 ## Architecture
 
-![How it works](assets/how-it-works.svg)
+![How a tool call is handled](assets/how-it-works.svg)
 
-Three invariants, no exceptions:
+Every tool call crosses one small trusted core, the **supervisor**. It decides, records, isolates, proxies, and proves. Everything else (model output, guest processes, tool and MCP output, file and web content) is untrusted.
 
-1. **No direct network from the guest.** Only the proxy dials out.
-2. **No credentials in the guest.** The guest sees `secret:name` placeholders, never values.
-3. **No action without a log entry.** Intent is logged *before* the action runs. If the log write fails, the action is denied.
+**Trusted, and kept small:** supervisor, policy engine, credential broker, egress proxy, audit writer.
 
 Decision order for every request:
 
@@ -86,26 +92,34 @@ canonicalize at the enforcement point
   → operator forbid wins
   → capability token checks
   → approval gate (timeout = deny)
-  → log intent
+  → write intent to the log     ← if this fails, the action is denied
   → act
-  → log outcome
+  → write outcome
 ```
 
 ### Isolation tiers
 
 ![Isolation tiers](assets/tiers.svg)
 
-| Tier | Backend | Mechanisms |
-|---|---|---|
-| `tier0` | `backend-ns` | user namespaces, cgroup v2, Landlock, seccomp |
-| `tier1` | `backend-gv` | gVisor `runsc` via OCI bundle |
-| `tier2` | `backend-fc` | Firecracker microVM, jailed VMM, vsock-only guest |
+A tool declares `min_isolation`. If the host can't provide it, the call is **denied and audited**. It is never run at a weaker tier. Tier 0 shares the host kernel; use Tier 1 or 2 for hostile code.
 
-A tool declares `min_isolation`. If the host can't provide it, the call is **denied and audited**. It is never silently run at a weaker tier.
+## The seven invariants
+
+These are the security claims toolcage makes. Each one is tied to a test suite, so a regression is a failing test and not a vibe.
+
+| | Invariant | Enforced and tested by |
+|---|---|---|
+| **I1** | No guest process reaches any network except through the egress proxy | Escape suite: raw sockets, DNS, ICMP, IPv6, tunnels; proxy alias, metadata, and budget tests |
+| **I2** | No credential value appears in guest memory, files, environment, or arguments | Planted canary secrets scanned for; broker encryption and rotation tests |
+| **I3** | A token can only be narrowed on delegation, never widened | 200-seed property test; narrow / widen / revoke / tamper tests |
+| **I4** | Every decision is recorded before the action runs | Write-ahead intent logging; chaos tests that kill the supervisor mid-action |
+| **I5** | Any edit, deletion, or reordering of the log is detected by `audit verify` | Mutation tests; checkpoint truncation and old-checkpoint tests |
+| **I6** | The guest cannot loosen its own policy or reach the policy engine | `sh -c` denial, path traversal, mount checks, adversarial guest-agent validation |
+| **I7** | After teardown, no session state is reachable from another session | Cross-session canary tests |
 
 ## Policy
 
-One YAML file per tool. Everything not allowed is denied.
+One YAML file per tool. Anything not allowed is denied.
 
 ```yaml
 tool: dependency-updater
@@ -131,65 +145,62 @@ approval:
     - http.request: { methods: [POST], hosts: [github] }
 ```
 
-Enforcement details worth knowing:
-
-- `sh -c` / `bash -c` is denied. Commands are argv arrays.
-- Hosts and methods match case-insensitively; mount paths and token scopes are canonicalized (`/workspace/a/../b` becomes `/workspace/b`) and `..` escapes are denied.
+- `sh -c` and `bash -c` are denied. Commands are argv arrays.
+- Hosts and methods match case-insensitively. Mount paths are canonicalized (`/workspace/a/../b` becomes `/workspace/b`) and `..` escapes are denied.
 - Cloud metadata endpoints (`169.254.169.254`, `metadata*`, `instance-data`) are never reachable.
-- Credentials are bound to specific destinations via `use_with`. A credential is not attached to requests for any other host.
+- Credentials are bound to destinations with `use_with`. They are not attached to requests for any other host.
+- Approval gates pause the call (exit code 3 on the CLI). A timeout is a denial.
 
 ### Capability tokens
 
-Tokens carry scoped, expiring authority. They can be **attenuated** (narrowed) when delegated to a sub-agent or sub-tool, and a widening attempt is rejected. Expiry is enforced, paths are traversal-normalized, and tokens are revocable.
-
 ```bash
-$TC token mint      --rev root-1 --out root.tok
-$TC token attenuate --parent root.tok --rev child-1 --out child.tok
+$TC token mint      --rev root-1  --out root.tok
+$TC token attenuate --parent root.tok --rev child-1 --out child.tok   # narrow only
 ```
 
-`toolcage fetch` uses **dual authorization**: the request must pass policy *and* present a valid token.
+Tokens carry scoped, expiring authority and are revocable. Expiry is enforced and paths are traversal-normalized. `fetch` requires **both** a policy allow and a valid token.
 
 ## Secrets
 
 ![Credential flow](assets/secrets.svg)
 
-- The guest holds `secret:name` placeholders only. Literal values in `env_refs` are rejected.
-- The proxy resolves DNS, enforces host + method + path, and attaches the credential upstream.
-- Responses are scrubbed: if an API echoes the token back, it is removed before the guest sees it.
-- Package installs use two-phase sessions: a setup phase that talks only to a pinned mirror, then a run phase with a narrowed or closed network.
+- The guest holds `secret:name` placeholders. Literal values in `env_refs` are rejected.
+- The broker store is **encrypted at rest** and supports rotation; its `Debug` output is redacted.
+- The proxy resolves DNS, enforces `host + method + path`, and attaches the credential upstream.
+- Responses are scrubbed. If an API echoes the token, it's removed before the guest sees it.
+- Package installs use two-phase sessions: setup talks only to a pinned mirror, then the run phase gets a narrowed or closed network.
+- Per-destination byte and request budgets are persisted (fsync'd) and survive restarts.
 
 ## Audit log
 
-![Hash chain](assets/audit.svg)
+![Audit hash chain](assets/audit.svg)
 
-Each event is chained: `hash = H(prev_hash, canonical(event))`. Ed25519 checkpoints sign `(seq, head, time)`.
+`audit verify` checks chain continuity, monotonic sequence with no gaps, a re-hash of every event, and checkpoint signatures against a pinned public key. Old checkpoints and truncated tails fail. The writer re-verifies the chain on open, so a corrupt log is never extended.
 
-- **Write-ahead:** intent is recorded before the action; a failed write denies the action.
-- **Verify-on-open:** the writer re-verifies the chain when opening, so a corrupt log is never extended.
-- **Verification checks:** chain continuity, monotonic sequence with no gaps, a re-hash of every event, and checkpoint signatures against a pinned public key.
+This is **tamper evidence, not tamper prevention.** An attacker who controls the host can rewrite and re-sign the log unless the public key and checkpoints are stored somewhere they can't reach.
 
-What this gives you is *tamper evidence*, not tamper prevention: someone with write access to the log can break it, but can't do so undetected, provided you keep the public key and checkpoints somewhere they can't also rewrite.
-
-`toolcage panic --audit LOG` freezes a log by appending a `deny-all` event and a `.tainted` marker.
+`panic` freezes a log by appending a `deny-all` event and a `.tainted` marker.
 
 ## CLI reference
 
 | Command | Purpose |
 |---|---|
-| `toolcage doctor` | Probe userns, cgroup v2, Landlock ABI, seccomp, `/dev/kvm` |
-| `toolcage run --tier T -- <argv>` | Policy check, audit intent, exec with cleared env (1 MiB streaming output cap, 30 s kill), audit outcome |
-| `toolcage check-net --host H --method M --path P` | Proxy decision and upstream resolution, without touching the network |
-| `toolcage fetch [--token T] [--approve]` | Proxy + broker fetch with dual auth; pauses for approval (exit code 3) |
-| `toolcage token mint / attenuate` | Create root tokens; delegate narrower ones |
-| `toolcage mcp serve / call` | Stdio JSON-RPC front door (see below) |
-| `toolcage audit keygen / checkpoint / verify` | Keys, signed checkpoints, pinned-key verification |
-| `toolcage panic --audit LOG` | Freeze a log after a suspected compromise |
+| `$TC doctor` | Probe userns, cgroup v2, Landlock ABI, seccomp, `/dev/kvm` |
+| `$TC run --tier T -- <argv>` | Policy check, audit intent, exec with cleared env (1 MiB streaming output cap, 30 s kill), audit outcome |
+| `$TC check-net --host H --method M --path P` | Proxy decision and upstream resolution, no network touched |
+| `$TC fetch [--token T] [--approve]` | Proxy + broker fetch with dual auth and approval pause; scrubbed body; both steps audited |
+| `$TC token mint / attenuate` | Create root tokens; delegate narrower ones |
+| `$TC mcp serve / call` | Stdio JSON-RPC front door |
+| `$TC audit keygen / checkpoint / verify` | Keys, signed checkpoints, pinned-key verification |
+| `$TC panic --audit LOG` | Freeze a log after a suspected compromise |
 
-Client libraries: [`clients/python/toolcage.py`](clients/python/toolcage.py), [`clients/ts/toolcage.ts`](clients/ts/toolcage.ts).
+Guest-agent protocol (`Exec` / `PutFile` / `Heartbeat`): bounded argv, no NUL bytes, `env_refs` must be `secret:name`, writes confined to `/workspace`.
+
+Clients: [`clients/python/toolcage.py`](clients/python/toolcage.py), [`clients/ts/toolcage.ts`](clients/ts/toolcage.ts).
 
 ## MCP front door
 
-`toolcage mcp serve` exposes four tools over stdio JSON-RPC. Each maps to a policy-checked action:
+`mcp serve` exposes four tools over stdio JSON-RPC. Each is a policy-checked action:
 
 | Tool | Action | Notes |
 |---|---|---|
@@ -198,84 +209,82 @@ Client libraries: [`clients/python/toolcage.py`](clients/python/toolcage.py), [`
 | `write_file` | `fs.write` | mount-checked |
 | `http_fetch` | `http.request` | proxy + broker, dual auth |
 
-Third-party MCP servers run as **guest processes** under the same policy and audit trail, so a poisoned tool becomes a contained process rather than a trusted one. A **learn mode** records denials and proposes a working allowlist so you don't write policy by hand.
+Third-party MCP servers run as **guest processes** under the same policy and audit trail, so a poisoned tool becomes a contained process. **Learn mode** records denials and proposes a working allowlist so you don't write policy by hand.
 
-## Threat model summary
+## Tests
 
-| Threat | Control |
+`cargo test --workspace` runs **72 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
+
+- **Escape suite** against the policy and proxy (I1, I6)
+- **Fuzzing** of the policy, guest-agent, audit, and proxy parsers
+- **Chaos tests** that fail the audit disk, proxy, and broker, revoke tokens mid-run, and exceed budgets, asserting every case fails closed
+- **Mutation tests** on the audit log (flip, delete, reorder, truncate)
+- **Tier 0 live isolation tests**: command executes, network namespace blocks egress, Landlock blocks file access, environment is cleared
+
+Full breakdown: [`docs/TEST_RESULTS.md`](docs/TEST_RESULTS.md).
+
+### Benchmarks
+
+Measured on the development host, October 2026. Re-run `scripts/bench.sh` on yours.
+
+| Metric | Target | Result |
+|---|---|---|
+| Policy decision p99, in-process | < 5 ms | **404 ns** (p50 340 ns, max 6.0 µs, n = 10k) |
+| Audit append, fsync per event | ≥ 10,000 eps | **~270,000 eps** (n = 5k) |
+| `run` end-to-end, Tier 0 | n/a | 53 ms/call (n = 200, measured before isolation was enabled) |
+| Supervisor idle memory | < 100 MB | not yet measured |
+
+The audit figure is filesystem-dependent (tmpfs may not flush durably) and is a baseline, not a durability claim. The 53 ms figure predates real isolation and will be higher now.
+
+## Status and known limits
+
+**toolcage is alpha and has not had independent security review.** The project's own review package ([`docs/REVIEW.md`](docs/REVIEW.md)) treats that review as a gate before any public security claim. Until it happens, treat the invariants above as *tested design goals*, not audited guarantees.
+
+| Area | State |
 |---|---|
-| Sandbox escape | Tiered isolation, jailed VMM |
-| Exfiltration over HTTP / DNS / ICMP / IPv6 | vsock-only guest, proxy-resolved DNS, no metadata route |
-| Exfiltration through an allowed tool (e.g. `git push`) | Per-destination method/path/byte budgets and approvals |
-| Credential theft | Broker-only secrets, canary-tested |
-| Persistence | Ephemeral sessions, golden-image-only snapshots |
-| Lateral movement | No guest-reachable control socket |
-| Log tampering | Hash chain with head-bound signed checkpoints |
+| Tier 0 (namespaces, Landlock) | Implemented, with live isolation tests |
+| Tier 1 (gVisor), Tier 2 (Firecracker) | Drivers implemented and tested for config generation, tier selection, and fail-closed behavior when the runtime is missing. No live `runsc` or microVM execution tests in the suite. |
+| seccomp-BPF | Returns `EINVAL` on the development host's kernel, so Tier 0 there relies on namespaces + Landlock and seccomp is defense in depth. Check `doctor` on your machine. |
+| Audit throughput | fsync per append (crash-safe). Group commit is the next step if throughput is ever needed. |
+| Scope | Linux only. No GPU workloads, no multi-tenant hosting, no Windows or macOS guests. |
 
-Full analysis, including assumptions and what is out of scope: [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md).
+Things the design does **not** do, by construction:
 
-## Status and limits
-
-Read this before relying on anything above.
-
-- **Alpha.** APIs, the policy schema (`v0`), and the audit event format may change.
-- **Not independently audited.** The test suite and fuzz targets (`fuzz/`) are not a substitute for review.
-- **Linux only.**
-- **Isolation is only as strong as the backend it sits on.** Tier 0 shares the host kernel. For hostile code, use Tier 1 or 2.
-- **The log is tamper-evident, not tamper-proof.** Without an externally held public key and off-host checkpoints, a host-level attacker can rewrite history and re-sign it.
-- **Policy decides what is *allowed*, not whether an allowed action is *wise*.** An agent permitted to `POST` to a repo can still do damage within that scope. Use approvals and byte budgets for high-impact destinations.
-
-## Tests and benchmarks
-
-See [`docs/TEST_RESULTS.md`](docs/TEST_RESULTS.md) for the current suite results.
-
-```bash
-cargo test --workspace
-cargo clippy --workspace --all-targets
-scripts/bench.sh
-```
-
-Reference numbers from the author's machine (re-run `scripts/bench.sh` on yours; the host class isn't recorded here):
-
-| Metric | Result |
-|---|---|
-| Policy decision, in-process | p50 340 ns, p99 404 ns, max 6.0 µs (n = 10k) |
-| Audit append, fsync per event | about 270,000 events/s (n = 5k) |
-| `toolcage run` end-to-end, Tier 0 stub exec | 53 ms/call (n = 200) |
-
-Policy and audit numbers measure the hot path in isolation. The end-to-end figure is the one that reflects real per-call cost.
+- It doesn't decide whether an *allowed* action is wise. An agent permitted to `POST` to a repo can do damage inside that scope. Use approvals and budgets on high-impact destinations.
+- It doesn't protect a compromised host. The supervisor, broker, and log live on the host and are trusted.
+- Tier 0 is not a defense against kernel exploits.
 
 ## Repository layout
 
 ```text
 crates/
   supervisor/    exec (env_clear, argv hash, output cap, timeout kill), fetch_via_proxy, panic_freeze
-  policy/        YAML v0 loader, allowlist + forbid evaluator, approval gates
-  proxy/         alias resolution, method/path enforcement, budgets
-  broker/        host-only secret store, inject-if-bound, echo scrubbing, canaries
+  policy/        YAML v0 loader, allowlist + forbid evaluator, approval gates, escape tests
+  proxy/         alias resolution, method/path enforcement, budgets, blocked-IP checks
+  broker/        encrypted host-only secret store, inject-if-bound, echo scrubbing, canaries
   capability/    attenuate-only tokens, expiry, revocation, property tests
   approval/      require_for gates, out-of-band queue (timeout = deny)
   backend/       Tier trait + fail-closed honors()
   backend-ns/    Tier 0 driver + host probe
   backend-gv/    Tier 1 (gVisor runsc) driver
   backend-fc/    Tier 2 (Firecracker) driver, warm pool
-  guest-agent/   PID 1 protocol (Exec / PutFile / Heartbeat) with validation
+  guest-agent/   PID 1 protocol with input validation
   mcp/           stdio MCP server, sandboxed host check, learn mode
   audit/         hash-chain writer, Ed25519 checkpoints, verifier library
   verify/        standalone log verifier
-  cli/           the `toolcage` binary
+  cli/           the command-line binary
 clients/         Python and TypeScript clients
 docs/            THREAT_MODEL.md, TEST_RESULTS.md, REVIEW.md
 fuzz/            fuzz targets
 images/          guest image build (manifest + sha256, per-host-class goldens)
 schemas/         audit-event-v0.json, policy-v0.yaml
 scripts/         doctor.sh, bench.sh
-assets/          README diagrams
+assets/          banner, architecture, tiers, secrets, audit and demo SVGs
 ```
 
 ## Security
 
-Found a vulnerability? Please report it privately through GitHub's **Security → Report a vulnerability** on this repository rather than opening a public issue.
+Found a vulnerability or a broken invariant? Please report it privately through **Security → Report a vulnerability** on this repository instead of opening a public issue. Any finding that invalidates an invariant blocks public security claims until it is fixed.
 
 ## License
 
