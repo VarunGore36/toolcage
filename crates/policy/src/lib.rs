@@ -212,8 +212,13 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
             let path = req.path.as_deref().unwrap_or("/");
             for h in &policy.net.hosts {
                 // A rule matches if EITHER host or alias equals the request host.
-                let rule_match = h.host.as_deref().is_some_and(|x| x.to_ascii_lowercase() == host)
-                    || h.alias.as_deref().is_some_and(|x| x.to_ascii_lowercase() == host);
+                let rule_match = h
+                    .host
+                    .as_deref()
+                    .is_some_and(|x| x.to_ascii_lowercase() == host)
+                    || h.alias
+                        .as_deref()
+                        .is_some_and(|x| x.to_ascii_lowercase() == host);
                 if rule_match {
                     if !h.methods.is_empty()
                         && !h.methods.iter().any(|m| m.to_ascii_uppercase() == method)
@@ -238,7 +243,11 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
             for m in &policy.fs.mounts {
                 let mount = canonical_path(&m.path);
                 let mount = mount.trim_end_matches('/').to_string();
-                let mount = if mount.is_empty() { "/".to_string() } else { mount };
+                let mount = if mount.is_empty() {
+                    "/".to_string()
+                } else {
+                    mount
+                };
                 if canon == mount || canon.starts_with(&format!("{mount}/")) {
                     if req.action == "fs.write" && m.mode == "ro" {
                         return deny("fs:deny-ro", "mount is read-only");
@@ -286,7 +295,14 @@ mod tests {
         let p = sample();
         let d = decide(
             &p,
-            &Request { action: "http.request".into(), host: Some("169.254.169.254".into()), method: Some("GET".into()), path: Some("/".into()), fs_path: None, argv: None },
+            &Request {
+                action: "http.request".into(),
+                host: Some("169.254.169.254".into()),
+                method: Some("GET".into()),
+                path: Some("/".into()),
+                fs_path: None,
+                argv: None,
+            },
         );
         assert!(!d.allow);
     }
@@ -295,7 +311,14 @@ mod tests {
         let p = sample();
         let d = decide(
             &p,
-            &Request { action: "http.request".into(), host: Some("registry.npmjs.org".into()), method: Some("GET".into()), path: Some("/".into()), fs_path: None, argv: None },
+            &Request {
+                action: "http.request".into(),
+                host: Some("registry.npmjs.org".into()),
+                method: Some("GET".into()),
+                path: Some("/".into()),
+                fs_path: None,
+                argv: None,
+            },
         );
         assert!(d.allow);
     }
@@ -304,7 +327,14 @@ mod tests {
         let p = sample();
         let d = decide(
             &p,
-            &Request { action: "http.request".into(), host: Some("registry.npmjs.org".into()), method: Some("POST".into()), path: Some("/".into()), fs_path: None, argv: None },
+            &Request {
+                action: "http.request".into(),
+                host: Some("registry.npmjs.org".into()),
+                method: Some("POST".into()),
+                path: Some("/".into()),
+                fs_path: None,
+                argv: None,
+            },
         );
         assert!(!d.allow);
     }
@@ -315,7 +345,14 @@ mod tests {
         let p = sample();
         let d = decide(
             &p,
-            &Request { action: "fs.read".into(), host: None, method: None, path: None, fs_path: Some("/workspace/../../etc/passwd".into()), argv: None },
+            &Request {
+                action: "fs.read".into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: Some("/workspace/../../etc/passwd".into()),
+                argv: None,
+            },
         );
         assert!(!d.allow);
     }
@@ -324,12 +361,26 @@ mod tests {
         let p = sample();
         let d = decide(
             &p,
-            &Request { action: "proc.exec".into(), host: None, method: None, path: None, fs_path: None, argv: Some(vec!["sh".into(), "-c".into(), "echo hi".into()]) },
+            &Request {
+                action: "proc.exec".into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: None,
+                argv: Some(vec!["sh".into(), "-c".into(), "echo hi".into()]),
+            },
         );
         assert!(!d.allow);
         let ok = decide(
             &p,
-            &Request { action: "proc.exec".into(), host: None, method: None, path: None, fs_path: None, argv: Some(vec!["/bin/echo".into(), "hi".into()]) },
+            &Request {
+                action: "proc.exec".into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: None,
+                argv: Some(vec!["/bin/echo".into(), "hi".into()]),
+            },
         );
         assert!(ok.allow);
     }
@@ -338,12 +389,26 @@ mod tests {
         let p = sample();
         let d = decide(
             &p,
-            &Request { action: "http.request".into(), host: Some("REGISTRY.NPMJS.ORG".into()), method: Some("get".into()), path: Some("/".into()), fs_path: None, argv: None },
+            &Request {
+                action: "http.request".into(),
+                host: Some("REGISTRY.NPMJS.ORG".into()),
+                method: Some("get".into()),
+                path: Some("/".into()),
+                fs_path: None,
+                argv: None,
+            },
         );
         assert!(d.allow);
         let m = decide(
             &p,
-            &Request { action: "http.request".into(), host: Some("metadata.google.internal".into()), method: Some("GET".into()), path: Some("/".into()), fs_path: None, argv: None },
+            &Request {
+                action: "http.request".into(),
+                host: Some("metadata.google.internal".into()),
+                method: Some("GET".into()),
+                path: Some("/".into()),
+                fs_path: None,
+                argv: None,
+            },
         );
         assert!(!m.allow);
     }
@@ -352,12 +417,26 @@ mod tests {
         let p = sample();
         let ok = decide(
             &p,
-            &Request { action: "http.request".into(), host: Some("github".into()), method: Some("GET".into()), path: Some("/repos/acme/app/issues/1".into()), fs_path: None, argv: None },
+            &Request {
+                action: "http.request".into(),
+                host: Some("github".into()),
+                method: Some("GET".into()),
+                path: Some("/repos/acme/app/issues/1".into()),
+                fs_path: None,
+                argv: None,
+            },
         );
         assert!(ok.allow);
         let bad = decide(
             &p,
-            &Request { action: "http.request".into(), host: Some("github".into()), method: Some("GET".into()), path: Some("/repos/evil/x".into()), fs_path: None, argv: None },
+            &Request {
+                action: "http.request".into(),
+                host: Some("github".into()),
+                method: Some("GET".into()),
+                path: Some("/repos/evil/x".into()),
+                fs_path: None,
+                argv: None,
+            },
         );
         assert!(!bad.allow);
     }

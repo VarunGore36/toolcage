@@ -33,11 +33,12 @@
 //! Landlock: /workspace gets full file rights; /usr /bin /lib /lib64 get
 //! read+execute only; everything else is inaccessible.
 
-use libc::{prctl, syscall, getgid, getuid, SECCOMP_MODE_FILTER, SECCOMP_RET_ALLOW, SECCOMP_RET_DATA,
-           SECCOMP_RET_ERRNO, EPERM, SIGKILL, STDOUT_FILENO, STDERR_FILENO,
-           sock_filter, sock_fprog, BPF_A, BPF_JEQ, BPF_JMP, BPF_K, BPF_LD, BPF_RET, BPF_W,
-           c_char, c_int, c_long, c_uint, c_ulong, c_void, WEXITSTATUS, WIFEXITED,
-           WNOHANG};
+use libc::{
+    c_char, c_int, c_long, c_uint, c_ulong, c_void, getgid, getuid, prctl, sock_filter, sock_fprog,
+    syscall, BPF_A, BPF_JEQ, BPF_JMP, BPF_K, BPF_LD, BPF_RET, BPF_W, EPERM, SECCOMP_MODE_FILTER,
+    SECCOMP_RET_ALLOW, SECCOMP_RET_DATA, SECCOMP_RET_ERRNO, SIGKILL, STDERR_FILENO, STDOUT_FILENO,
+    WEXITSTATUS, WIFEXITED, WNOHANG,
+};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -59,33 +60,33 @@ const EXEC_TIMEOUT: Duration = Duration::from_secs(30);
 // clone3=435, ptrace=101 all verified to match the running kernel).
 #[cfg(target_arch = "x86_64")]
 const BLOCKED_SYSCALLS: &[c_int] = &[
-    41,   // socket
-    53,   // socketpair
-    56,   // clone
-    57,   // fork
-    58,   // vfork
-    101,  // ptrace
-    155,  // pivot_root
-    165,  // mount
-    166,  // umount2
-    167,  // swapon
-    168,  // swapoff
-    169,  // reboot
-    172,  // iopl
-    173,  // ioperm
-    175,  // init_module
-    246,  // kexec_load
-    272,  // unshare
-    288,  // accept4
-    291,  // epoll_create1
-    298,  // perf_event_open
-    304,  // open_by_handle_at
-    311,  // process_vm_writev
-    313,  // finit_module
-    320,  // kexec_file_load
-    321,  // bpf
-    323,  // userfaultfd
-    435,  // clone3
+    41,  // socket
+    53,  // socketpair
+    56,  // clone
+    57,  // fork
+    58,  // vfork
+    101, // ptrace
+    155, // pivot_root
+    165, // mount
+    166, // umount2
+    167, // swapon
+    168, // swapoff
+    169, // reboot
+    172, // iopl
+    173, // ioperm
+    175, // init_module
+    246, // kexec_load
+    272, // unshare
+    288, // accept4
+    291, // epoll_create1
+    298, // perf_event_open
+    304, // open_by_handle_at
+    311, // process_vm_writev
+    313, // finit_module
+    320, // kexec_file_load
+    321, // bpf
+    323, // userfaultfd
+    435, // clone3
 ];
 
 // Landlock syscalls on this host's kernel (444/445/446; verified live:
@@ -146,14 +147,56 @@ pub struct Probe {
     pub seccomp: bool,
 }
 
+/// Real userns probe: fork a child that tries `unshare(CLONE_NEWUSER)` and
+/// report the outcome. Reading /proc/sys/kernel/unprivileged_userns_clone is
+/// NOT enough — that sysctl is Debian-specific and absent on e.g. Ubuntu 24.04
+/// runners, where AppArmor blocks unprivileged user namespaces while the
+/// sysctl is missing (the old probe said "yes" and every exec died with 126).
+/// The forked child does only async-signal-safe work (unshare + _exit), so
+/// this is safe from a multithreaded caller.
+fn userns_works() -> bool {
+    match unsafe { fork() } {
+        Ok(ForkResult::Parent { child }) => {
+            let mut status: c_int = 0;
+            loop {
+                let r = unsafe { libc::waitpid(child.as_raw(), &mut status, 0) };
+                if r == child.as_raw() {
+                    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+                }
+                if r < 0 {
+                    let e = std::io::Error::last_os_error();
+                    if e.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                }
+                return false;
+            }
+        }
+        Ok(ForkResult::Child) => {
+            let ok = unshare(CloneFlags::CLONE_NEWUSER).is_ok();
+            unsafe { libc::_exit(if ok { 0 } else { 1 }) };
+        }
+        Err(_) => false,
+    }
+}
+
 fn landlock_abi() -> i32 {
     #[cfg(target_arch = "x86_64")]
     {
         let size = std::mem::size_of::<LandlockRulesetAttr>() as c_long;
         // 1) version probe
-        let mut attr = LandlockRulesetAttr { handled_access_fs: 0, handled_access_net: 0, scoped: 0 };
+        let mut attr = LandlockRulesetAttr {
+            handled_access_fs: 0,
+            handled_access_net: 0,
+            scoped: 0,
+        };
         let r = unsafe {
-            syscall(SYS_LANDLOCK_CREATE_RULESET, &attr, size, LANDLOCK_CREATE_RULESET_VERSION as c_ulong)
+            syscall(
+                SYS_LANDLOCK_CREATE_RULESET,
+                &attr,
+                size,
+                LANDLOCK_CREATE_RULESET_VERSION as c_ulong,
+            )
         };
         if r >= 0 {
             return r as i32;
@@ -185,15 +228,15 @@ impl Default for NsBackend {
 
 impl NsBackend {
     pub fn new() -> Self {
-        Self { sessions: HashMap::new() }
+        Self {
+            sessions: HashMap::new(),
+        }
     }
 
     /// Prerequisite probe for `doctor` (no root needed for the report).
     pub fn probe() -> Probe {
         Probe {
-            userns: std::fs::read_to_string("/proc/sys/kernel/unprivileged_userns_clone")
-                .map(|s| s.trim() != "0")
-                .unwrap_or(true),
+            userns: userns_works(),
             cgroup2: std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").exists(),
             landlock_abi: landlock_abi(),
             seccomp: true,
@@ -210,7 +253,7 @@ impl Backend for NsBackend {
             separate_kernel: false, // shared host kernel — documented limit
             syscall_filter: true,
             fs_mount_enforced: true,
-            net_vsock_only: false,  // veth+firewall-style, not vsock
+            net_vsock_only: false, // veth+firewall-style, not vsock
             snapshot_pool: false,
         }
     }
@@ -220,9 +263,14 @@ impl Backend for NsBackend {
             "tier0 backend cannot honor {:?}",
             spec.tier
         );
-        // Landlock is mandatory for Tier0 (fail-closed): the exec'd child
-        // refuses to run without it (exit 124), so reject the session up front
-        // with a clear error instead of surfacing a child death code later.
+        // Fail closed at session creation: Tier0 needs unprivileged user
+        // namespaces and Landlock, and the exec'd child refuses to run without
+        // them — reject up front with a clear error instead of surfacing a
+        // child death code later.
+        anyhow::ensure!(
+            userns_works(),
+            "unprivileged user namespaces unavailable on this host; tier0 cannot isolate"
+        );
         anyhow::ensure!(
             landlock_abi() >= 0,
             "landlock unavailable on this host; tier0 refuses to run without the fs boundary"
@@ -261,8 +309,7 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
         .iter()
         .map(|s| CString::new(s.as_str()))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut c_args_ptrs: Vec<*const c_char> =
-        c_args.iter().map(|s| s.as_ptr()).collect();
+    let mut c_args_ptrs: Vec<*const c_char> = c_args.iter().map(|s| s.as_ptr()).collect();
     c_args_ptrs.push(std::ptr::null()); // execve expects NULL-terminated argv
 
     // Minimal environment: only PATH, no secrets (I2).
@@ -311,13 +358,7 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
 
             // Wait until the child has created its user namespace.
             let mut b = [0u8; 1];
-            let n = unsafe {
-                libc::read(
-                    ready_r.as_raw_fd(),
-                    b.as_mut_ptr() as *mut c_void,
-                    1,
-                )
-            };
+            let n = unsafe { libc::read(ready_r.as_raw_fd(), b.as_mut_ptr() as *mut c_void, 1) };
             anyhow::ensure!(n == 1, "child did not signal readiness");
 
             // Rootless uid/gid map: the parent writes the child's maps.
@@ -326,31 +367,17 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
             let uid = unsafe { getuid() };
             let gid = unsafe { getgid() };
             let pid_raw = child.as_raw();
-            std::fs::write(
-                format!("/proc/{pid_raw}/setgroups"),
-                "deny",
-            )
-            .context("write child setgroups")?;
-            std::fs::write(
-                format!("/proc/{pid_raw}/uid_map"),
-                format!("0 {uid} 1\n"),
-            )
-            .context("write child uid_map (needs unprivileged userns)")?;
+            std::fs::write(format!("/proc/{pid_raw}/setgroups"), "deny")
+                .context("write child setgroups")?;
+            std::fs::write(format!("/proc/{pid_raw}/uid_map"), format!("0 {uid} 1\n"))
+                .context("write child uid_map (needs unprivileged userns)")?;
             // gid_map is best-effort: some kernels require CAP_SETGID for the
             // parent to write it. If it fails, the child still runs.
-            let _ = std::fs::write(
-                format!("/proc/{pid_raw}/gid_map"),
-                format!("0 {gid} 1\n"),
-            );
+            let _ = std::fs::write(format!("/proc/{pid_raw}/gid_map"), format!("0 {gid} 1\n"));
 
             // Child may now become root (inside its own user namespace only).
-            let _ = unsafe {
-                libc::write(
-                    go_w.as_raw_fd(),
-                    &[1u8] as *const u8 as *const c_void,
-                    1,
-                )
-            };
+            let _ =
+                unsafe { libc::write(go_w.as_raw_fd(), &[1u8] as *const u8 as *const c_void, 1) };
 
             let deadline = Instant::now() + EXEC_TIMEOUT;
             let mut timed_out = false;
@@ -393,7 +420,8 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                                 let mut drain = [0u8; 65536];
                                 while unsafe {
                                     libc::read(fd, drain.as_mut_ptr() as *mut c_void, drain.len())
-                                } > 0 {}
+                                } > 0
+                                {}
                                 break;
                             }
                         }
@@ -433,16 +461,10 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                 );
             }
             let _ = unsafe {
-                libc::write(
-                    ready_w.as_raw_fd(),
-                    &[1u8] as *const u8 as *const c_void,
-                    1,
-                )
+                libc::write(ready_w.as_raw_fd(), &[1u8] as *const u8 as *const c_void, 1)
             };
             let mut b = [0u8; 1];
-            let _ = unsafe {
-                libc::read(go_r.as_raw_fd(), b.as_mut_ptr() as *mut c_void, 1)
-            };
+            let _ = unsafe { libc::read(go_r.as_raw_fd(), b.as_mut_ptr() as *mut c_void, 1) };
 
             // Root inside this namespace only.
             let _ = unsafe { libc::setresgid(0, 0, 0) };
@@ -521,9 +543,7 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                     while !(*environ.add(i)).is_null() {
                         let entry = *environ.add(i);
                         let mut eq = 0usize;
-                        while entry.add(eq).read() != b'=' as c_char
-                            && entry.add(eq).read() != 0
-                        {
+                        while entry.add(eq).read() != b'=' as c_char && entry.add(eq).read() != 0 {
                             eq += 1;
                         }
                         let is_path = eq == 4
@@ -731,7 +751,11 @@ fn apply_landlock(workspace: &str) {
             );
         }
         let add_rule = |fd: c_long, path: &str, rights: u64| -> bool {
-            let dir = match open(Path::new(path), OFlag::O_PATH | OFlag::O_DIRECTORY, Mode::empty()) {
+            let dir = match open(
+                Path::new(path),
+                OFlag::O_PATH | OFlag::O_DIRECTORY,
+                Mode::empty(),
+            ) {
                 Ok(d) => d,
                 Err(_) => return false,
             };
@@ -758,10 +782,16 @@ fn apply_landlock(workspace: &str) {
         if ok {
             let rc = unsafe { syscall(SYS_LANDLOCK_RESTRICT_SELF, ruleset, 0) };
             if rc < 0 {
-                child_die(124, b"toolcage: landlock restrict_self failed; refusing to run\n");
+                child_die(
+                    124,
+                    b"toolcage: landlock restrict_self failed; refusing to run\n",
+                );
             }
         } else {
-            child_die(124, b"toolcage: landlock add_rule failed; refusing to run\n");
+            child_die(
+                124,
+                b"toolcage: landlock add_rule failed; refusing to run\n",
+            );
         }
         let _ = unsafe { libc::close(ruleset as c_int) };
     }
@@ -806,7 +836,9 @@ mod tests {
         b.create(&spec).unwrap();
         let r = b.exec("t1", &["/bin/true".into()]).unwrap();
         assert_eq!(r.exit_code, Some(0));
-        let r = b.exec("t1", &["/bin/echo".into(), "hello-cage".into()]).unwrap();
+        let r = b
+            .exec("t1", &["/bin/echo".into(), "hello-cage".into()])
+            .unwrap();
         assert_eq!(r.exit_code, Some(0));
         assert_eq!(String::from_utf8_lossy(&r.stdout), "hello-cage\n");
         b.destroy("t1").unwrap();
@@ -837,7 +869,10 @@ mod tests {
         }
         "#;
         let mut child = match std::process::Command::new("gcc")
-            .arg("-x").arg("c").arg("-").arg("-o")
+            .arg("-x")
+            .arg("c")
+            .arg("-")
+            .arg("-o")
             .arg("/tmp/opencode/tc-net-helper")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
@@ -869,7 +904,11 @@ mod tests {
         b.create(&spec).unwrap();
         // cwd is the workspace, so relative path works.
         let r = b.exec("t2", &["./net-helper".into()]).unwrap();
-        assert_eq!(r.exit_code, Some(0), "external connect must be blocked inside Tier0");
+        assert_eq!(
+            r.exit_code,
+            Some(0),
+            "external connect must be blocked inside Tier0"
+        );
         b.destroy("t2").unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -883,7 +922,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("tc-ns-env-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("env.sh"), "#!/bin/sh\nenv\n").unwrap();
-        let _ = std::fs::set_permissions(dir.join("env.sh"), std::fs::Permissions::from_mode(0o755));
+        let _ =
+            std::fs::set_permissions(dir.join("env.sh"), std::fs::Permissions::from_mode(0o755));
         let spec = SessionSpec {
             id: "t3".into(),
             tier: Tier::Tier0,
@@ -898,10 +938,22 @@ mod tests {
         let out = String::from_utf8_lossy(&r.stdout);
         // env is cleared before exec (only PATH); a shell may add PWD/SHLVL/_,
         // but no secret or identifying vars should leak.
-        assert!(out.lines().any(|l| l.starts_with("PATH=")), "PATH must be present:\n{out}");
-        assert!(!out.lines().any(|l| l.starts_with("HOME=")), "HOME must not leak:\n{out}");
-        assert!(!out.lines().any(|l| l.starts_with("USER=")), "USER must not leak:\n{out}");
-        assert!(!out.lines().any(|l| l.contains("SECRET")), "secrets must not leak:\n{out}");
+        assert!(
+            out.lines().any(|l| l.starts_with("PATH=")),
+            "PATH must be present:\n{out}"
+        );
+        assert!(
+            !out.lines().any(|l| l.starts_with("HOME=")),
+            "HOME must not leak:\n{out}"
+        );
+        assert!(
+            !out.lines().any(|l| l.starts_with("USER=")),
+            "USER must not leak:\n{out}"
+        );
+        assert!(
+            !out.lines().any(|l| l.contains("SECRET")),
+            "secrets must not leak:\n{out}"
+        );
         b.destroy("t3").unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -925,14 +977,46 @@ mod tests {
         b.create(&spec).unwrap();
 
         // Write inside workspace (cwd) should succeed.
-        let r = b.exec("t4", &["/bin/sh".into(), "-c".into(), "echo ok > tc-write-test".into()]).unwrap();
-        assert_eq!(r.exit_code, Some(0), "write inside workspace should succeed");
-        assert!(dir.join("tc-write-test").exists(), "file should appear on host");
+        let r = b
+            .exec(
+                "t4",
+                &[
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    "echo ok > tc-write-test".into(),
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            r.exit_code,
+            Some(0),
+            "write inside workspace should succeed"
+        );
+        assert!(
+            dir.join("tc-write-test").exists(),
+            "file should appear on host"
+        );
 
         // Write outside workspace should be blocked by Landlock.
-        let r = b.exec("t4", &["/bin/sh".into(), "-c".into(), "echo nope > /etc/tc-test-blocked".into()]).unwrap();
-        assert_ne!(r.exit_code, Some(0), "write outside workspace must be blocked by Landlock");
-        assert!(!std::path::Path::new("/etc/tc-test-blocked").exists(), "nothing should leak to host /etc");
+        let r = b
+            .exec(
+                "t4",
+                &[
+                    "/bin/sh".into(),
+                    "-c".into(),
+                    "echo nope > /etc/tc-test-blocked".into(),
+                ],
+            )
+            .unwrap();
+        assert_ne!(
+            r.exit_code,
+            Some(0),
+            "write outside workspace must be blocked by Landlock"
+        );
+        assert!(
+            !std::path::Path::new("/etc/tc-test-blocked").exists(),
+            "nothing should leak to host /etc"
+        );
 
         b.destroy("t4").unwrap();
         let _ = std::fs::remove_dir_all(&dir);
@@ -991,7 +1075,10 @@ mod tests {
         };
         // The child died in setup (125 = chdir); the workload never ran.
         assert_eq!(r.exit_code, Some(125), "child must _exit on setup failure");
-        assert!(r.stdout.is_empty(), "workload must not run after failed setup");
+        assert!(
+            r.stdout.is_empty(),
+            "workload must not run after failed setup"
+        );
         // Written exactly once — by the parent. The parent proceeds only after
         // reaping the child, so a resuming child would append first and this
         // would read "xx".
@@ -1031,7 +1118,9 @@ mod tests {
         };
         let mut b = NsBackend::new();
         b.create(&spec).unwrap();
-        let r = b.exec("t6", &["/nonexistent/toolcage-test-prog".into()]).unwrap();
+        let r = b
+            .exec("t6", &["/nonexistent/toolcage-test-prog".into()])
+            .unwrap();
         assert_eq!(r.exit_code, Some(127));
         assert!(
             String::from_utf8_lossy(&r.stderr).contains("toolcage: exec failed"),

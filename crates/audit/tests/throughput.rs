@@ -38,7 +38,11 @@ fn append_throughput_eps() {
     println!("audit append: n={} elapsed={:?} eps={:.0}", n, elapsed, eps);
     // CI-safe floor: fsync-per-append on loaded runners can dip low; the
     // product target (10k/s) is tracked separately via group commit.
-    assert!(eps > 200.0, "audit append throughput regressed: {:.0} eps", eps);
+    assert!(
+        eps > 200.0,
+        "audit append throughput regressed: {:.0} eps",
+        eps
+    );
     assert!(toolcage_audit::verify(&p).is_ok());
     let _ = std::fs::remove_dir_all(&dir);
 }

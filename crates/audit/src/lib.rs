@@ -95,7 +95,11 @@ impl Writer {
             }
         }
         let file = OpenOptions::new().create(true).append(true).open(path)?;
-        Ok(Self { file, next_seq, head })
+        Ok(Self {
+            file,
+            next_seq,
+            head,
+        })
     }
 
     /// Write-ahead append: fsync before returning, so caller may act only after Ok.
@@ -126,7 +130,12 @@ pub fn verify(path: &Path) -> anyhow::Result<(u64, String)> {
             continue;
         }
         let e: Event = serde_json::from_str(&line)?;
-        anyhow::ensure!(e.seq == expect_seq, "seq gap: got {} want {}", e.seq, expect_seq);
+        anyhow::ensure!(
+            e.seq == expect_seq,
+            "seq gap: got {} want {}",
+            e.seq,
+            expect_seq
+        );
         anyhow::ensure!(e.prev_hash == expect_prev, "chain break at seq {}", e.seq);
         let recomputed = hash_for(&e.prev_hash, &event_body(&e));
         anyhow::ensure!(recomputed == e.hash, "hash mismatch at seq {}", e.seq);
@@ -170,7 +179,12 @@ fn hex_of(b: &[u8]) -> String {
 }
 
 /// Sign a checkpoint over the current head. sk_bytes must be 32 bytes.
-pub fn sign_checkpoint(seq: u64, head: &str, time: &str, sk_bytes: &[u8]) -> anyhow::Result<Checkpoint> {
+pub fn sign_checkpoint(
+    seq: u64,
+    head: &str,
+    time: &str,
+    sk_bytes: &[u8],
+) -> anyhow::Result<Checkpoint> {
     use ed25519_dalek::{Signer, SigningKey};
     anyhow::ensure!(sk_bytes.len() == 32, "sk must be 32 bytes");
     let sk = SigningKey::from_bytes(sk_bytes.try_into().unwrap());
@@ -193,7 +207,10 @@ pub fn verify_checkpoint(cp: &Checkpoint, pubkey: &[u8]) -> anyhow::Result<()> {
     let sig_bytes = hex_decode(&cp.sig_hex)?;
     let sig = Signature::from_slice(&sig_bytes)?;
     vk.verify(&checkpoint_msg(cp.seq, &cp.head_hash, &cp.time), &sig)?;
-    anyhow::ensure!(cp.pubkey_hex == hex_of(pubkey), "checkpoint pubkey mismatch");
+    anyhow::ensure!(
+        cp.pubkey_hex == hex_of(pubkey),
+        "checkpoint pubkey mismatch"
+    );
     Ok(())
 }
 
@@ -234,11 +251,18 @@ pub fn verify_with_pubkey(path: &Path, pubkey: Option<&[u8]>) -> anyhow::Result<
                     anyhow::ensure!(cp.seq <= n, "checkpoint seq beyond log");
                     // Bind (seq, head) to the actual chain prefix.
                     if cp.seq == 0 {
-                        anyhow::ensure!(cp.head_hash == "GENESIS", "checkpoint head mismatch at seq 0");
+                        anyhow::ensure!(
+                            cp.head_hash == "GENESIS",
+                            "checkpoint head mismatch at seq 0"
+                        );
                     } else {
                         let idx = (cp.seq - 1) as usize;
                         anyhow::ensure!(idx < heads.len(), "checkpoint seq beyond log");
-                        anyhow::ensure!(heads[idx] == cp.head_hash, "checkpoint head mismatch at seq {}", cp.seq);
+                        anyhow::ensure!(
+                            heads[idx] == cp.head_hash,
+                            "checkpoint head mismatch at seq {}",
+                            cp.seq
+                        );
                     }
                     found += 1;
                 }
@@ -261,11 +285,20 @@ mod tests {
         let mut w = Writer::open(&p).unwrap();
         for i in 0..3 {
             w.append(Event {
-                seq: 0, ts_wall: "2026-01-01T00:00:00Z".into(), session: "s1".into(),
-                actor: "test".into(), action: format!("act{i}"), request_hash: "abc".into(),
-                decision: "allow".into(), rule_ids: vec![], token_rev_id: "r".into(),
-                result: "ok".into(), bytes: 0, claimed_by: "host".into(),
-                prev_hash: String::new(), hash: String::new(),
+                seq: 0,
+                ts_wall: "2026-01-01T00:00:00Z".into(),
+                session: "s1".into(),
+                actor: "test".into(),
+                action: format!("act{i}"),
+                request_hash: "abc".into(),
+                decision: "allow".into(),
+                rule_ids: vec![],
+                token_rev_id: "r".into(),
+                result: "ok".into(),
+                bytes: 0,
+                claimed_by: "host".into(),
+                prev_hash: String::new(),
+                hash: String::new(),
             })
             .unwrap();
         }
@@ -316,11 +349,20 @@ mod tests {
         let mut w = Writer::open(&p).unwrap();
         for i in 0..3 {
             w.append(Event {
-                seq: 0, ts_wall: "2026-01-01T00:00:00Z".into(), session: "s1".into(),
-                actor: "test".into(), action: format!("act{i}"), request_hash: "abc".into(),
-                decision: "allow".into(), rule_ids: vec![], token_rev_id: "r".into(),
-                result: "ok".into(), bytes: 0, claimed_by: "host".into(),
-                prev_hash: String::new(), hash: String::new(),
+                seq: 0,
+                ts_wall: "2026-01-01T00:00:00Z".into(),
+                session: "s1".into(),
+                actor: "test".into(),
+                action: format!("act{i}"),
+                request_hash: "abc".into(),
+                decision: "allow".into(),
+                rule_ids: vec![],
+                token_rev_id: "r".into(),
+                result: "ok".into(),
+                bytes: 0,
+                claimed_by: "host".into(),
+                prev_hash: String::new(),
+                hash: String::new(),
             })
             .unwrap();
         }
@@ -330,7 +372,8 @@ mod tests {
         let pk = hex_decode(&cp.pubkey_hex).unwrap();
         let dest = dir.join(format!("audit.jsonl.checkpoint.{n}"));
         let mut f = std::fs::File::create(&dest).unwrap();
-        f.write_all(serde_json::to_string(&cp).unwrap().as_bytes()).unwrap();
+        f.write_all(serde_json::to_string(&cp).unwrap().as_bytes())
+            .unwrap();
         assert!(verify_with_pubkey(&p, Some(&pk)).is_ok());
         // Attacker truncates last event but keeps old checkpoint file.
         let lines: Vec<String> = std::io::BufReader::new(std::fs::File::open(&p).unwrap())

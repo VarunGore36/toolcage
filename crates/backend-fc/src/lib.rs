@@ -33,15 +33,14 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Context, bail};
+use anyhow::{bail, Context};
 use ed25519_dalek::Verifier;
-use sha2::Digest;
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
 
 const OUTPUT_CAP: usize = 1024 * 1024;
 const EXEC_TIMEOUT: Duration = Duration::from_secs(30);
-
 
 // ---------------------------------------------------------------------------
 // Firecracker session configuration
@@ -75,7 +74,10 @@ impl FcConfig {
 
     /// vsock UNIX socket path on the host for the guest agent control channel.
     pub fn vsock_uds_path(&self) -> String {
-        format!("/run/toolcage/{}.vsock", self.socket.trim_end_matches(".sock"))
+        format!(
+            "/run/toolcage/{}.vsock",
+            self.socket.trim_end_matches(".sock")
+        )
     }
 
     /// Firecracker jailer argv (unprivileged, own netns, tight seccomp+cgroup).
@@ -113,7 +115,11 @@ pub struct WarmPool {
 
 impl WarmPool {
     pub fn new(max: usize) -> Self {
-        Self { max, free: VecDeque::new(), golden: None }
+        Self {
+            max,
+            free: VecDeque::new(),
+            golden: None,
+        }
     }
 
     /// Load + verify a golden image from a directory containing
@@ -128,9 +134,10 @@ impl WarmPool {
     /// Each VM is snapshot-loaded and paused (not started), so it carries no
     /// per-session state. Uniqueness is applied on claim().
     pub fn refill(&mut self) -> anyhow::Result<usize> {
-        let gi = self.golden.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("no golden image loaded; call load_golden first")
-        })?;
+        let gi = self
+            .golden
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no golden image loaded; call load_golden first"))?;
         let mut restored = 0usize;
         while self.free.len() < self.max {
             let id = format!("pool-{}", self.free.len());
@@ -145,9 +152,10 @@ impl WarmPool {
     /// attach workspace, reseed RNG (VMGenID), reset wall clock,
     /// re-establish vsock, bind session CID. Never re-pool a dirty session.
     pub fn claim(&mut self, session: &str, workspace: &str) -> anyhow::Result<PausedVm> {
-        let mut paused = self.free.pop_front().ok_or_else(|| {
-            anyhow::anyhow!("warm pool empty")
-        })?;
+        let mut paused = self
+            .free
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("warm pool empty"))?;
         paused.apply_uniqueness(session, workspace)?;
         Ok(paused)
     }
@@ -221,7 +229,13 @@ impl PausedVm {
             "vsock configure failed: HTTP {status}"
         );
 
-        Ok(PausedVm { id: id.to_string(), socket_path, vsock_uds, vsock_cid, started: false })
+        Ok(PausedVm {
+            id: id.to_string(),
+            socket_path,
+            vsock_uds,
+            vsock_cid,
+            started: false,
+        })
     }
 
     /// Apply per-session uniqueness steps after claim:
@@ -247,7 +261,9 @@ impl PausedVm {
         );
 
         // 2. Resume VM — VMGenID reseeds guest RNG on restore (kernel>=5.18).
-        let start = InstanceStart { action_type: "InstanceStart".into() };
+        let start = InstanceStart {
+            action_type: "InstanceStart".into(),
+        };
         let body = serde_json::to_vec(&start)?;
         let resp = http_put(&self.socket_path, "/actions", &body)?;
         let status = http_status(&resp)?;
@@ -267,7 +283,9 @@ impl PausedVm {
     /// Used when re-using a pool VM for a new session after uniqueness.
     pub fn start(&mut self) -> anyhow::Result<()> {
         anyhow::ensure!(!self.started, "VM already started");
-        let start = InstanceStart { action_type: "InstanceStart".into() };
+        let start = InstanceStart {
+            action_type: "InstanceStart".into(),
+        };
         let body = serde_json::to_vec(&start)?;
         let resp = http_put(&self.socket_path, "/actions", &body)?;
         let status = http_status(&resp)?;
@@ -335,8 +353,8 @@ impl GoldenImage {
         // Extract paths before manifest is moved into the struct.
         let snapshot_path = manifest.snapshot_path.clone();
         let mem_file_path = manifest.mem_file_path.clone();
-        let signature = std::fs::read(&sig_path)
-            .with_context(|| format!("read signature {sig_path:?}"))?;
+        let signature =
+            std::fs::read(&sig_path).with_context(|| format!("read signature {sig_path:?}"))?;
         anyhow::ensure!(signature.len() == 64, "Ed25519 signature must be 64 bytes");
 
         // Verify signature over manifest hash.
@@ -374,8 +392,15 @@ fn hex_decode(s: &str) -> anyhow::Result<Vec<u8>> {
 
 /// Snapshot a running VM: PUT /snapshot/create. Used to build golden images
 /// (only from clean, never-dirty sessions).
-pub fn snapshot_create(socket_path: &str, snapshot_path: &str, mem_file_path: &str) -> anyhow::Result<()> {
-    let req = SnapshotCreate { snapshot_path: snapshot_path.to_string(), mem_file_path: mem_file_path.to_string() };
+pub fn snapshot_create(
+    socket_path: &str,
+    snapshot_path: &str,
+    mem_file_path: &str,
+) -> anyhow::Result<()> {
+    let req = SnapshotCreate {
+        snapshot_path: snapshot_path.to_string(),
+        mem_file_path: mem_file_path.to_string(),
+    };
     let body = serde_json::to_vec(&req)?;
     let resp = http_put(socket_path, "/snapshot/create", &body)?;
     let status = http_status(&resp)?;
@@ -388,8 +413,8 @@ pub fn snapshot_create(socket_path: &str, snapshot_path: &str, mem_file_path: &s
 
 /// Verify a snapshot file's sha256 against the manifest hash.
 pub fn verify_snapshot_hash(snapshot_path: &str, expected_hash: &str) -> anyhow::Result<()> {
-    let data = std::fs::read(snapshot_path)
-        .with_context(|| format!("read snapshot {snapshot_path}"))?;
+    let data =
+        std::fs::read(snapshot_path).with_context(|| format!("read snapshot {snapshot_path}"))?;
     let actual = sha2::Sha256::digest(&data);
     let actual_hex = hex_encode(&actual);
     anyhow::ensure!(
@@ -519,11 +544,7 @@ pub struct FcVm {
 
 impl FcVm {
     /// Boot the VM: configure machine, drives, vsock, then start.
-    fn boot(
-        id: &str,
-        cfg: &FcConfig,
-        workspace_host_path: &str,
-    ) -> anyhow::Result<Self> {
+    fn boot(id: &str, cfg: &FcConfig, workspace_host_path: &str) -> anyhow::Result<Self> {
         // 1. Machine config (vCPU + memory)
         let mc = MachineConfig {
             vcpu_count: cfg.vcpu,
@@ -615,13 +636,12 @@ impl FcVm {
 
     /// Execute a command inside the guest via vsock + guest agent.
     fn exec_vsock(&self, argv: &[String]) -> anyhow::Result<CommandResult> {
-        let mut stream =
-            UnixStream::connect(&self.vsock_uds).with_context(|| {
-                format!(
-                    "connect to guest agent vsock at {}",
-                    self.vsock_uds.display()
-                )
-            })?;
+        let mut stream = UnixStream::connect(&self.vsock_uds).with_context(|| {
+            format!(
+                "connect to guest agent vsock at {}",
+                self.vsock_uds.display()
+            )
+        })?;
         stream.set_read_timeout(Some(EXEC_TIMEOUT))?;
         stream.set_write_timeout(Some(EXEC_TIMEOUT))?;
 
@@ -650,16 +670,8 @@ impl FcVm {
 
         let resp: serde_json::Value = serde_json::from_slice(&payload)?;
         let exit_code = resp["exit_code"].as_i64().map(|v| v as i32);
-        let stdout = resp["stdout"]
-            .as_str()
-            .unwrap_or("")
-            .as_bytes()
-            .to_vec();
-        let stderr = resp["stderr"]
-            .as_str()
-            .unwrap_or("")
-            .as_bytes()
-            .to_vec();
+        let stdout = resp["stdout"].as_str().unwrap_or("").as_bytes().to_vec();
+        let stderr = resp["stderr"].as_str().unwrap_or("").as_bytes().to_vec();
 
         Ok(CommandResult {
             exit_code,
@@ -741,9 +753,7 @@ impl Backend for FcBackend {
             "firecracker binary not installed; tier2 unavailable"
         );
         anyhow::ensure!(
-            spec.tier == Tier::Tier0
-                || spec.tier == Tier::Tier1
-                || spec.tier == Tier::Tier2,
+            spec.tier == Tier::Tier0 || spec.tier == Tier::Tier1 || spec.tier == Tier::Tier2,
             "firecracker backend cannot honor {:?}",
             spec.tier
         );
@@ -774,11 +784,7 @@ impl Backend for FcBackend {
             // Send InstanceStop via REST API (best effort).
             let stop = serde_json::json!({ "action_type": "InstanceStop" });
             let body = serde_json::to_vec(&stop)?;
-            let _ = http_put(
-                vm.socket_path.to_string_lossy().as_ref(),
-                "/actions",
-                &body,
-            );
+            let _ = http_put(vm.socket_path.to_string_lossy().as_ref(), "/actions", &body);
         }
         // Return VM to pool or discard (never re-pool dirty sessions per plan).
         Ok(())
@@ -791,10 +797,7 @@ impl Backend for FcBackend {
             .ok_or_else(|| anyhow::anyhow!("session {id} not created"))?;
         // Verify VM is still running before exec.
         let state = vm.state()?;
-        anyhow::ensure!(
-            state == "Running",
-            "VM {id} not running (state={state})"
-        );
+        anyhow::ensure!(state == "Running", "VM {id} not running (state={state})");
         vm.exec_vsock(argv)
     }
 }

@@ -48,7 +48,10 @@ impl Default for GvBackend {
 
 impl GvBackend {
     pub fn new() -> Self {
-        Self { runsc_path: find_runsc(), sessions: HashMap::new() }
+        Self {
+            runsc_path: find_runsc(),
+            sessions: HashMap::new(),
+        }
     }
 
     /// Verify runsc is actually executable (not just a stale PATH entry).
@@ -115,7 +118,11 @@ impl GvBackend {
 }
 
 fn find_runsc() -> PathBuf {
-    for p in ["/usr/bin/runsc", "/usr/local/bin/runsc", "/opt/toolcage/bin/runsc"] {
+    for p in [
+        "/usr/bin/runsc",
+        "/usr/local/bin/runsc",
+        "/opt/toolcage/bin/runsc",
+    ] {
         if PathBuf::from(p).exists() {
             return PathBuf::from(p);
         }
@@ -155,7 +162,10 @@ impl Backend for GvBackend {
             "gvisor backend cannot honor {:?}",
             spec.tier
         );
-        anyhow::ensure!(self.runsc_present(), "runsc not installed; tier1 unavailable");
+        anyhow::ensure!(
+            self.runsc_present(),
+            "runsc not installed; tier1 unavailable"
+        );
 
         let bundle_dir = Self::bundle_dir(&spec.id);
         let rootfs = Self::rootfs_dir();
@@ -165,8 +175,7 @@ impl Backend for GvBackend {
         std::fs::create_dir_all(bundle_dir.join("workspace"))?;
 
         // Write config.json
-        let config =
-            Self::bundle_config(&spec.id, rootfs.to_str().unwrap_or(""), &spec.workspace);
+        let config = Self::bundle_config(&spec.id, rootfs.to_str().unwrap_or(""), &spec.workspace);
         let config_json = serde_json::to_string_pretty(&config)?;
         std::fs::write(bundle_dir.join("config.json"), config_json)?;
 
@@ -192,7 +201,10 @@ impl Backend for GvBackend {
     }
 
     fn destroy(&mut self, id: &str) -> anyhow::Result<()> {
-        anyhow::ensure!(self.runsc_present(), "runsc not installed; tier1 unavailable");
+        anyhow::ensure!(
+            self.runsc_present(),
+            "runsc not installed; tier1 unavailable"
+        );
 
         // runsc kill <id> (best effort)
         let _ = Command::new(&self.runsc_path).arg("kill").arg(id).status();
@@ -210,7 +222,10 @@ impl Backend for GvBackend {
     }
 
     fn exec(&mut self, id: &str, argv: &[String]) -> anyhow::Result<CommandResult> {
-        anyhow::ensure!(self.runsc_present(), "runsc not installed; tier1 unavailable");
+        anyhow::ensure!(
+            self.runsc_present(),
+            "runsc not installed; tier1 unavailable"
+        );
         anyhow::ensure!(self.sessions.contains_key(id), "session {id} not created");
         anyhow::ensure!(!argv.is_empty(), "empty argv");
 
@@ -236,16 +251,12 @@ impl Backend for GvBackend {
 
         thread::spawn(move || {
             let mut buf = Vec::new();
-            let _ = stdout
-                .take((OUTPUT_CAP + 1) as u64)
-                .read_to_end(&mut buf);
+            let _ = stdout.take((OUTPUT_CAP + 1) as u64).read_to_end(&mut buf);
             let _ = tx_out.send(buf);
         });
         thread::spawn(move || {
             let mut buf = Vec::new();
-            let _ = stderr
-                .take((OUTPUT_CAP + 1) as u64)
-                .read_to_end(&mut buf);
+            let _ = stderr.take((OUTPUT_CAP + 1) as u64).read_to_end(&mut buf);
             let _ = tx_err.send(buf);
         });
 
@@ -266,8 +277,12 @@ impl Backend for GvBackend {
         };
 
         let mut truncated = timed_out;
-        let mut stdout_buf = rx_out.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
-        let mut stderr_buf = rx_err.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
+        let mut stdout_buf = rx_out
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or_default();
+        let mut stderr_buf = rx_err
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or_default();
 
         if stdout_buf.len() > OUTPUT_CAP {
             stdout_buf.truncate(OUTPUT_CAP);
@@ -313,7 +328,10 @@ impl GvBackend {
         } else {
             None
         };
-        GvProbe { runsc_present: present, runsc_version: version }
+        GvProbe {
+            runsc_present: present,
+            runsc_version: version,
+        }
     }
 }
 
@@ -359,7 +377,13 @@ mod tests {
         assert!(ns_types.contains(&"pid"));
         assert!(ns_types.contains(&"mount"));
         // no capabilities, noNewPrivileges
-        assert_eq!(cfg["process"]["capabilities"]["bounding"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            cfg["process"]["capabilities"]["bounding"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
         assert_eq!(cfg["process"]["noNewPrivileges"], true);
     }
 

@@ -8,7 +8,8 @@ fn sup_at(
     allow_unisolated: bool,
 ) -> toolcage_supervisor::Supervisor {
     toolcage_supervisor::Supervisor {
-        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml"))
+            .unwrap(),
         audit_path: audit.to_path_buf(),
         session: "isolation".into(),
         tier,
@@ -69,7 +70,9 @@ fn tier2_unisolated_optin_is_refused() {
         .exec(&["/bin/echo".to_string(), "pwned".to_string()])
         .unwrap();
     assert!(!o.allowed);
-    assert!(o.rule_ids.contains(&"isolation:downgrade-refused".to_string()));
+    assert!(o
+        .rule_ids
+        .contains(&"isolation:downgrade-refused".to_string()));
     assert!(o.stdout.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }

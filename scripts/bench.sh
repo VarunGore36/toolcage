@@ -14,8 +14,16 @@ cargo test -p toolcage-audit --test throughput --release -- --nocapture 2>&1 | g
 
 echo "== CLI run baseline (end-to-end Tier0 exec) =="
 cargo build -p toolcage-cli --release -q 2>&1 | tail -1
-LOG=/tmp/opencode/tc-bench.jsonl
+LOG=${TMPDIR:-/tmp}/tc-bench.jsonl
+mkdir -p "$(dirname "$LOG")"
 rm -f "$LOG"
+# Probe run: Tier0 needs unprivileged userns + Landlock (e.g. GitHub's Ubuntu
+# 24.04 runners block userns via AppArmor) — skip the baseline there instead
+# of failing the job. Policy and audit numbers above still measure.
+if ! ./target/release/toolcage-cli run --policy schemas/policy-v0.yaml --audit "$LOG" -- /bin/true >/dev/null 2>&1; then
+  echo "skip: Tier0 exec unavailable on this host (needs unprivileged userns + Landlock) — no run baseline"
+  exit 0
+fi
 N=200
 start=$(date +%s.%N)
 for i in $(seq 1 "$N"); do

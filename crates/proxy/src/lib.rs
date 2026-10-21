@@ -13,13 +13,13 @@
 //! - Budgets enforced per destination: bytes + requests, fail-closed.
 //! - No fallback: if the proxy can't dial, the action is denied.
 
+use native_tls::TlsConnector;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{TcpStream, IpAddr, ToSocketAddrs};
+use std::net::{IpAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use native_tls::{TlsConnector};
 
 use serde::{Deserialize, Serialize};
 use toolcage_policy::{Policy, Request};
@@ -97,13 +97,19 @@ pub fn decide(policy: &Policy, alias_or_host: &str, method: &str, path: &str) ->
     // alias maps to that same upstream for policy checking.
     // E.g. guest uses "github.internal" → upstream "api.github.com" → policy
     // checks against operator alias "github".
-    let policy_host = aliases.get(&key)
+    let policy_host = aliases
+        .get(&key)
         .cloned()
         .and_then(|upstream| {
-            aliases.iter()
+            aliases
+                .iter()
                 .find(|(alias, up)| {
                     up.as_str() == upstream.as_str()
-                        && policy.net.hosts.iter().any(|h| h.alias.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(alias)))
+                        && policy.net.hosts.iter().any(|h| {
+                            h.alias
+                                .as_deref()
+                                .is_some_and(|a| a.eq_ignore_ascii_case(alias))
+                        })
                 })
                 .map(|(alias, _)| alias.clone())
         })
@@ -118,10 +124,20 @@ pub fn decide(policy: &Policy, alias_or_host: &str, method: &str, path: &str) ->
     };
     let d = toolcage_policy::decide(policy, &req);
     if !d.allow {
-        return ProxyDecision { allow: false, rule_ids: d.rule_ids, reason: d.reason, upstream: None };
+        return ProxyDecision {
+            allow: false,
+            rule_ids: d.rule_ids,
+            reason: d.reason,
+            upstream: None,
+        };
     }
     let upstream = aliases.get(&key).cloned().unwrap_or(key);
-    ProxyDecision { allow: true, rule_ids: d.rule_ids, reason: "proxy allow".into(), upstream: Some(upstream) }
+    ProxyDecision {
+        allow: true,
+        rule_ids: d.rule_ids,
+        reason: "proxy allow".into(),
+        upstream: Some(upstream),
+    }
 }
 
 /// Resolve a hostname to IPs and reject any that fall in blocked ranges.
@@ -140,7 +156,9 @@ fn resolve_allowed_ip(host: &str) -> Result<IpAddr, ProxyError> {
         }
         return Ok(*addr);
     }
-    Err(ProxyError::BlockedIp(format!("{host}: all resolved IPs are blocked")))
+    Err(ProxyError::BlockedIp(format!(
+        "{host}: all resolved IPs are blocked"
+    )))
 }
 
 fn is_blocked_ip(addr: &IpAddr) -> bool {
@@ -172,7 +190,11 @@ fn is_blocked_ip(addr: &IpAddr) -> bool {
 fn default_port(host: &str) -> u16 {
     // If host contains a port, use it; else 443 for https-ish, 80 otherwise.
     if host.contains(':') {
-        return host.split(':').nth(1).and_then(|p| p.parse().ok()).unwrap_or(443);
+        return host
+            .split(':')
+            .nth(1)
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(443);
     }
     443
 }
@@ -209,8 +231,12 @@ impl Proxy {
 
         let stream = TcpStream::connect_timeout(&socket_addr, self.connect_timeout)
             .map_err(|e| ProxyError::Connect(format!("{socket_addr}: {e}")))?;
-        stream.set_read_timeout(Some(self.read_timeout)).map_err(|e| ProxyError::Io(e.to_string()))?;
-        stream.set_write_timeout(Some(self.read_timeout)).map_err(|e| ProxyError::Io(e.to_string()))?;
+        stream
+            .set_read_timeout(Some(self.read_timeout))
+            .map_err(|e| ProxyError::Io(e.to_string()))?;
+        stream
+            .set_write_timeout(Some(self.read_timeout))
+            .map_err(|e| ProxyError::Io(e.to_string()))?;
 
         let mut stream: Box<dyn IoStream> = Box::new(stream);
         let use_tls = port == 443 || upstream.ends_with(":443");
@@ -232,7 +258,9 @@ impl Proxy {
             req.push_str(&format!("{name}: {value}\r\n"));
         }
         req.push_str("\r\n");
-        stream.write_all(req.as_bytes()).map_err(|e| ProxyError::Io(e.to_string()))?;
+        stream
+            .write_all(req.as_bytes())
+            .map_err(|e| ProxyError::Io(e.to_string()))?;
         stream.flush().map_err(|e| ProxyError::Io(e.to_string()))?;
 
         // Read response until connection close.
@@ -293,11 +321,15 @@ impl Budgets {
     /// Create budgets with persistence to the given path. Loads existing
     /// state if the file exists, otherwise starts fresh.
     pub fn with_path(path: &Path) -> anyhow::Result<Self> {
-        let mut b = Self { bytes: HashMap::new(), requests: HashMap::new(), persist_path: Some(path.to_path_buf()) };
+        let mut b = Self {
+            bytes: HashMap::new(),
+            requests: HashMap::new(),
+            persist_path: Some(path.to_path_buf()),
+        };
         if path.exists() {
             let data = fs::read(path).map_err(|e| anyhow::anyhow!("io: {e}"))?;
-            let saved: Budgets = serde_json::from_slice(&data)
-                .map_err(|e| anyhow::anyhow!("deserialize: {e}"))?;
+            let saved: Budgets =
+                serde_json::from_slice(&data).map_err(|e| anyhow::anyhow!("deserialize: {e}"))?;
             b.bytes = saved.bytes;
             b.requests = saved.requests;
         }
@@ -306,9 +338,12 @@ impl Budgets {
 
     /// Persist current budget state to disk atomically.
     fn save(&self) -> anyhow::Result<()> {
-        let path = self.persist_path.as_ref().ok_or_else(|| anyhow::anyhow!("no persist path"))?;
-        let data = serde_json::to_vec_pretty(self)
-            .map_err(|e| anyhow::anyhow!("serialize: {e}"))?;
+        let path = self
+            .persist_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no persist path"))?;
+        let data =
+            serde_json::to_vec_pretty(self).map_err(|e| anyhow::anyhow!("serialize: {e}"))?;
         let tmp = path.with_extension("tmp");
         fs::write(&tmp, data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
         fs::rename(&tmp, path).map_err(|e| anyhow::anyhow!("io: {e}"))?;
@@ -344,14 +379,23 @@ mod tests {
 
     #[test]
     fn alias_resolves_and_allows() {
-        let d = decide(&sample(), "github.internal", "GET", "/repos/acme/app/issues/1");
+        let d = decide(
+            &sample(),
+            "github.internal",
+            "GET",
+            "/repos/acme/app/issues/1",
+        );
         assert!(d.allow);
         assert_eq!(d.upstream.as_deref(), Some("api.github.com"));
     }
 
     #[test]
     fn metadata_has_no_path() {
-        for h in ["169.254.169.254", "metadata.google.internal", "instance-data"] {
+        for h in [
+            "169.254.169.254",
+            "metadata.google.internal",
+            "instance-data",
+        ] {
             let d = decide(&sample(), h, "GET", "/");
             assert!(!d.allow, "{h} must be denied");
         }

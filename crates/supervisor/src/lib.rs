@@ -58,7 +58,10 @@ pub struct ExecOutcome {
 }
 
 fn now_wall() -> String {
-    let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     format!("{t}")
 }
 
@@ -85,7 +88,12 @@ impl Supervisor {
 
     /// Bounded exec: timeout_secs wall clock, cap_bytes per stream.
     /// Kill on timeout (fail-closed); truncation flagged in audit outcome.
-    pub fn exec_limits(&mut self, argv: &[String], timeout_secs: u64, cap: usize) -> anyhow::Result<ExecOutcome> {
+    pub fn exec_limits(
+        &mut self,
+        argv: &[String],
+        timeout_secs: u64,
+        cap: usize,
+    ) -> anyhow::Result<ExecOutcome> {
         anyhow::ensure!(!argv.is_empty(), "empty argv");
         let req = Request {
             action: "proc.exec".into(),
@@ -100,15 +108,29 @@ impl Supervisor {
         let argv_hash = hash_argv(argv);
         // Write-ahead intent: store argv hash, never raw argv (secrets stay out of log).
         w.append(Event {
-            seq: 0, ts_wall: now_wall(), session: self.session.clone(),
-            actor: "agent".into(), action: "proc.exec".into(),
-            request_hash: argv_hash.clone(), decision: if d.allow { "allow" } else { "deny" }.into(),
-            rule_ids: d.rule_ids.clone(), token_rev_id: "root".into(),
-            result: "intent".into(), bytes: 0, claimed_by: "host".into(),
-            prev_hash: String::new(), hash: String::new(),
+            seq: 0,
+            ts_wall: now_wall(),
+            session: self.session.clone(),
+            actor: "agent".into(),
+            action: "proc.exec".into(),
+            request_hash: argv_hash.clone(),
+            decision: if d.allow { "allow" } else { "deny" }.into(),
+            rule_ids: d.rule_ids.clone(),
+            token_rev_id: "root".into(),
+            result: "intent".into(),
+            bytes: 0,
+            claimed_by: "host".into(),
+            prev_hash: String::new(),
+            hash: String::new(),
         })?;
         if !d.allow {
-            return Ok(ExecOutcome { allowed: false, rule_ids: d.rule_ids, exit_code: None, stdout: vec![], stderr: vec![] });
+            return Ok(ExecOutcome {
+                allowed: false,
+                rule_ids: d.rule_ids,
+                exit_code: None,
+                stdout: vec![],
+                stderr: vec![],
+            });
         }
         // Isolation is mandatory (I1/I6): every tier runs through the wired
         // backend — Tier 0 = namespaces + Landlock + seccomp, Tier 1 = runsc
@@ -117,40 +139,69 @@ impl Supervisor {
         if let Some(backend) = self.backend.as_mut() {
             let cr = backend.exec(&self.session, argv)?;
             w.append(Event {
-                seq: 0, ts_wall: now_wall(), session: self.session.clone(),
-                actor: "supervisor".into(), action: "proc.exec".into(),
-                request_hash: hash_argv(argv), decision: "allow".into(),
-                rule_ids: d.rule_ids.clone(), token_rev_id: "root".into(),
+                seq: 0,
+                ts_wall: now_wall(),
+                session: self.session.clone(),
+                actor: "supervisor".into(),
+                action: "proc.exec".into(),
+                request_hash: hash_argv(argv),
+                decision: "allow".into(),
+                rule_ids: d.rule_ids.clone(),
+                token_rev_id: "root".into(),
                 result: format!("exit={:?} truncated={}", cr.exit_code, cr.truncated),
-                bytes: (cr.stdout.len() + cr.stderr.len()) as u64, claimed_by: "host".into(),
-                prev_hash: String::new(), hash: String::new(),
+                bytes: (cr.stdout.len() + cr.stderr.len()) as u64,
+                claimed_by: "host".into(),
+                prev_hash: String::new(),
+                hash: String::new(),
             })?;
-            return Ok(ExecOutcome { allowed: true, rule_ids: d.rule_ids, exit_code: cr.exit_code, stdout: cr.stdout, stderr: cr.stderr });
+            return Ok(ExecOutcome {
+                allowed: true,
+                rule_ids: d.rule_ids,
+                exit_code: cr.exit_code,
+                stdout: cr.stdout,
+                stderr: cr.stderr,
+            });
         }
         // No wired backend: fail closed and audit the denial. This is the whole
         // point of the change — a missing cage is a denial, not a fallback. The
         // `allow_unisolated` escape hatch is honored only for Tier0: Tier1/2
         // demand a real cage, and refusing beats downgrading.
         let refusal: Option<(&str, String)> = if !self.allow_unisolated {
-            Some(("isolation:unavailable", "denied: no isolation backend".into()))
+            Some((
+                "isolation:unavailable",
+                "denied: no isolation backend".into(),
+            ))
         } else if self.tier != Tier::Tier0 {
-            Some(("isolation:downgrade-refused", format!("denied: {:?} never runs unisolated", self.tier)))
+            Some((
+                "isolation:downgrade-refused",
+                format!("denied: {:?} never runs unisolated", self.tier),
+            ))
         } else {
             None
         };
         if let Some((rule, why)) = refusal {
             w.append(Event {
-                seq: 0, ts_wall: now_wall(), session: self.session.clone(),
-                actor: "supervisor".into(), action: "proc.exec".into(),
-                request_hash: argv_hash, decision: "deny".into(),
-                rule_ids: vec![rule.into()], token_rev_id: "root".into(),
-                result: why, bytes: 0, claimed_by: "host".into(),
-                prev_hash: String::new(), hash: String::new(),
+                seq: 0,
+                ts_wall: now_wall(),
+                session: self.session.clone(),
+                actor: "supervisor".into(),
+                action: "proc.exec".into(),
+                request_hash: argv_hash,
+                decision: "deny".into(),
+                rule_ids: vec![rule.into()],
+                token_rev_id: "root".into(),
+                result: why,
+                bytes: 0,
+                claimed_by: "host".into(),
+                prev_hash: String::new(),
+                hash: String::new(),
             })?;
             return Ok(ExecOutcome {
                 allowed: false,
                 rule_ids: vec![rule.into()],
-                exit_code: None, stdout: vec![], stderr: vec![],
+                exit_code: None,
+                stdout: vec![],
+                stderr: vec![],
             });
         }
         // Explicit --unsafe-no-isolation opt-in: unconfined host spawn. Marked in
@@ -217,8 +268,12 @@ impl Supervisor {
                 }
             }
         };
-        let mut stdout = rx_out.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
-        let mut stderr = rx_err.recv_timeout(Duration::from_secs(5)).unwrap_or_default();
+        let mut stdout = rx_out
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or_default();
+        let mut stderr = rx_err
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or_default();
         let mut truncated = timed_out;
         if stdout.len() > cap {
             stdout.truncate(cap);
@@ -229,17 +284,33 @@ impl Supervisor {
             truncated = true;
         }
         w.append(Event {
-            seq: 0, ts_wall: now_wall(), session: self.session.clone(),
-            actor: "supervisor".into(), action: "proc.exec".into(),
-            request_hash: argv_hash, decision: "allow".into(),
-            rule_ids: rule_ids.clone(), token_rev_id: "root".into(),
-            result: format!("exit={:?} truncated={} timeout={}", code, truncated, timed_out),
-            bytes: (stdout.len() + stderr.len()) as u64, claimed_by: "host".into(),
-            prev_hash: String::new(), hash: String::new(),
+            seq: 0,
+            ts_wall: now_wall(),
+            session: self.session.clone(),
+            actor: "supervisor".into(),
+            action: "proc.exec".into(),
+            request_hash: argv_hash,
+            decision: "allow".into(),
+            rule_ids: rule_ids.clone(),
+            token_rev_id: "root".into(),
+            result: format!(
+                "exit={:?} truncated={} timeout={}",
+                code, truncated, timed_out
+            ),
+            bytes: (stdout.len() + stderr.len()) as u64,
+            claimed_by: "host".into(),
+            prev_hash: String::new(),
+            hash: String::new(),
         })?;
         // Ensure caller stream flush ordering is deterministic.
         let _ = std::io::stdout().flush();
-        Ok(ExecOutcome { allowed: true, rule_ids, exit_code: code, stdout, stderr })
+        Ok(ExecOutcome {
+            allowed: true,
+            rule_ids,
+            exit_code: code,
+            stdout,
+            stderr,
+        })
     }
 
     /// Fetch via egress proxy + broker (M2). Guest never dials or holds secrets.
@@ -272,48 +343,93 @@ impl Supervisor {
             };
             if revocation.is_revoked(t) || !authorized {
                 w.append(Event {
-                    seq: 0, ts_wall: now_wall(), session: self.session.clone(),
-                    actor: "agent".into(), action: format!("http.request {method} {alias_or_host}{path}"),
-                    request_hash: "net".into(), decision: "deny".into(),
-                    rule_ids: vec!["token:deny".into()], token_rev_id: t.rev_id.clone(),
-                    result: "token-denied".into(), bytes: 0, claimed_by: "host".into(),
-                    prev_hash: String::new(), hash: String::new(),
+                    seq: 0,
+                    ts_wall: now_wall(),
+                    session: self.session.clone(),
+                    actor: "agent".into(),
+                    action: format!("http.request {method} {alias_or_host}{path}"),
+                    request_hash: "net".into(),
+                    decision: "deny".into(),
+                    rule_ids: vec!["token:deny".into()],
+                    token_rev_id: t.rev_id.clone(),
+                    result: "token-denied".into(),
+                    bytes: 0,
+                    claimed_by: "host".into(),
+                    prev_hash: String::new(),
+                    hash: String::new(),
                 })?;
-                return Ok(FetchOutcome { allowed: false, need_approval: false, rule_ids: vec!["token:deny".into()], body: String::new() });
+                return Ok(FetchOutcome {
+                    allowed: false,
+                    need_approval: false,
+                    rule_ids: vec!["token:deny".into()],
+                    body: String::new(),
+                });
             }
         }
         // Approval gate: pause for out-of-band decision, timeout = deny.
-        if pd.allow && self.policy.needs_approval("http.request", Some(method), Some(alias_or_host)) && !approved {
+        if pd.allow
+            && self
+                .policy
+                .needs_approval("http.request", Some(method), Some(alias_or_host))
+            && !approved
+        {
             w.append(Event {
-                seq: 0, ts_wall: now_wall(), session: self.session.clone(),
-                actor: "agent".into(), action: format!("http.request {method} {alias_or_host}{path}"),
-                request_hash: "net".into(), decision: "need_approval".into(),
-                rule_ids: vec!["approval:required".into()], token_rev_id: token.map(|t| t.rev_id.clone()).unwrap_or_default(),
-                result: "paused-for-approval".into(), bytes: 0, claimed_by: "host".into(),
-                prev_hash: String::new(), hash: String::new(),
+                seq: 0,
+                ts_wall: now_wall(),
+                session: self.session.clone(),
+                actor: "agent".into(),
+                action: format!("http.request {method} {alias_or_host}{path}"),
+                request_hash: "net".into(),
+                decision: "need_approval".into(),
+                rule_ids: vec!["approval:required".into()],
+                token_rev_id: token.map(|t| t.rev_id.clone()).unwrap_or_default(),
+                result: "paused-for-approval".into(),
+                bytes: 0,
+                claimed_by: "host".into(),
+                prev_hash: String::new(),
+                hash: String::new(),
             })?;
-            return Ok(FetchOutcome { allowed: false, need_approval: true, rule_ids: vec!["approval:required".into()], body: String::new() });
+            return Ok(FetchOutcome {
+                allowed: false,
+                need_approval: true,
+                rule_ids: vec!["approval:required".into()],
+                body: String::new(),
+            });
         }
         w.append(Event {
-            seq: 0, ts_wall: now_wall(), session: self.session.clone(),
-            actor: "agent".into(), action: format!("http.request {method} {alias_or_host}{path}"),
+            seq: 0,
+            ts_wall: now_wall(),
+            session: self.session.clone(),
+            actor: "agent".into(),
+            action: format!("http.request {method} {alias_or_host}{path}"),
             request_hash: "net".into(),
             decision: if pd.allow { "allow" } else { "deny" }.into(),
-            rule_ids: pd.rule_ids.clone(), token_rev_id: "root".into(),
-            result: "proxy-intent".into(), bytes: 0, claimed_by: "host".into(),
-            prev_hash: String::new(), hash: String::new(),
+            rule_ids: pd.rule_ids.clone(),
+            token_rev_id: "root".into(),
+            result: "proxy-intent".into(),
+            bytes: 0,
+            claimed_by: "host".into(),
+            prev_hash: String::new(),
+            hash: String::new(),
         })?;
         if !pd.allow {
-            return Ok(FetchOutcome { allowed: false, need_approval: false, rule_ids: pd.rule_ids, body: String::new() });
+            return Ok(FetchOutcome {
+                allowed: false,
+                need_approval: false,
+                rule_ids: pd.rule_ids,
+                body: String::new(),
+            });
         }
         // Broker attaches credential upstream (host-side only). Guest sees placeholder.
         let cred_name = self
             .policy
             .credentials
             .iter()
-            .find(|c| c.use_with.eq_ignore_ascii_case(alias_or_host)
-                || (alias_or_host.to_ascii_lowercase().starts_with("github")
-                    && c.use_with.eq_ignore_ascii_case("github")))
+            .find(|c| {
+                c.use_with.eq_ignore_ascii_case(alias_or_host)
+                    || (alias_or_host.to_ascii_lowercase().starts_with("github")
+                        && c.use_with.eq_ignore_ascii_case("github"))
+            })
             .map(|c| c.name.clone());
         let upstream = pd.upstream.clone().unwrap_or_default();
         // Build auth header from broker-injected credential (never goes to guest).
@@ -328,44 +444,97 @@ impl Supervisor {
             Ok(r) => r,
             Err(e) => {
                 w.append(Event {
-                    seq: 0, ts_wall: now_wall(), session: self.session.clone(),
-                    actor: "proxy".into(), action: format!("http.request {method} {alias_or_host}{path}"),
-                    request_hash: "net".into(), decision: "deny".into(),
-                    rule_ids: vec!["proxy-error".into()], token_rev_id: "root".into(),
-                    result: format!("proxy-error: {e}"), bytes: 0, claimed_by: "host".into(),
-                    prev_hash: String::new(), hash: String::new(),
+                    seq: 0,
+                    ts_wall: now_wall(),
+                    session: self.session.clone(),
+                    actor: "proxy".into(),
+                    action: format!("http.request {method} {alias_or_host}{path}"),
+                    request_hash: "net".into(),
+                    decision: "deny".into(),
+                    rule_ids: vec!["proxy-error".into()],
+                    token_rev_id: "root".into(),
+                    result: format!("proxy-error: {e}"),
+                    bytes: 0,
+                    claimed_by: "host".into(),
+                    prev_hash: String::new(),
+                    hash: String::new(),
                 })?;
-                return Ok(FetchOutcome { allowed: false, need_approval: false, rule_ids: vec!["proxy-error".into()], body: String::new() });
+                return Ok(FetchOutcome {
+                    allowed: false,
+                    need_approval: false,
+                    rule_ids: vec!["proxy-error".into()],
+                    body: String::new(),
+                });
             }
         };
         let safe_body = broker.scrub(&String::from_utf8_lossy(&resp.body));
         // Egress damage bound (§8): charge bytes + request after proxy call,
         // fail-closed if over budget. Zero limit = unbounded (back-compat).
         {
-            let max_bytes = if self.policy.limits.egress_bytes == 0 { u64::MAX } else { self.policy.limits.egress_bytes };
-            let max_req = if self.policy.limits.egress_requests == 0 { u64::MAX } else { self.policy.limits.egress_requests };
+            let max_bytes = if self.policy.limits.egress_bytes == 0 {
+                u64::MAX
+            } else {
+                self.policy.limits.egress_bytes
+            };
+            let max_req = if self.policy.limits.egress_requests == 0 {
+                u64::MAX
+            } else {
+                self.policy.limits.egress_requests
+            };
             if !budgets.check(alias_or_host, safe_body.len() as u64, max_bytes, max_req) {
                 w.append(Event {
-                    seq: 0, ts_wall: now_wall(), session: self.session.clone(),
-                    actor: "proxy".into(), action: format!("http.request {method} {alias_or_host}{path}"),
-                    request_hash: "net".into(), decision: "deny".into(),
-                    rule_ids: vec!["budget:exceeded".into()], token_rev_id: token.map(|t| t.rev_id.clone()).unwrap_or_default(),
-                    result: "over-egress-budget".into(), bytes: safe_body.len() as u64, claimed_by: "host".into(),
-                    prev_hash: String::new(), hash: String::new(),
+                    seq: 0,
+                    ts_wall: now_wall(),
+                    session: self.session.clone(),
+                    actor: "proxy".into(),
+                    action: format!("http.request {method} {alias_or_host}{path}"),
+                    request_hash: "net".into(),
+                    decision: "deny".into(),
+                    rule_ids: vec!["budget:exceeded".into()],
+                    token_rev_id: token.map(|t| t.rev_id.clone()).unwrap_or_default(),
+                    result: "over-egress-budget".into(),
+                    bytes: safe_body.len() as u64,
+                    claimed_by: "host".into(),
+                    prev_hash: String::new(),
+                    hash: String::new(),
                 })?;
-                return Ok(FetchOutcome { allowed: false, need_approval: false, rule_ids: vec!["budget:exceeded".into()], body: String::new() });
+                return Ok(FetchOutcome {
+                    allowed: false,
+                    need_approval: false,
+                    rule_ids: vec!["budget:exceeded".into()],
+                    body: String::new(),
+                });
             }
         }
         w.append(Event {
-            seq: 0, ts_wall: now_wall(), session: self.session.clone(),
-            actor: "proxy".into(), action: format!("http.request {method} {alias_or_host}{path}"),
-            request_hash: "net".into(), decision: "allow".into(),
-            rule_ids: pd.rule_ids.clone(), token_rev_id: "root".into(),
-            result: format!("proxied upstream={upstream} status={} cred={}", resp.status, cred_name.as_deref().map(toolcage_broker::Broker::log_id).unwrap_or_else(|| "none".into())),
-            bytes: safe_body.len() as u64, claimed_by: "host".into(),
-            prev_hash: String::new(), hash: String::new(),
+            seq: 0,
+            ts_wall: now_wall(),
+            session: self.session.clone(),
+            actor: "proxy".into(),
+            action: format!("http.request {method} {alias_or_host}{path}"),
+            request_hash: "net".into(),
+            decision: "allow".into(),
+            rule_ids: pd.rule_ids.clone(),
+            token_rev_id: "root".into(),
+            result: format!(
+                "proxied upstream={upstream} status={} cred={}",
+                resp.status,
+                cred_name
+                    .as_deref()
+                    .map(toolcage_broker::Broker::log_id)
+                    .unwrap_or_else(|| "none".into())
+            ),
+            bytes: safe_body.len() as u64,
+            claimed_by: "host".into(),
+            prev_hash: String::new(),
+            hash: String::new(),
         })?;
-        Ok(FetchOutcome { allowed: true, need_approval: false, rule_ids: pd.rule_ids, body: safe_body })
+        Ok(FetchOutcome {
+            allowed: true,
+            need_approval: false,
+            rule_ids: pd.rule_ids,
+            body: safe_body,
+        })
     }
 }
 
@@ -391,15 +560,25 @@ pub struct FetchOutcome {
 pub fn panic_freeze(audit_path: &std::path::Path, reason: &str) -> anyhow::Result<String> {
     let mut w = Writer::open(audit_path)?;
     let e = w.append(Event {
-        seq: 0, ts_wall: now_wall(), session: "supervisor".into(),
-        actor: "operator".into(), action: "panic".into(),
-        request_hash: "panic".into(), decision: "deny-all".into(),
-        rule_ids: vec!["panic:freeze".into()], token_rev_id: String::new(),
+        seq: 0,
+        ts_wall: now_wall(),
+        session: "supervisor".into(),
+        actor: "operator".into(),
+        action: "panic".into(),
+        request_hash: "panic".into(),
+        decision: "deny-all".into(),
+        rule_ids: vec!["panic:freeze".into()],
+        token_rev_id: String::new(),
         result: format!("frozen: {reason}"),
-        bytes: 0, claimed_by: "host".into(),
-        prev_hash: String::new(), hash: String::new(),
+        bytes: 0,
+        claimed_by: "host".into(),
+        prev_hash: String::new(),
+        hash: String::new(),
     })?;
     let taint = audit_path.with_extension("tainted");
-    std::fs::write(&taint, format!("tainted at {} head {}\n", e.ts_wall, e.hash))?;
+    std::fs::write(
+        &taint,
+        format!("tainted at {} head {}\n", e.ts_wall, e.hash),
+    )?;
     Ok(e.hash)
 }

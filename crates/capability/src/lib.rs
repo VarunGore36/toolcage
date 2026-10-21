@@ -33,7 +33,8 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Rights {    #[serde(default)]
+pub struct Rights {
+    #[serde(default)]
     pub fs_prefixes: Vec<String>,
     #[serde(default)]
     pub net_hosts: Vec<String>,
@@ -121,11 +122,14 @@ fn feed(mac: &mut Hmac<Sha256>, part: &[u8]) {
 /// Unfinalized HMAC over the canonical token body. Length-prefixed fields,
 /// keyed with the host secret (I3).
 fn mac_for(key: &Key, rev_id: &str, parent: &Option<String>, rights: &Rights) -> Hmac<Sha256> {
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key.0)
-        .expect("hmac accepts keys of any length");
+    let mut mac =
+        <Hmac<Sha256> as Mac>::new_from_slice(&key.0).expect("hmac accepts keys of any length");
     feed(&mut mac, rev_id.as_bytes());
     feed(&mut mac, parent.clone().unwrap_or_default().as_bytes());
-    feed(&mut mac, &serde_json::to_vec(rights).expect("rights serialize"));
+    feed(
+        &mut mac,
+        &serde_json::to_vec(rights).expect("rights serialize"),
+    );
     feed(&mut mac, b"toolcage-cap-v1");
     mac
 }
@@ -157,7 +161,12 @@ impl Token {
     /// Mint a root token under the host key.
     pub fn root(key: &Key, rev_id: &str, rights: Rights) -> Self {
         let tag = hex_lower(&mac_for(key, rev_id, &None, &rights).finalize().into_bytes());
-        Self { rev_id: rev_id.into(), parent: None, rights, tag }
+        Self {
+            rev_id: rev_id.into(),
+            parent: None,
+            rights,
+            tag,
+        }
     }
 
     /// Constant-time tag check against the host key. A token minted under any
@@ -190,7 +199,10 @@ impl Token {
         let sub_ins = |child: &[String], parent: &[String], what: &str| -> anyhow::Result<()> {
             let ps: HashSet<_> = parent.iter().map(|s| s.to_ascii_lowercase()).collect();
             for c in child {
-                anyhow::ensure!(ps.contains(&c.to_ascii_lowercase()), "{what} {c} widens parent");
+                anyhow::ensure!(
+                    ps.contains(&c.to_ascii_lowercase()),
+                    "{what} {c} widens parent"
+                );
             }
             Ok(())
         };
@@ -203,7 +215,10 @@ impl Token {
                 anyhow::ensure!(ps.contains(c), "cred {c} widens parent");
             }
         }
-        anyhow::ensure!(narrow.budget_bytes <= self.rights.budget_bytes, "budget widens parent");
+        anyhow::ensure!(
+            narrow.budget_bytes <= self.rights.budget_bytes,
+            "budget widens parent"
+        );
         if self.rights.expires_at != 0 {
             anyhow::ensure!(
                 narrow.expires_at != 0 && narrow.expires_at <= self.rights.expires_at,
@@ -216,18 +231,37 @@ impl Token {
             rights: narrow,
             tag: String::new(),
         };
-        let tag = hex_lower(&mac_for(key, &t.rev_id, &t.parent, &t.rights).finalize().into_bytes());
+        let tag = hex_lower(
+            &mac_for(key, &t.rev_id, &t.parent, &t.rights)
+                .finalize()
+                .into_bytes(),
+        );
         Ok(Token { tag, ..t })
     }
 
     /// Authorize a request against this token (policy checked separately).
     /// Enforces expiry (fail-closed) and normalizes fs paths lexically so
     /// `/workspace/../etc` cannot bypass a `/workspace` prefix grant.
-    pub fn allows(&self, key: &Key, fs_path: Option<&str>, host: Option<&str>, method: Option<&str>, cred: Option<&str>) -> bool {
+    pub fn allows(
+        &self,
+        key: &Key,
+        fs_path: Option<&str>,
+        host: Option<&str>,
+        method: Option<&str>,
+        cred: Option<&str>,
+    ) -> bool {
         self.allows_at(key, fs_path, host, method, cred, now_secs())
     }
 
-    pub fn allows_at(&self, key: &Key, fs_path: Option<&str>, host: Option<&str>, method: Option<&str>, cred: Option<&str>, now: u64) -> bool {
+    pub fn allows_at(
+        &self,
+        key: &Key,
+        fs_path: Option<&str>,
+        host: Option<&str>,
+        method: Option<&str>,
+        cred: Option<&str>,
+        now: u64,
+    ) -> bool {
         if !self.verify_tag(key) {
             return false;
         }
@@ -245,7 +279,12 @@ impl Token {
             }
         }
         if let Some(h) = host {
-            if !self.rights.net_hosts.iter().any(|x| x.eq_ignore_ascii_case(h)) {
+            if !self
+                .rights
+                .net_hosts
+                .iter()
+                .any(|x| x.eq_ignore_ascii_case(h))
+            {
                 return false;
             }
         }
@@ -254,7 +293,12 @@ impl Token {
             // fs/net/cred below). v0 treated empty as "any method" — a wildcard
             // that let attenuate() narrow `methods` to [] and thereby WIDEN
             // the child (found by the 200-seed property test).
-            if !self.rights.methods.iter().any(|x| x.eq_ignore_ascii_case(m)) {
+            if !self
+                .rights
+                .methods
+                .iter()
+                .any(|x| x.eq_ignore_ascii_case(m))
+            {
                 return false;
             }
         }
@@ -313,33 +357,101 @@ mod tests {
     }
     fn root() -> Token {
         // Expiry is wall-clock seconds: use far-future so allows() (real now) passes.
-        Token::root(&key(), "r0", Rights {
-            fs_prefixes: vec!["/workspace".into()],
-            net_hosts: vec!["github".into(), "registry.npmjs.org".into()],
-            methods: vec!["GET".into(), "POST".into()],
-            cred_use: vec!["github_token".into()],
-            budget_bytes: 1000,
-            expires_at: 9_999_999_999,
-        })
+        Token::root(
+            &key(),
+            "r0",
+            Rights {
+                fs_prefixes: vec!["/workspace".into()],
+                net_hosts: vec!["github".into(), "registry.npmjs.org".into()],
+                methods: vec!["GET".into(), "POST".into()],
+                cred_use: vec!["github_token".into()],
+                budget_bytes: 1000,
+                expires_at: 9_999_999_999,
+            },
+        )
     }
     #[test]
     fn narrow_ok_widen_fails() {
         let r = root();
-        let c = r.attenuate(&key(), "r1", Rights {
-            fs_prefixes: vec!["/workspace/a".into()],
-            net_hosts: vec!["github".into()],
-            methods: vec!["GET".into()],
-            cred_use: vec![],
-            budget_bytes: 100,
-            expires_at: 9_999_999_000,
-        }).unwrap();
-        assert!(c.allows(&key(), Some("/workspace/a/f"), Some("github"), Some("GET"), None));
+        let c = r
+            .attenuate(
+                &key(),
+                "r1",
+                Rights {
+                    fs_prefixes: vec!["/workspace/a".into()],
+                    net_hosts: vec!["github".into()],
+                    methods: vec!["GET".into()],
+                    cred_use: vec![],
+                    budget_bytes: 100,
+                    expires_at: 9_999_999_000,
+                },
+            )
+            .unwrap();
+        assert!(c.allows(
+            &key(),
+            Some("/workspace/a/f"),
+            Some("github"),
+            Some("GET"),
+            None
+        ));
         assert!(!c.allows(&key(), Some("/workspace/b"), None, None, None));
         // widen attempts
-        assert!(r.attenuate(&key(), "r2", Rights { fs_prefixes: vec!["/etc".into()], net_hosts: vec![], methods: vec![], cred_use: vec![], budget_bytes: 1, expires_at: 1 }).is_err());
-        assert!(r.attenuate(&key(), "r3", Rights { fs_prefixes: vec![], net_hosts: vec!["evil.com".into()], methods: vec![], cred_use: vec![], budget_bytes: 1, expires_at: 1 }).is_err());
-        assert!(r.attenuate(&key(), "r4", Rights { fs_prefixes: vec![], net_hosts: vec![], methods: vec![], cred_use: vec![], budget_bytes: 99999, expires_at: 1 }).is_err());
-        assert!(r.attenuate(&key(), "r5", Rights { fs_prefixes: vec![], net_hosts: vec![], methods: vec![], cred_use: vec!["github_token".into(), "evil".into()], budget_bytes: 1, expires_at: 1 }).is_err());
+        assert!(r
+            .attenuate(
+                &key(),
+                "r2",
+                Rights {
+                    fs_prefixes: vec!["/etc".into()],
+                    net_hosts: vec![],
+                    methods: vec![],
+                    cred_use: vec![],
+                    budget_bytes: 1,
+                    expires_at: 1
+                }
+            )
+            .is_err());
+        assert!(r
+            .attenuate(
+                &key(),
+                "r3",
+                Rights {
+                    fs_prefixes: vec![],
+                    net_hosts: vec!["evil.com".into()],
+                    methods: vec![],
+                    cred_use: vec![],
+                    budget_bytes: 1,
+                    expires_at: 1
+                }
+            )
+            .is_err());
+        assert!(r
+            .attenuate(
+                &key(),
+                "r4",
+                Rights {
+                    fs_prefixes: vec![],
+                    net_hosts: vec![],
+                    methods: vec![],
+                    cred_use: vec![],
+                    budget_bytes: 99999,
+                    expires_at: 1
+                }
+            )
+            .is_err());
+        assert!(r
+            .attenuate(
+                &key(),
+                "r5",
+                Rights {
+                    fs_prefixes: vec![],
+                    net_hosts: vec![],
+                    methods: vec![],
+                    cred_use: vec!["github_token".into(), "evil".into()],
+                    budget_bytes: 1,
+                    expires_at: 1
+                }
+            )
+            .is_err());
     }
     #[test]
     fn forged_token_minted_without_host_key_is_rejected() {
@@ -347,27 +459,66 @@ mod tests {
         // that reads a token can mint a "sibling" under its own key, but the
         // host key rejects it everywhere — verify_tag and allows both fail.
         let r = root();
-        let forged = Token::root(&other_key(), "evil", Rights {
-            fs_prefixes: vec!["/".into()],
-            net_hosts: vec!["evil.com".into()],
-            methods: vec!["GET".into(), "POST".into(), "DELETE".into()],
-            cred_use: vec!["github_token".into()],
-            budget_bytes: u64::MAX,
-            expires_at: 9_999_999_999,
-        });
-        assert!(!forged.verify_tag(&key()), "forged tag must not verify under the host key");
-        assert!(!forged.allows(&key(), Some("/"), Some("evil.com"), Some("DELETE"), Some("github_token")));
+        let forged = Token::root(
+            &other_key(),
+            "evil",
+            Rights {
+                fs_prefixes: vec!["/".into()],
+                net_hosts: vec!["evil.com".into()],
+                methods: vec!["GET".into(), "POST".into(), "DELETE".into()],
+                cred_use: vec!["github_token".into()],
+                budget_bytes: u64::MAX,
+                expires_at: 9_999_999_999,
+            },
+        );
+        assert!(
+            !forged.verify_tag(&key()),
+            "forged tag must not verify under the host key"
+        );
+        assert!(!forged.allows(
+            &key(),
+            Some("/"),
+            Some("evil.com"),
+            Some("DELETE"),
+            Some("github_token")
+        ));
         // A real token under the host key still verifies; the forged one does
         // not, even though its own tag is internally consistent.
         assert!(r.verify_tag(&key()));
         assert!(forged.verify_tag(&other_key()));
         // Delegation from a forged parent is refused too (fail-closed).
-        assert!(forged.attenuate(&key(), "c", Rights { fs_prefixes: vec![], net_hosts: vec![], methods: vec![], cred_use: vec![], budget_bytes: 1, expires_at: 1 }).is_err());
+        assert!(forged
+            .attenuate(
+                &key(),
+                "c",
+                Rights {
+                    fs_prefixes: vec![],
+                    net_hosts: vec![],
+                    methods: vec![],
+                    cred_use: vec![],
+                    budget_bytes: 1,
+                    expires_at: 1
+                }
+            )
+            .is_err());
     }
     #[test]
     fn revoke_parent_kills_children() {
         let r = root();
-        let c = r.attenuate(&key(), "r1", Rights { fs_prefixes: vec![], net_hosts: vec![], methods: vec![], cred_use: vec![], budget_bytes: 1, expires_at: 1 }).unwrap();
+        let c = r
+            .attenuate(
+                &key(),
+                "r1",
+                Rights {
+                    fs_prefixes: vec![],
+                    net_hosts: vec![],
+                    methods: vec![],
+                    cred_use: vec![],
+                    budget_bytes: 1,
+                    expires_at: 1,
+                },
+            )
+            .unwrap();
         let mut rl = RevocationList::default();
         rl.track(&c);
         assert!(!rl.is_revoked(&c));
@@ -395,17 +546,55 @@ mod tests {
     #[test]
     fn expiry_enforced_and_traversal_denied() {
         let r = root(); // expires_at 9_999_999_999
-        assert!(r.allows_at(&key(), None, Some("github"), Some("GET"), None, 9_999_999_999));
-        assert!(!r.allows_at(&key(), None, Some("github"), Some("GET"), None, 10_000_000_000));
+        assert!(r.allows_at(
+            &key(),
+            None,
+            Some("github"),
+            Some("GET"),
+            None,
+            9_999_999_999
+        ));
+        assert!(!r.allows_at(
+            &key(),
+            None,
+            Some("github"),
+            Some("GET"),
+            None,
+            10_000_000_000
+        ));
         assert!(!r.allows_at(&key(), None, Some("github"), Some("GET"), None, u64::MAX));
         // Traversal outside granted prefix must deny even though string prefix matches.
         // Use allows_at with valid time to isolate the path check from expiry.
-        assert!(!r.allows_at(&key(), Some("/workspace/../etc/passwd"), None, None, None, 1_000_000_000));
-        assert!(r.allows_at(&key(), Some("/workspace/a/../a/f"), None, None, None, 1_000_000_000));
+        assert!(!r.allows_at(
+            &key(),
+            Some("/workspace/../etc/passwd"),
+            None,
+            None,
+            None,
+            1_000_000_000
+        ));
+        assert!(r.allows_at(
+            &key(),
+            Some("/workspace/a/../a/f"),
+            None,
+            None,
+            None,
+            1_000_000_000
+        ));
         // Attenuation cannot smuggle traversal prefix.
-        assert!(r.attenuate(&key(), "rx", Rights {
-            fs_prefixes: vec!["/workspace/../etc".into()], net_hosts: vec![],
-            methods: vec![], cred_use: vec![], budget_bytes: 1, expires_at: 1,
-        }).is_err());
+        assert!(r
+            .attenuate(
+                &key(),
+                "rx",
+                Rights {
+                    fs_prefixes: vec!["/workspace/../etc".into()],
+                    net_hosts: vec![],
+                    methods: vec![],
+                    cred_use: vec![],
+                    budget_bytes: 1,
+                    expires_at: 1,
+                }
+            )
+            .is_err());
     }
 }

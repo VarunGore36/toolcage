@@ -7,7 +7,14 @@ fn sample() -> policy::Policy {
 }
 
 fn net(host: &str) -> policy::Request {
-    policy::Request { action: "http.request".into(), host: Some(host.into()), method: Some("GET".into()), path: Some("/".into()), fs_path: None, argv: None }
+    policy::Request {
+        action: "http.request".into(),
+        host: Some(host.into()),
+        method: Some("GET".into()),
+        path: Some("/".into()),
+        fs_path: None,
+        argv: None,
+    }
 }
 
 #[test]
@@ -32,7 +39,14 @@ fn proxy_alias_cannot_smuggle_host() {
     let p = sample();
     let d = policy::decide(
         &p,
-        &policy::Request { action: "http.request".into(), host: Some("github".into()), method: Some("POST".into()), path: Some("/repos/evil/x".into()), fs_path: None, argv: None },
+        &policy::Request {
+            action: "http.request".into(),
+            host: Some("github".into()),
+            method: Some("POST".into()),
+            path: Some("/repos/evil/x".into()),
+            fs_path: None,
+            argv: None,
+        },
     );
     assert!(!d.allow);
 }
@@ -46,7 +60,14 @@ fn shell_escape_blocked() {
     ] {
         let d = policy::decide(
             &p,
-            &policy::Request { action: "proc.exec".into(), host: None, method: None, path: None, fs_path: None, argv: Some(argv) },
+            &policy::Request {
+                action: "proc.exec".into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: None,
+                argv: Some(argv),
+            },
         );
         assert!(!d.allow);
     }

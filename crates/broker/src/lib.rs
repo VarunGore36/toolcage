@@ -23,8 +23,8 @@
 //! are safe with 192-bit nonce space). Associated data = credential name
 //! (binding ciphertext to its identity). Master key = 32 bytes.
 
-use chacha20poly1305::{XChaCha20Poly1305, KeyInit};
 use chacha20poly1305::aead::{Aead, AeadCore};
+use chacha20poly1305::{KeyInit, XChaCha20Poly1305};
 use generic_array::GenericArray;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
@@ -86,7 +86,10 @@ pub struct MasterKey([u8; MASTER_KEY_LEN]);
 impl MasterKey {
     pub fn from_hex(hex: &str) -> anyhow::Result<Self> {
         let bytes = hex_decode(hex)?;
-        anyhow::ensure!(bytes.len() == MASTER_KEY_LEN, "master key must be 32 bytes (64 hex chars)");
+        anyhow::ensure!(
+            bytes.len() == MASTER_KEY_LEN,
+            "master key must be 32 bytes (64 hex chars)"
+        );
         let mut k = [0u8; MASTER_KEY_LEN];
         k.copy_from_slice(&bytes);
         Ok(Self(k))
@@ -122,7 +125,10 @@ impl Default for Broker {
 
 impl Broker {
     pub fn new() -> Self {
-        Self { creds: HashMap::new(), master_key: None }
+        Self {
+            creds: HashMap::new(),
+            master_key: None,
+        }
     }
 
     /// Load broker from disk: decrypt all credentials with master key.
@@ -136,12 +142,12 @@ impl Broker {
             .map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
         let mut creds = HashMap::new();
         for ec in encrypted {
-            let combined = base64_decode(&ec.encrypted_value)
-                .map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
+            let combined =
+                base64_decode(&ec.encrypted_value).map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
             anyhow::ensure!(combined.len() >= 24, "decrypt: combined too short");
             let (nonce_bytes, ct) = combined.split_at(24);
-            let nonce: GenericArray<u8, <XChaCha20Poly1305 as AeadCore>::NonceSize> = *
-                GenericArray::from_slice(nonce_bytes);
+            let nonce: GenericArray<u8, <XChaCha20Poly1305 as AeadCore>::NonceSize> =
+                *GenericArray::from_slice(nonce_bytes);
             let pt = cipher
                 .decrypt(&nonce, ct)
                 .map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
@@ -159,7 +165,10 @@ impl Broker {
                 },
             );
         }
-        Ok(Self { creds, master_key: Some(key) })
+        Ok(Self {
+            creds,
+            master_key: Some(key),
+        })
     }
 
     /// Save broker to disk: encrypt all credentials with master key.
@@ -189,8 +198,8 @@ impl Broker {
                 encrypted_value: base64_encode(&combined),
             });
         }
-        let data = serde_json::to_vec_pretty(&encrypted)
-            .map_err(|e| anyhow::anyhow!("encrypt: {e}"))?;
+        let data =
+            serde_json::to_vec_pretty(&encrypted).map_err(|e| anyhow::anyhow!("encrypt: {e}"))?;
         fs::write(path, data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
         Ok(())
     }
@@ -336,7 +345,10 @@ use base64_engine::BASE64;
 
 fn rand_suffix() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     format!("{:x}", n & 0xffffff)
 }
 
@@ -365,7 +377,10 @@ mod tests {
             expires_at: None,
             encrypted_value: None,
         });
-        assert_eq!(b.inject("github_token", "github", "GET", "/"), Some("s3cr3t"));
+        assert_eq!(
+            b.inject("github_token", "github", "GET", "/"),
+            Some("s3cr3t")
+        );
         assert_eq!(b.inject("github_token", "evil", "GET", "/"), None);
         // Path-bound credential denies outside its prefix.
         b.insert(Credential {
@@ -377,7 +392,10 @@ mod tests {
             expires_at: None,
             encrypted_value: None,
         });
-        assert_eq!(b.inject("scoped", "github", "GET", "/repos/acme/app"), Some("v"));
+        assert_eq!(
+            b.inject("scoped", "github", "GET", "/repos/acme/app"),
+            Some("v")
+        );
         assert_eq!(b.inject("scoped", "github", "GET", "/repos/evil"), None);
         // Scrub strips echo
         assert_eq!(b.scrub("token=s3cr3t ok"), "token=[REDACTED] ok");
@@ -429,7 +447,10 @@ mod tests {
             "0000000000000000000000000000000000000000000000000000000000000000",
         );
         let b2 = Broker::load(&path).unwrap();
-        assert_eq!(b2.inject("gh", "github", "GET", "/repos/acme/app"), Some("supersecret"));
+        assert_eq!(
+            b2.inject("gh", "github", "GET", "/repos/acme/app"),
+            Some("supersecret")
+        );
         assert!(b2.inject("gh", "evil", "GET", "/").is_none()); // dest mismatch
         assert!(b2.inject("gh", "github", "POST", "/").is_none()); // method mismatch
         std::fs::remove_dir_all(&dir).unwrap();

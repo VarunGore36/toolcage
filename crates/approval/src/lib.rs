@@ -37,7 +37,12 @@ pub enum Verdict {
     Deny,
 }
 
-pub fn needs_approval(rules: &[ApprovalRule], action: &str, method: Option<&str>, host: Option<&str>) -> bool {
+pub fn needs_approval(
+    rules: &[ApprovalRule],
+    action: &str,
+    method: Option<&str>,
+    host: Option<&str>,
+) -> bool {
     rules.iter().any(|r| {
         if r.action != action {
             return false;
@@ -69,12 +74,15 @@ impl Queue {
     pub fn request(&mut self, action: &str, host: Option<&str>, method: Option<&str>) -> String {
         self.counter += 1;
         let id = format!("appr-{}", self.counter);
-        self.pending.insert(id.clone(), Pending {
-            id: id.clone(),
-            action: action.into(),
-            host: host.map(|s| s.to_string()),
-            method: method.map(|s| s.to_string()),
-        });
+        self.pending.insert(
+            id.clone(),
+            Pending {
+                id: id.clone(),
+                action: action.into(),
+                host: host.map(|s| s.to_string()),
+                method: method.map(|s| s.to_string()),
+            },
+        );
         id
     }
     pub fn decide(&mut self, id: &str, v: Verdict) -> bool {
@@ -96,9 +104,23 @@ mod tests {
     use super::*;
     #[test]
     fn post_to_github_needs_approval_get_does_not() {
-        let rules = vec![ApprovalRule { action: "http.request".into(), methods: vec!["POST".into()], hosts: vec!["github".into()] }];
-        assert!(needs_approval(&rules, "http.request", Some("POST"), Some("github")));
-        assert!(!needs_approval(&rules, "http.request", Some("GET"), Some("github")));
+        let rules = vec![ApprovalRule {
+            action: "http.request".into(),
+            methods: vec!["POST".into()],
+            hosts: vec!["github".into()],
+        }];
+        assert!(needs_approval(
+            &rules,
+            "http.request",
+            Some("POST"),
+            Some("github")
+        ));
+        assert!(!needs_approval(
+            &rules,
+            "http.request",
+            Some("GET"),
+            Some("github")
+        ));
         let mut q = Queue::default();
         let id = q.request("http.request", Some("github"), Some("POST"));
         assert_eq!(q.resolve(&id), None);

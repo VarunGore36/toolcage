@@ -46,7 +46,12 @@ pub struct RpcErr {
 
 impl RpcResp {
     pub fn ok(id: serde_json::Value, result: serde_json::Value) -> Self {
-        Self { jsonrpc: "2.0".into(), id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0".into(),
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
     pub fn deny(id: serde_json::Value, rules: &[String]) -> Self {
         // Terse model-facing text; orchestrator gets rule ids in result log.
@@ -54,7 +59,10 @@ impl RpcResp {
             jsonrpc: "2.0".into(),
             id,
             result: None,
-            error: Some(RpcErr { code: -32000, message: format!("denied ({})", rules.join(",")) }),
+            error: Some(RpcErr {
+                code: -32000,
+                message: format!("denied ({})", rules.join(",")),
+            }),
         }
     }
 }
@@ -79,7 +87,8 @@ pub fn route(
 ) -> anyhow::Result<serde_json::Value> {
     match name {
         "run_command" => {
-            let argv: Vec<String> = serde_json::from_value(args.get("argv").cloned().unwrap_or_default())?;
+            let argv: Vec<String> =
+                serde_json::from_value(args.get("argv").cloned().unwrap_or_default())?;
             let o = sup.exec(&argv)?;
             if !o.allowed {
                 anyhow::bail!("denied {:?}", o.rule_ids);
@@ -92,12 +101,20 @@ pub fn route(
         }
         "read_file" | "write_file" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("/");
-            let action = if name == "read_file" { "fs.read" } else { "fs.write" };
+            let action = if name == "read_file" {
+                "fs.read"
+            } else {
+                "fs.write"
+            };
             let d = toolcage_policy::decide(
                 &sup.policy,
                 &toolcage_policy::Request {
-                    action: action.into(), host: None, method: None, path: None,
-                    fs_path: Some(path.into()), argv: None,
+                    action: action.into(),
+                    host: None,
+                    method: None,
+                    path: None,
+                    fs_path: Some(path.into()),
+                    argv: None,
                 },
             );
             if !d.allow {
@@ -121,7 +138,9 @@ pub fn route(
             let host = args.get("host").and_then(|v| v.as_str()).unwrap_or("");
             let method = args.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("/");
-            let o = sup.fetch_via_proxy(broker, budgets, proxy, host, method, path, token, revocation, false)?;
+            let o = sup.fetch_via_proxy(
+                broker, budgets, proxy, host, method, path, token, revocation, false,
+            )?;
             if o.need_approval {
                 anyhow::bail!("paused {:?}", o.rule_ids);
             }
@@ -186,8 +205,12 @@ pub fn check_server_cmd(argv: &[String]) -> anyhow::Result<()> {
             limits: Default::default(),
         },
         &toolcage_policy::Request {
-            action: "proc.exec".into(), host: None, method: None, path: None,
-            fs_path: None, argv: Some(argv.to_vec()),
+            action: "proc.exec".into(),
+            host: None,
+            method: None,
+            path: None,
+            fs_path: None,
+            argv: Some(argv.to_vec()),
         },
     );
     anyhow::ensure!(d.allow, "server cmd rejected: shell strings not allowed");
@@ -200,7 +223,8 @@ mod tests {
     #[test]
     fn unknown_tool_rejected() {
         let mut sup = toolcage_supervisor::Supervisor {
-            policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+            policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml"))
+                .unwrap(),
             audit_path: std::env::temp_dir().join("tc-mcp-test.jsonl"),
             session: "t".into(),
             tier: toolcage_backend::Tier::Tier0,
@@ -212,14 +236,25 @@ mod tests {
         let mut budgets = toolcage_proxy::Budgets::default();
         let mut proxy = toolcage_proxy::Proxy::new().unwrap();
         let rl = toolcage_capability::RevocationList::default();
-        assert!(route(&mut sup, &b, &mut proxy, &mut budgets, None, &rl, "nope", &serde_json::json!({})).is_err());
+        assert!(route(
+            &mut sup,
+            &b,
+            &mut proxy,
+            &mut budgets,
+            None,
+            &rl,
+            "nope",
+            &serde_json::json!({})
+        )
+        .is_err());
     }
     #[test]
     fn run_command_without_backend_denies_fail_closed() {
         // run_command must never fall back to a host spawn: with no wired backend
         // (and no explicit opt-in) the tool call is denied, fail-closed.
         let mut sup = toolcage_supervisor::Supervisor {
-            policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+            policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml"))
+                .unwrap(),
             audit_path: std::env::temp_dir().join("tc-mcp-isolation-test.jsonl"),
             session: "t".into(),
             tier: toolcage_backend::Tier::Tier0,
@@ -232,7 +267,17 @@ mod tests {
         let mut proxy = toolcage_proxy::Proxy::new().unwrap();
         let rl = toolcage_capability::RevocationList::default();
         let args = serde_json::json!({"argv": ["/bin/echo", "pwned"]});
-        let e = route(&mut sup, &b, &mut proxy, &mut budgets, None, &rl, "run_command", &args).unwrap_err();
+        let e = route(
+            &mut sup,
+            &b,
+            &mut proxy,
+            &mut budgets,
+            None,
+            &rl,
+            "run_command",
+            &args,
+        )
+        .unwrap_err();
         assert!(e.to_string().contains("isolation:unavailable"), "got: {e}");
     }
     #[test]
@@ -241,7 +286,8 @@ mod tests {
         // (no cap_key wired, or minted under another key) is denied.
         use toolcage_capability::{Key, Rights, Token};
         let mut sup = toolcage_supervisor::Supervisor {
-            policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+            policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml"))
+                .unwrap(),
             audit_path: std::env::temp_dir().join("tc-mcp-token-test.jsonl"),
             session: "t".into(),
             tier: toolcage_backend::Tier::Tier0,
@@ -253,19 +299,39 @@ mod tests {
         let mut budgets = toolcage_proxy::Budgets::default();
         let mut proxy = toolcage_proxy::Proxy::new().unwrap();
         let rl = toolcage_capability::RevocationList::default();
-        let tok = Token::root(&Key::from_bytes([1u8; 32]), "r0", Rights {
-            fs_prefixes: vec!["/workspace".into()],
-            net_hosts: vec![], methods: vec![], cred_use: vec![],
-            budget_bytes: 1, expires_at: 9_999_999_999,
-        });
+        let tok = Token::root(
+            &Key::from_bytes([1u8; 32]),
+            "r0",
+            Rights {
+                fs_prefixes: vec!["/workspace".into()],
+                net_hosts: vec![],
+                methods: vec![],
+                cred_use: vec![],
+                budget_bytes: 1,
+                expires_at: 9_999_999_999,
+            },
+        );
         let args = serde_json::json!({"path": "/workspace/f"});
-        let e = route(&mut sup, &b, &mut proxy, &mut budgets, Some(&tok), &rl, "read_file", &args).unwrap_err();
+        let e = route(
+            &mut sup,
+            &b,
+            &mut proxy,
+            &mut budgets,
+            Some(&tok),
+            &rl,
+            "read_file",
+            &args,
+        )
+        .unwrap_err();
         assert!(e.to_string().contains("token:deny"), "got: {e}");
     }
     #[test]
     fn learn_proposes_denials() {
         let mut l = LearnMode::default();
-        l.record("http_fetch", &serde_json::json!({"host": "new.example.com", "path": "/a"}));
+        l.record(
+            "http_fetch",
+            &serde_json::json!({"host": "new.example.com", "path": "/a"}),
+        );
         let p = l.propose();
         assert!(p.to_string().contains("new.example.com"));
     }

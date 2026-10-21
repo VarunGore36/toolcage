@@ -35,7 +35,19 @@ fn audit_write_failure_denies_action() {
     };
     let b = toolcage_broker::Broker::new();
     // open("not-a-dir/audit.jsonl") fails -> propagate as Err, caller must not act.
-    assert!(s.fetch_via_proxy(&b, &mut toolcage_proxy::Budgets::default(), &mut toolcage_proxy::Proxy::new().unwrap(), "github", "GET", "/", None, &toolcage_capability::RevocationList::default(), true).is_err());
+    assert!(s
+        .fetch_via_proxy(
+            &b,
+            &mut toolcage_proxy::Budgets::default(),
+            &mut toolcage_proxy::Proxy::new().unwrap(),
+            "github",
+            "GET",
+            "/",
+            None,
+            &toolcage_capability::RevocationList::default(),
+            true
+        )
+        .is_err());
     let _ = std::fs::remove_file(&dir);
 }
 
@@ -56,7 +68,19 @@ fn broker_unreachable_denies_cred_use() {
     std::fs::create_dir_all(&dir).unwrap();
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
-    let o = sup_at(&audit).fetch_via_proxy(&b, &mut toolcage_proxy::Budgets::default(), &mut toolcage_proxy::Proxy::new().unwrap(), "github", "GET", "/repos/acme/app/issues/1", None, &toolcage_capability::RevocationList::default(), true).unwrap();
+    let o = sup_at(&audit)
+        .fetch_via_proxy(
+            &b,
+            &mut toolcage_proxy::Budgets::default(),
+            &mut toolcage_proxy::Proxy::new().unwrap(),
+            "github",
+            "GET",
+            "/repos/acme/app/issues/1",
+            None,
+            &toolcage_capability::RevocationList::default(),
+            true,
+        )
+        .unwrap();
     // No credential injected -> proxy connects without auth header; body has no secret.
     assert!(o.allowed);
     assert!(!o.body.contains("s3cr3t"));
@@ -74,29 +98,49 @@ fn revoked_token_denied_and_audited() {
     std::fs::create_dir_all(&dir).unwrap();
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
-    let root = Token::root(&key, "r0", Rights {
-        fs_prefixes: vec!["/workspace".into()],
-        net_hosts: vec!["github".into()],
-        methods: vec!["GET".into()],
-        cred_use: vec![],
-        budget_bytes: 1000,
-        expires_at: 9_999_999_999,
-    });
-    let child = root.attenuate(&key, "r1", Rights {
-        fs_prefixes: vec![],
-        net_hosts: vec!["github".into()],
-        methods: vec!["GET".into()],
-        cred_use: vec![],
-        budget_bytes: 10,
-        expires_at: 9_999_999_000,
-    }).unwrap();
+    let root = Token::root(
+        &key,
+        "r0",
+        Rights {
+            fs_prefixes: vec!["/workspace".into()],
+            net_hosts: vec!["github".into()],
+            methods: vec!["GET".into()],
+            cred_use: vec![],
+            budget_bytes: 1000,
+            expires_at: 9_999_999_999,
+        },
+    );
+    let child = root
+        .attenuate(
+            &key,
+            "r1",
+            Rights {
+                fs_prefixes: vec![],
+                net_hosts: vec!["github".into()],
+                methods: vec!["GET".into()],
+                cred_use: vec![],
+                budget_bytes: 10,
+                expires_at: 9_999_999_000,
+            },
+        )
+        .unwrap();
     let mut rl = RevocationList::default();
     rl.track(&child);
     rl.revoke("r0");
     let mut s = sup_at(&audit);
     s.cap_key = Some(key);
     let o = s
-        .fetch_via_proxy(&toolcage_broker::Broker::new(), &mut toolcage_proxy::Budgets::default(), &mut toolcage_proxy::Proxy::new().unwrap(), "github", "GET", "/", Some(&child), &rl, true)
+        .fetch_via_proxy(
+            &toolcage_broker::Broker::new(),
+            &mut toolcage_proxy::Budgets::default(),
+            &mut toolcage_proxy::Proxy::new().unwrap(),
+            "github",
+            "GET",
+            "/",
+            Some(&child),
+            &rl,
+            true,
+        )
         .unwrap();
     assert!(!o.allowed && !o.need_approval);
     assert!(o.rule_ids.contains(&"token:deny".to_string()));
@@ -113,13 +157,33 @@ fn over_egress_budget_denies_fail_closed() {
     std::fs::create_dir_all(&dir).unwrap();
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
-    let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "c".into(), tier: toolcage_backend::Tier::Tier0, backend: None, allow_unisolated: false, cap_key: None };
+    let sup = toolcage_supervisor::Supervisor {
+        policy: pol,
+        audit_path: audit,
+        session: "c".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: false,
+        cap_key: None,
+    };
     let b = toolcage_broker::Broker::new();
     let rl = toolcage_capability::RevocationList::default();
     let mut budgets = toolcage_proxy::Budgets::default();
     let mut proxy = toolcage_proxy::Proxy::new().unwrap();
     // Proxy connects, gets response > 10B budget -> budget:exceeded denial.
-    let o = sup.fetch_via_proxy(&b, &mut budgets, &mut proxy, "github", "GET", "/repos/acme/app/issues/1", None, &rl, true).unwrap();
+    let o = sup
+        .fetch_via_proxy(
+            &b,
+            &mut budgets,
+            &mut proxy,
+            "github",
+            "GET",
+            "/repos/acme/app/issues/1",
+            None,
+            &rl,
+            true,
+        )
+        .unwrap();
     assert!(!o.allowed && !o.need_approval);
     assert!(o.rule_ids.contains(&"budget:exceeded".to_string()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -136,7 +200,17 @@ fn disk_full_simulated_by_readonly() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&audit, std::fs::Permissions::from_mode(0o444)).unwrap();
         // Appending may still succeed as root; assert verify still holds either way.
-        let _ = sup_at(&audit).fetch_via_proxy(&toolcage_broker::Broker::new(), &mut toolcage_proxy::Budgets::default(), &mut toolcage_proxy::Proxy::new().unwrap(), "github", "GET", "/", None, &toolcage_capability::RevocationList::default(), true);
+        let _ = sup_at(&audit).fetch_via_proxy(
+            &toolcage_broker::Broker::new(),
+            &mut toolcage_proxy::Budgets::default(),
+            &mut toolcage_proxy::Proxy::new().unwrap(),
+            "github",
+            "GET",
+            "/",
+            None,
+            &toolcage_capability::RevocationList::default(),
+            true,
+        );
         assert!(toolcage_audit::verify(&audit).is_ok());
         std::fs::set_permissions(&audit, std::fs::Permissions::from_mode(0o644)).unwrap();
     }

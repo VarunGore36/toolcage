@@ -3,15 +3,33 @@
 
 #[test]
 fn policy_never_panics_on_garbage() {
-    for s in ["", "\0", "../..", "http://[::1", "A".repeat(8192).as_str(), "github\0evil"] {
+    for s in [
+        "",
+        "\0",
+        "../..",
+        "http://[::1",
+        "A".repeat(8192).as_str(),
+        "github\0evil",
+    ] {
         let p = toolcage_policy::Policy {
-            tool: "fuzz".into(), min_isolation: "tier0".into(),
-            fs: Default::default(), net: Default::default(),
-            credentials: vec![], approval: Default::default(), limits: Default::default(),
+            tool: "fuzz".into(),
+            min_isolation: "tier0".into(),
+            fs: Default::default(),
+            net: Default::default(),
+            credentials: vec![],
+            approval: Default::default(),
+            limits: Default::default(),
         };
         let _ = toolcage_policy::decide(
             &p,
-            &toolcage_policy::Request { action: s.into(), host: Some(s.into()), method: Some(s.into()), path: Some(s.into()), fs_path: Some(s.into()), argv: None },
+            &toolcage_policy::Request {
+                action: s.into(),
+                host: Some(s.into()),
+                method: Some(s.into()),
+                path: Some(s.into()),
+                fs_path: Some(s.into()),
+                argv: None,
+            },
         );
         let _ = toolcage_policy::canonical_path(s);
     }
@@ -40,11 +58,21 @@ fn audit_verify_rejects_random_bytes() {
 #[test]
 fn proxy_never_allows_garbage() {
     let p = toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap();
-    for h in ["", "\n", "..", "169.254.169.254.evil.com", &"x".repeat(5000)] {
+    for h in [
+        "",
+        "\n",
+        "..",
+        "169.254.169.254.evil.com",
+        &"x".repeat(5000),
+    ] {
         let d = toolcage_proxy::decide(&p, h, "GET\x00", h);
         // Either deny, or allow only for exact allowlist match (never for garbage).
         if d.allow {
-            assert!(h.eq_ignore_ascii_case("registry.npmjs.org") || h.eq_ignore_ascii_case("github") || h.to_ascii_lowercase().starts_with("github"));
+            assert!(
+                h.eq_ignore_ascii_case("registry.npmjs.org")
+                    || h.eq_ignore_ascii_case("github")
+                    || h.to_ascii_lowercase().starts_with("github")
+            );
         }
     }
 }

@@ -225,6 +225,8 @@ Third-party MCP servers run as **guest processes** under the same policy and aud
 - **Mutation tests** on the audit log (flip, delete, reorder, truncate)
 - **Tier 0 live isolation tests**: command executes, network namespace blocks egress, Landlock blocks file access, environment is cleared
 
+Live Tier 0 tests **skip loudly** on hosts that can't create unprivileged user namespaces or use Landlock (GitHub's Ubuntu 24.04 runners are one such host — AppArmor blocks userns there), and `run --tier tier0` refuses to start with a clear error instead of downgrading.
+
 Full breakdown: [`docs/TEST_RESULTS.md`](docs/TEST_RESULTS.md).
 
 ### Benchmarks

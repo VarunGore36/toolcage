@@ -78,8 +78,10 @@ enum Cmd {
     },
     Doctor,
     Panic {
-        #[arg(long)] audit: PathBuf,
-        #[arg(long, default_value = "operator panic")] reason: String,
+        #[arg(long)]
+        audit: PathBuf,
+        #[arg(long, default_value = "operator panic")]
+        reason: String,
     },
     Audit {
         #[command(subcommand)]
@@ -89,11 +91,24 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum Audit {
-    Verify { #[arg(long)] log: PathBuf, #[arg(long)] pubkey: Option<PathBuf> },
+    Verify {
+        #[arg(long)]
+        log: PathBuf,
+        #[arg(long)]
+        pubkey: Option<PathBuf>,
+    },
     /// Sign checkpoint over current head (key file = 64 hex chars, 32 bytes).
-    Checkpoint { #[arg(long)] log: PathBuf, #[arg(long)] key_hex: PathBuf },
+    Checkpoint {
+        #[arg(long)]
+        log: PathBuf,
+        #[arg(long)]
+        key_hex: PathBuf,
+    },
     /// Generate Ed25519 keypair (linux /dev/urandom); prints hex pubkey.
-    Keygen { #[arg(long)] out_prefix: PathBuf },
+    Keygen {
+        #[arg(long)]
+        out_prefix: PathBuf,
+    },
 }
 
 type AuditOp = Audit;
@@ -102,31 +117,45 @@ type AuditOp = Audit;
 enum McpOp {
     /// Serve stdio JSON-RPC (tools/call x4).
     Serve {
-        #[arg(long)] policy: PathBuf,
-        #[arg(long)] audit: PathBuf,
+        #[arg(long)]
+        policy: PathBuf,
+        #[arg(long)]
+        audit: PathBuf,
         /// Isolation tier for run_command (guest processes are contained here).
-        #[arg(long, default_value = "tier0")] tier: String,
+        #[arg(long, default_value = "tier0")]
+        tier: String,
         /// Host path bind-mounted as `/workspace` inside Tier0 (defaults to cwd).
-        #[arg(long, default_value = ".")] workspace: PathBuf,
+        #[arg(long, default_value = ".")]
+        workspace: PathBuf,
         /// ESCAPE HATCH: run tools UNCONFINED on the host (tier0 only, never tier1/2).
-        #[arg(long, default_value_t = false)] unsafe_no_isolation: bool,
+        #[arg(long, default_value_t = false)]
+        unsafe_no_isolation: bool,
         /// Capability HMAC key file (64 hex chars) for token verification.
-        #[arg(long)] key_hex: Option<PathBuf>,
+        #[arg(long)]
+        key_hex: Option<PathBuf>,
     },
     /// Single call (for tests): --name run_command --args-json '{...}'.
     Call {
-        #[arg(long)] policy: PathBuf,
-        #[arg(long)] audit: PathBuf,
-        #[arg(long)] name: String,
-        #[arg(long, default_value = "{}")] args_json: String,
+        #[arg(long)]
+        policy: PathBuf,
+        #[arg(long)]
+        audit: PathBuf,
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value = "{}")]
+        args_json: String,
         /// Isolation tier for run_command (guest processes are contained here).
-        #[arg(long, default_value = "tier0")] tier: String,
+        #[arg(long, default_value = "tier0")]
+        tier: String,
         /// Host path bind-mounted as `/workspace` inside Tier0 (defaults to cwd).
-        #[arg(long, default_value = ".")] workspace: PathBuf,
+        #[arg(long, default_value = ".")]
+        workspace: PathBuf,
         /// ESCAPE HATCH: run tools UNCONFINED on the host (tier0 only, never tier1/2).
-        #[arg(long, default_value_t = false)] unsafe_no_isolation: bool,
+        #[arg(long, default_value_t = false)]
+        unsafe_no_isolation: bool,
         /// Capability HMAC key file (64 hex chars) for token verification.
-        #[arg(long)] key_hex: Option<PathBuf>,
+        #[arg(long)]
+        key_hex: Option<PathBuf>,
     },
 }
 
@@ -160,7 +189,10 @@ fn wire_backend(
         toolcage_backend::Tier::Tier2 => Box::new(toolcage_backend_fc::FcBackend::new()),
     };
     if !b.honors(&pol.min_isolation) {
-        eprintln!("denied: backend {tier_str} cannot honor min_isolation {}", pol.min_isolation);
+        eprintln!(
+            "denied: backend {tier_str} cannot honor min_isolation {}",
+            pol.min_isolation
+        );
         std::process::exit(2);
     }
     if let Err(e) = b.create(spec) {
@@ -182,33 +214,46 @@ fn load_token(p: &Option<PathBuf>) -> anyhow::Result<Option<toolcage_capability:
 enum TokenOp {
     /// Generate the capability HMAC key (host-side secret, 64 hex chars).
     Keygen {
-        #[arg(long)] out_prefix: PathBuf,
+        #[arg(long)]
+        out_prefix: PathBuf,
     },
     /// Mint a root token (signed with the host key).
     Mint {
-        #[arg(long)] rev: String,
-        #[arg(long)] out: PathBuf,
+        #[arg(long)]
+        rev: String,
+        #[arg(long)]
+        out: PathBuf,
         /// Host key file (64 hex chars), from `token keygen`.
-        #[arg(long)] key_hex: PathBuf,
+        #[arg(long)]
+        key_hex: PathBuf,
     },
     /// Attenuate parent token into narrower child.
     Attenuate {
-        #[arg(long)] parent: PathBuf,
-        #[arg(long)] rev: String,
-        #[arg(long)] out: PathBuf,
-        #[arg(long, default_value = "")] hosts: String,
+        #[arg(long)]
+        parent: PathBuf,
+        #[arg(long)]
+        rev: String,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value = "")]
+        hosts: String,
         /// Methods to keep (comma-separated). Empty = inherit the parent's
         /// methods unchanged; an empty set grants nothing on this axis.
-        #[arg(long, default_value = "")] methods: String,
-        #[arg(long, default_value_t = 100)] budget: u64,
+        #[arg(long, default_value = "")]
+        methods: String,
+        #[arg(long, default_value_t = 100)]
+        budget: u64,
         /// Host key file (64 hex chars), from `token keygen`.
-        #[arg(long)] key_hex: PathBuf,
+        #[arg(long)]
+        key_hex: PathBuf,
     },
 }
 
 fn load_key(p: &Option<PathBuf>) -> anyhow::Result<Option<toolcage_capability::Key>> {
     match p {
-        Some(f) => Ok(Some(toolcage_capability::Key::from_hex(&std::fs::read_to_string(f)?)?)),
+        Some(f) => Ok(Some(toolcage_capability::Key::from_hex(
+            &std::fs::read_to_string(f)?,
+        )?)),
         None => Ok(None),
     }
 }
@@ -216,7 +261,14 @@ fn load_key(p: &Option<PathBuf>) -> anyhow::Result<Option<toolcage_capability::K
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Run { policy, audit, tier, workspace, unsafe_no_isolation, argv } => {
+        Cmd::Run {
+            policy,
+            audit,
+            tier,
+            workspace,
+            unsafe_no_isolation,
+            argv,
+        } => {
             let text = std::fs::read_to_string(&policy).with_context(|| "read policy")?;
             let pol = toolcage_policy::load_yaml(&text)?;
             // Fail-closed tier selection: refuse policy the backend cannot honor.
@@ -256,29 +308,77 @@ fn main() -> anyhow::Result<()> {
             let _ = std::io::stderr().flush();
             std::process::exit(o.exit_code.unwrap_or(0));
         }
-        Cmd::CheckNet { policy, host, method, path } => {
+        Cmd::CheckNet {
+            policy,
+            host,
+            method,
+            path,
+        } => {
             let text = std::fs::read_to_string(&policy)?;
             let pol = toolcage_policy::load_yaml(&text)?;
             let d = toolcage_proxy::decide(&pol, &host, &method, &path);
-            println!("{} {:?} {} upstream={:?}", if d.allow { "allow" } else { "deny" }, d.rule_ids, d.reason, d.upstream);
+            println!(
+                "{} {:?} {} upstream={:?}",
+                if d.allow { "allow" } else { "deny" },
+                d.rule_ids,
+                d.reason,
+                d.upstream
+            );
             if !d.allow {
                 std::process::exit(2);
             }
         }
-        Cmd::Fetch { policy, audit, host, method, path, cred, secret_value, approve, token, key_hex } => {
+        Cmd::Fetch {
+            policy,
+            audit,
+            host,
+            method,
+            path,
+            cred,
+            secret_value,
+            approve,
+            token,
+            key_hex,
+        } => {
             let text = std::fs::read_to_string(&policy)?;
             let pol = toolcage_policy::load_yaml(&text)?;
             let cap_key = load_key(&key_hex)?;
-            let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "cli".into(), tier: toolcage_backend::Tier::Tier0, backend: None, allow_unisolated: false, cap_key };
+            let sup = toolcage_supervisor::Supervisor {
+                policy: pol,
+                audit_path: audit,
+                session: "cli".into(),
+                tier: toolcage_backend::Tier::Tier0,
+                backend: None,
+                allow_unisolated: false,
+                cap_key,
+            };
             let mut broker = toolcage_broker::Broker::new();
             if !secret_value.is_empty() {
-                broker.insert(toolcage_broker::Credential { name: cred, value: secret_value, use_with: "github".into(), methods: vec![], paths: vec![], expires_at: None, encrypted_value: None });
+                broker.insert(toolcage_broker::Credential {
+                    name: cred,
+                    value: secret_value,
+                    use_with: "github".into(),
+                    methods: vec![],
+                    paths: vec![],
+                    expires_at: None,
+                    encrypted_value: None,
+                });
             }
             let tok = load_token(&token)?;
             let rl = toolcage_capability::RevocationList::default();
             let mut budgets = toolcage_proxy::Budgets::default();
             let mut proxy = toolcage_proxy::Proxy::new()?;
-            let o = sup.fetch_via_proxy(&broker, &mut budgets, &mut proxy, &host, &method, &path, tok.as_ref(), &rl, approve)?;
+            let o = sup.fetch_via_proxy(
+                &broker,
+                &mut budgets,
+                &mut proxy,
+                &host,
+                &method,
+                &path,
+                tok.as_ref(),
+                &rl,
+                approve,
+            )?;
             if o.need_approval {
                 eprintln!("paused: approval required {:?}", o.rule_ids);
                 std::process::exit(3);
@@ -307,21 +407,38 @@ fn main() -> anyhow::Result<()> {
             TokenOp::Mint { rev, out, key_hex } => {
                 let key = toolcage_capability::Key::from_hex(&std::fs::read_to_string(&key_hex)?)?;
                 // Far-future expiry: allows() enforces wall-clock expiry fail-closed.
-                let t = toolcage_capability::Token::root(&key, &rev, toolcage_capability::Rights {
-                    fs_prefixes: vec!["/workspace".into()],
-                    net_hosts: vec!["github".into(), "registry.npmjs.org".into()],
-                    methods: vec!["GET".into(), "POST".into()],
-                    cred_use: vec!["github_token".into()],
-                    budget_bytes: 1000,
-                    expires_at: 9_999_999_999,
-                });
+                let t = toolcage_capability::Token::root(
+                    &key,
+                    &rev,
+                    toolcage_capability::Rights {
+                        fs_prefixes: vec!["/workspace".into()],
+                        net_hosts: vec!["github".into(), "registry.npmjs.org".into()],
+                        methods: vec!["GET".into(), "POST".into()],
+                        cred_use: vec!["github_token".into()],
+                        budget_bytes: 1000,
+                        expires_at: 9_999_999_999,
+                    },
+                );
                 std::fs::write(&out, serde_json::to_string_pretty(&t)?)?;
                 println!("minted {rev} -> {}", out.display());
             }
-            TokenOp::Attenuate { parent, rev, out, hosts, methods, budget, key_hex } => {
+            TokenOp::Attenuate {
+                parent,
+                rev,
+                out,
+                hosts,
+                methods,
+                budget,
+                key_hex,
+            } => {
                 let key = toolcage_capability::Key::from_hex(&std::fs::read_to_string(&key_hex)?)?;
-                let p: toolcage_capability::Token = serde_json::from_str(&std::fs::read_to_string(&parent)?)?;
-                let hs: Vec<String> = if hosts.is_empty() { vec![] } else { hosts.split(',').map(|s| s.to_string()).collect() };
+                let p: toolcage_capability::Token =
+                    serde_json::from_str(&std::fs::read_to_string(&parent)?)?;
+                let hs: Vec<String> = if hosts.is_empty() {
+                    vec![]
+                } else {
+                    hosts.split(',').map(|s| s.to_string()).collect()
+                };
                 // Empty --methods = inherit parent's methods (narrowing is
                 // per-axis: unchanged on an axis is still <= the parent).
                 let ms: Vec<String> = if methods.is_empty() {
@@ -331,27 +448,46 @@ fn main() -> anyhow::Result<()> {
                 };
                 // Child expiry: 1h from now, clamped to parent expiry so attenuation
                 // never widens (and stays usable with wall-clock enforcement).
-                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-                let child_exp = if p.rights.expires_at == 0 { now + 3600 } else { p.rights.expires_at.min(now + 3600) };
-                let c = p.attenuate(&key, &rev, toolcage_capability::Rights {
-                    fs_prefixes: vec![],
-                    net_hosts: hs,
-                    methods: ms,
-                    cred_use: vec![],
-                    budget_bytes: budget.min(p.rights.budget_bytes),
-                    expires_at: child_exp,
-                })?;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                let child_exp = if p.rights.expires_at == 0 {
+                    now + 3600
+                } else {
+                    p.rights.expires_at.min(now + 3600)
+                };
+                let c = p.attenuate(
+                    &key,
+                    &rev,
+                    toolcage_capability::Rights {
+                        fs_prefixes: vec![],
+                        net_hosts: hs,
+                        methods: ms,
+                        cred_use: vec![],
+                        budget_bytes: budget.min(p.rights.budget_bytes),
+                        expires_at: child_exp,
+                    },
+                )?;
                 std::fs::write(&out, serde_json::to_string_pretty(&c)?)?;
                 println!("attenuated {} -> {rev}", p.rev_id);
             }
         },
         Cmd::Mcp { op } => match op {
-            McpOp::Serve { policy, audit, tier, workspace, unsafe_no_isolation, key_hex } => {
+            McpOp::Serve {
+                policy,
+                audit,
+                tier,
+                workspace,
+                unsafe_no_isolation,
+                key_hex,
+            } => {
                 let text = std::fs::read_to_string(&policy)?;
                 let pol = toolcage_policy::load_yaml(&text)?;
                 let t = toolcage_backend::Tier::parse(&tier)?;
                 let cap_key = load_key(&key_hex)?;
-                let workspace = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
+                let workspace =
+                    std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
                 let spec = toolcage_backend::SessionSpec {
                     id: format!("mcp-{}", std::process::id()),
                     tier: t,
@@ -363,8 +499,13 @@ fn main() -> anyhow::Result<()> {
                 // audit trail as `run` — a poisoned tool is a sandboxed process.
                 let backend = wire_backend(&tier, t, &pol, &spec, unsafe_no_isolation);
                 let mut sup = toolcage_supervisor::Supervisor {
-                    policy: pol, audit_path: audit, session: spec.id.clone(), tier: t,
-                    backend, allow_unisolated: unsafe_no_isolation, cap_key,
+                    policy: pol,
+                    audit_path: audit,
+                    session: spec.id.clone(),
+                    tier: t,
+                    backend,
+                    allow_unisolated: unsafe_no_isolation,
+                    cap_key,
                 };
                 let broker = toolcage_broker::Broker::new();
                 let mut proxy = toolcage_proxy::Proxy::new()?;
@@ -378,33 +519,60 @@ fn main() -> anyhow::Result<()> {
                     let req: toolcage_mcp::RpcReq = match serde_json::from_str(&line) {
                         Ok(r) => r,
                         Err(e) => {
-                            let r = toolcage_mcp::RpcResp::deny(serde_json::Value::Null, &[format!("bad-request:{e}")]);
+                            let r = toolcage_mcp::RpcResp::deny(
+                                serde_json::Value::Null,
+                                &[format!("bad-request:{e}")],
+                            );
                             println!("{}", serde_json::to_string(&r)?);
                             continue;
                         }
                     };
                     let resp = if req.method == "tools/call" {
                         match serde_json::from_value::<toolcage_mcp::CallParams>(req.params) {
-                            Ok(cp) => match toolcage_mcp::route(&mut sup, &broker, &mut proxy, &mut toolcage_proxy::Budgets::default(), None, &toolcage_capability::RevocationList::default(), &cp.name, &cp.arguments) {
+                            Ok(cp) => match toolcage_mcp::route(
+                                &mut sup,
+                                &broker,
+                                &mut proxy,
+                                &mut toolcage_proxy::Budgets::default(),
+                                None,
+                                &toolcage_capability::RevocationList::default(),
+                                &cp.name,
+                                &cp.arguments,
+                            ) {
                                 Ok(v) => toolcage_mcp::RpcResp::ok(req.id, v),
                                 Err(e) => toolcage_mcp::RpcResp::deny(req.id, &[e.to_string()]),
                             },
-                            Err(e) => toolcage_mcp::RpcResp::deny(req.id, &[format!("bad-params:{e}")]),
+                            Err(e) => {
+                                toolcage_mcp::RpcResp::deny(req.id, &[format!("bad-params:{e}")])
+                            }
                         }
                     } else if req.method == "tools/list" {
-                        toolcage_mcp::RpcResp::ok(req.id, serde_json::json!({"tools": ["run_command","read_file","write_file","http_fetch"]}))
+                        toolcage_mcp::RpcResp::ok(
+                            req.id,
+                            serde_json::json!({"tools": ["run_command","read_file","write_file","http_fetch"]}),
+                        )
                     } else {
                         toolcage_mcp::RpcResp::deny(req.id, &["unknown-method".into()])
                     };
                     println!("{}", serde_json::to_string(&resp)?);
                 }
             }
-            McpOp::Call { policy, audit, name, args_json, tier, workspace, unsafe_no_isolation, key_hex } => {
+            McpOp::Call {
+                policy,
+                audit,
+                name,
+                args_json,
+                tier,
+                workspace,
+                unsafe_no_isolation,
+                key_hex,
+            } => {
                 let text = std::fs::read_to_string(&policy)?;
                 let pol = toolcage_policy::load_yaml(&text)?;
                 let t = toolcage_backend::Tier::parse(&tier)?;
                 let cap_key = load_key(&key_hex)?;
-                let workspace = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
+                let workspace =
+                    std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
                 let spec = toolcage_backend::SessionSpec {
                     id: format!("mcp-call-{}", std::process::id()),
                     tier: t,
@@ -414,13 +582,27 @@ fn main() -> anyhow::Result<()> {
                 };
                 let backend = wire_backend(&tier, t, &pol, &spec, unsafe_no_isolation);
                 let mut sup = toolcage_supervisor::Supervisor {
-                    policy: pol, audit_path: audit, session: spec.id.clone(), tier: t,
-                    backend, allow_unisolated: unsafe_no_isolation, cap_key,
+                    policy: pol,
+                    audit_path: audit,
+                    session: spec.id.clone(),
+                    tier: t,
+                    backend,
+                    allow_unisolated: unsafe_no_isolation,
+                    cap_key,
                 };
                 let broker = toolcage_broker::Broker::new();
                 let mut proxy = toolcage_proxy::Proxy::new()?;
                 let args: serde_json::Value = serde_json::from_str(&args_json)?;
-                match toolcage_mcp::route(&mut sup, &broker, &mut proxy, &mut toolcage_proxy::Budgets::default(), None, &toolcage_capability::RevocationList::default(), &name, &args) {
+                match toolcage_mcp::route(
+                    &mut sup,
+                    &broker,
+                    &mut proxy,
+                    &mut toolcage_proxy::Budgets::default(),
+                    None,
+                    &toolcage_capability::RevocationList::default(),
+                    &name,
+                    &args,
+                ) {
                     Ok(v) => println!("{v}"),
                     Err(e) => {
                         eprintln!("denied: {e}");
@@ -431,11 +613,16 @@ fn main() -> anyhow::Result<()> {
         },
         Cmd::Doctor => {
             let p = toolcage_backend_ns::NsBackend::probe();
-            println!("userns={} cgroup2={} landlock_abi={} seccomp={}", p.userns, p.cgroup2, p.landlock_abi, p.seccomp);
+            println!(
+                "userns={} cgroup2={} landlock_abi={} seccomp={}",
+                p.userns, p.cgroup2, p.landlock_abi, p.seccomp
+            );
             println!("kvm={}", std::path::Path::new("/dev/kvm").exists());
             let gv = toolcage_backend_gv::GvBackend::probe();
             println!("runsc={} version={:?}", gv.runsc_present, gv.runsc_version);
-            let st = std::process::Command::new("bash").arg("scripts/doctor.sh").status();
+            let st = std::process::Command::new("bash")
+                .arg("scripts/doctor.sh")
+                .status();
             if st.is_err() {
                 println!("run scripts/doctor.sh");
             }
@@ -496,7 +683,11 @@ fn main() -> anyhow::Result<()> {
                 let cp = toolcage_audit::sign_checkpoint(0, "GENESIS", "0", &sk)?;
                 std::fs::write(out_prefix.with_extension("secret.hex"), &sk_hex)?;
                 std::fs::write(out_prefix.with_extension("pub.hex"), &cp.pubkey_hex)?;
-                println!("wrote {} + {}", out_prefix.with_extension("secret.hex").display(), out_prefix.with_extension("pub.hex").display());
+                println!(
+                    "wrote {} + {}",
+                    out_prefix.with_extension("secret.hex").display(),
+                    out_prefix.with_extension("pub.hex").display()
+                );
             }
         },
     }
