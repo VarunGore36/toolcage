@@ -446,6 +446,23 @@ mod tests {
     }
 
     #[test]
+    fn budget_persists_across_reload() -> anyhow::Result<()> {
+        // fsync'd budget state must survive a simulated supervisor restart.
+        let dir = std::env::temp_dir().join(format!("tc-budget-persist-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("budgets.json");
+        {
+            let mut b = Budgets::with_path(&path)?;
+            assert!(b.check("github", 100, 1000, 10)?);
+            assert!(b.charge_bytes("github", 50, 1000)?); // 150 bytes, 1 request
+        }
+        let mut b = Budgets::with_path(&path)?;
+        assert!(!b.check("github", 900, 1000, 10)?); // 150 + 900 > 1000
+        assert!(b.check("github", 800, 1000, 10)?); // 150 + 800 <= 1000
+        Ok(())
+    }
+
+    #[test]
     fn blocked_ip_detection() {
         assert!(is_blocked_ip(&"169.254.169.254".parse().unwrap()));
         assert!(is_blocked_ip(&"127.0.0.1".parse().unwrap()));

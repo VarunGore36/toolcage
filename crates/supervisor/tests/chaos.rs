@@ -190,6 +190,38 @@ fn over_egress_budget_denies_fail_closed() {
 }
 
 #[test]
+fn budget_precharge_denies_before_network() {
+    // egress_bytes=10: the request-size estimate (~356 bytes) exceeds the
+    // budget at pre-charge, so the call is denied BEFORE any network dial.
+    // No live fetch happens (hermetic).
+    let mut pol = sample_policy();
+    pol.limits.egress_bytes = 10;
+    pol.limits.egress_requests = 1000;
+    let dir = std::env::temp_dir().join("tc-chaos-precharge");
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let mut s = sup_at(&audit);
+    s.policy = pol;
+    let o = s
+        .fetch_via_proxy(
+            &toolcage_broker::Broker::new(),
+            &mut toolcage_proxy::Budgets::default(),
+            &mut toolcage_proxy::Proxy::new().unwrap(),
+            "github",
+            "GET",
+            "/repos/acme/app/issues/1",
+            None,
+            &toolcage_capability::RevocationList::default(),
+            true,
+        )
+        .unwrap();
+    assert!(!o.allowed && !o.need_approval);
+    assert!(o.rule_ids.contains(&"budget:exceeded".to_string()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn disk_full_simulated_by_readonly() {
     let dir = std::env::temp_dir().join("tc-chaos-ro");
     std::fs::create_dir_all(&dir).unwrap();
