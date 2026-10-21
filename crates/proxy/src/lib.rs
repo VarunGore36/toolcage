@@ -183,6 +183,21 @@ fn is_blocked_ip(addr: &IpAddr) -> bool {
     if octets[0] >= 224 {
         return true;
     }
+    // RFC-1918 private ranges that must never be dialed from a guest:
+    // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16.
+    if octets[0] == 10 {
+        return true;
+    }
+    if octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31 {
+        return true;
+    }
+    if octets[0] == 192 && octets[1] == 168 {
+        return true;
+    }
+    // CGNAT 100.64.0.0/10.
+    if octets[0] == 100 && octets[1] >= 64 && octets[1] <= 127 {
+        return true;
+    }
     false
 }
 
@@ -469,6 +484,19 @@ mod tests {
         assert!(is_blocked_ip(&"0.0.0.0".parse().unwrap()));
         assert!(!is_blocked_ip(&"1.1.1.1".parse().unwrap()));
         assert!(is_blocked_ip(&"::1".parse().unwrap())); // IPv6 loopback blocked
+                                                         // RFC-1918 private ranges must never be dialed from a guest.
+        assert!(is_blocked_ip(&"10.0.0.5".parse().unwrap()));
+        assert!(is_blocked_ip(&"172.16.0.1".parse().unwrap()));
+        assert!(is_blocked_ip(&"172.31.255.254".parse().unwrap()));
+        assert!(!is_blocked_ip(&"172.15.255.255".parse().unwrap())); // outside /12
+        assert!(!is_blocked_ip(&"172.32.0.0".parse().unwrap())); // outside /12
+        assert!(is_blocked_ip(&"192.168.0.1".parse().unwrap()));
+        assert!(is_blocked_ip(&"192.168.255.254".parse().unwrap()));
+        // CGNAT 100.64.0.0/10.
+        assert!(is_blocked_ip(&"100.64.0.1".parse().unwrap()));
+        assert!(is_blocked_ip(&"100.127.255.254".parse().unwrap()));
+        assert!(!is_blocked_ip(&"100.63.255.255".parse().unwrap())); // outside /10
+        assert!(!is_blocked_ip(&"100.128.0.0".parse().unwrap())); // outside /10
     }
 
     #[test]
