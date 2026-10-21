@@ -614,8 +614,8 @@ fn main() -> anyhow::Result<()> {
         Cmd::Doctor => {
             let p = toolcage_backend_ns::NsBackend::probe();
             println!(
-                "userns={} cgroup2={} landlock_abi={} seccomp={}",
-                p.userns, p.cgroup2, p.landlock_abi, p.seccomp
+                "namespaces={} cgroup2={} landlock_abi={} seccomp={}",
+                p.namespaces, p.cgroup2, p.landlock_abi, p.seccomp
             );
             println!("kvm={}", std::path::Path::new("/dev/kvm").exists());
             let gv = toolcage_backend_gv::GvBackend::probe();

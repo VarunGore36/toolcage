@@ -189,7 +189,7 @@ This is **tamper evidence, not tamper prevention.** An attacker who controls the
 
 | Command | Purpose |
 |---|---|
-| `$TC doctor` | Probe userns, cgroup v2, Landlock ABI, seccomp, `/dev/kvm` |
+| `$TC doctor` | Probe the namespace stack (userns/mount/net/ipc/pid/uts), cgroup v2, Landlock ABI, seccomp, `/dev/kvm` |
 | `$TC run --tier T -- <argv>` | Policy check, audit intent, exec with cleared env (1 MiB streaming output cap, 30 s kill), audit outcome. `--unsafe-no-isolation` opts out of the cage (tier0 only, audited) |
 | `$TC check-net --host H --method M --path P` | Proxy decision and upstream resolution, no network touched |
 | `$TC fetch [--token T] [--approve]` | Proxy + broker fetch with dual auth and approval pause; scrubbed body; both steps audited |
@@ -225,7 +225,7 @@ Third-party MCP servers run as **guest processes** under the same policy and aud
 - **Mutation tests** on the audit log (flip, delete, reorder, truncate)
 - **Tier 0 live isolation tests**: command executes, network namespace blocks egress, Landlock blocks file access, environment is cleared
 
-Live Tier 0 tests **skip loudly** on hosts that can't create unprivileged user namespaces or use Landlock (GitHub's Ubuntu 24.04 runners are one such host — AppArmor blocks userns there), and `run --tier tier0` refuses to start with a clear error instead of downgrading.
+Live Tier 0 tests **skip loudly** on hosts that can't provide the namespace stack or Landlock (GitHub's hosted runners allow user namespaces but block mount/net/ipc/pid/uts — probes test the real thing, not sysctls), and `run --tier tier0` refuses to start with a clear error instead of downgrading.
 
 Full breakdown: [`docs/TEST_RESULTS.md`](docs/TEST_RESULTS.md).
 

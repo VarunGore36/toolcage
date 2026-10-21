@@ -9,10 +9,10 @@
 //! argv exec'd. The parent waits (bounded by the supervisor's timeout), reads
 //! capped output and reports the exit code.
 //!
-//! This is a genuine kernel boundary for Tier0. It needs unprivileged user
-//! namespaces (`/proc/sys/kernel/unprivileged_userns_clone`); without them
-//! `exec` fails closed with an error instead of silently falling back to a
-//! direct spawn.
+//! This is a genuine kernel boundary for Tier0. It needs the full namespace
+//! stack (user, mount, net, ipc, pid, uts) and Landlock; where the host can't
+//! provide them, session creation fails closed with an error and the live
+//! tests skip — never a silent fallback to a direct spawn.
 //!
 //! REVIEW: Landlock syscall numbers (444/445/446) and the ruleset struct
 //! layout below match the kernel headers installed on this host
@@ -140,21 +140,24 @@ struct LandlockPathBeneath {
 /// Doctor probe: what the host can provide for Tier0.
 #[derive(Debug, Default)]
 pub struct Probe {
-    pub userns: bool,
+    /// Tier0 namespace stack (userns + mount/net/ipc/pid/uts) probed live.
+    pub namespaces: bool,
     pub cgroup2: bool,
     /// Landlock ABI detected live via `landlock_create_ruleset`; -1 = unavailable.
     pub landlock_abi: i32,
     pub seccomp: bool,
 }
 
-/// Real userns probe: fork a child that tries `unshare(CLONE_NEWUSER)` and
-/// report the outcome. Reading /proc/sys/kernel/unprivileged_userns_clone is
-/// NOT enough — that sysctl is Debian-specific and absent on e.g. Ubuntu 24.04
-/// runners, where AppArmor blocks unprivileged user namespaces while the
-/// sysctl is missing (the old probe said "yes" and every exec died with 126).
-/// The forked child does only async-signal-safe work (unshare + _exit), so
-/// this is safe from a multithreaded caller.
-fn userns_works() -> bool {
+/// Real isolation-namespace probe: fork a child that attempts the exact
+/// namespace stack Tier0 needs (userns + mount/net/ipc/pid/uts) and report the
+/// outcome. Probing `CLONE_NEWUSER` alone is not enough: some hosts (GitHub's
+/// Ubuntu runners) allow user namespaces but block the remaining ones, in
+/// which case every exec dies during setup (exit 126). Reading
+/// /proc/sys/kernel/unprivileged_userns_clone is not enough either — that
+/// sysctl is Debian-specific and absent elsewhere. The forked child does only
+/// async-signal-safe work (unshare + _exit), so this is safe from a
+/// multithreaded caller.
+fn ns_stack_works() -> bool {
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child }) => {
             let mut status: c_int = 0;
@@ -173,7 +176,15 @@ fn userns_works() -> bool {
             }
         }
         Ok(ForkResult::Child) => {
-            let ok = unshare(CloneFlags::CLONE_NEWUSER).is_ok();
+            let ok = unshare(
+                CloneFlags::CLONE_NEWUSER
+                    | CloneFlags::CLONE_NEWNS
+                    | CloneFlags::CLONE_NEWNET
+                    | CloneFlags::CLONE_NEWIPC
+                    | CloneFlags::CLONE_NEWPID
+                    | CloneFlags::CLONE_NEWUTS,
+            )
+            .is_ok();
             unsafe { libc::_exit(if ok { 0 } else { 1 }) };
         }
         Err(_) => false,
@@ -236,7 +247,7 @@ impl NsBackend {
     /// Prerequisite probe for `doctor` (no root needed for the report).
     pub fn probe() -> Probe {
         Probe {
-            userns: userns_works(),
+            namespaces: ns_stack_works(),
             cgroup2: std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").exists(),
             landlock_abi: landlock_abi(),
             seccomp: true,
@@ -268,8 +279,8 @@ impl Backend for NsBackend {
         // them — reject up front with a clear error instead of surfacing a
         // child death code later.
         anyhow::ensure!(
-            userns_works(),
-            "unprivileged user namespaces unavailable on this host; tier0 cannot isolate"
+            ns_stack_works(),
+            "tier0 namespace stack unavailable on this host (needs userns+mount/net/ipc/pid/uts); tier0 cannot isolate"
         );
         anyhow::ensure!(
             landlock_abi() >= 0,
@@ -814,13 +825,13 @@ mod tests {
         // Tier0 refuses to run without Landlock (fail-closed, enforced in
         // create()), so live tests need both userns and Landlock.
         let p = NsBackend::probe();
-        p.userns && p.landlock_abi >= 0
+        p.namespaces && p.landlock_abi >= 0
     }
 
     #[test]
     fn tier0_exec_runs_command() {
         if !isolated() {
-            eprintln!("skip: unprivileged user namespaces unavailable");
+            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-exec-{}", std::process::id()));
@@ -848,7 +859,7 @@ mod tests {
     #[test]
     fn tier0_network_isolated() {
         if !isolated() {
-            eprintln!("skip: unprivileged user namespaces unavailable");
+            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
             return;
         }
         // Helper: try connect() to an external IP. Inside the new network
@@ -916,7 +927,7 @@ mod tests {
     #[test]
     fn tier0_environment_cleared() {
         if !isolated() {
-            eprintln!("skip: unprivileged user namespaces unavailable");
+            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-env-{}", std::process::id()));
@@ -961,7 +972,7 @@ mod tests {
     #[test]
     fn tier0_landlock_blocks_outside_workspace() {
         if !isolated() {
-            eprintln!("skip: unprivileged user namespaces unavailable");
+            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-landlock-{}", std::process::id()));
@@ -1047,7 +1058,7 @@ mod tests {
         //
         // Forced at the chdir site with a workspace that is a regular file.
         if !isolated() {
-            eprintln!("skip: unprivileged user namespaces unavailable");
+            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-childexit-{}", std::process::id()));
@@ -1104,7 +1115,7 @@ mod tests {
         // captured stderr pipe. (Also locks that the message is written in
         // full: v0 hardcoded a length that truncated it.)
         if !isolated() {
-            eprintln!("skip: unprivileged user namespaces unavailable");
+            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-execfail-{}", std::process::id()));
