@@ -1,5 +1,7 @@
 //! REVIEW: bounded exec — timeout kills, over-cap truncates, both audited.
 //! `sleep` killed at 1 s; `yes` truncated at 1 KiB; normal echo unaffected.
+//! These exercise supervisor-level limits only, so they use the explicit
+//! `allow_unisolated` opt-in (the audit outcome is flagged isolation:unisolated).
 fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
     toolcage_supervisor::Supervisor {
         policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
@@ -7,6 +9,7 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         session: "limits".into(),
         tier: toolcage_backend::Tier::Tier0,
         backend: None,
+        allow_unisolated: true,
     }
 }
 

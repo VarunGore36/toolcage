@@ -22,6 +22,10 @@ enum Cmd {
         /// Host path bind-mounted as `/workspace` inside Tier0 (defaults to cwd).
         #[arg(long, default_value = ".")]
         workspace: PathBuf,
+        /// ESCAPE HATCH: run UNCONFINED on the host (tier0 only, never tier1/2).
+        /// Off by default: without a wired backend the call is denied, not downgraded.
+        #[arg(long, default_value_t = false)]
+        unsafe_no_isolation: bool,
         #[arg(trailing_var_arg = true, required = true)]
         argv: Vec<String>,
     },
@@ -97,6 +101,12 @@ enum McpOp {
     Serve {
         #[arg(long)] policy: PathBuf,
         #[arg(long)] audit: PathBuf,
+        /// Isolation tier for run_command (guest processes are contained here).
+        #[arg(long, default_value = "tier0")] tier: String,
+        /// Host path bind-mounted as `/workspace` inside Tier0 (defaults to cwd).
+        #[arg(long, default_value = ".")] workspace: PathBuf,
+        /// ESCAPE HATCH: run tools UNCONFINED on the host (tier0 only, never tier1/2).
+        #[arg(long, default_value_t = false)] unsafe_no_isolation: bool,
     },
     /// Single call (for tests): --name run_command --args-json '{...}'.
     Call {
@@ -104,7 +114,53 @@ enum McpOp {
         #[arg(long)] audit: PathBuf,
         #[arg(long)] name: String,
         #[arg(long, default_value = "{}")] args_json: String,
+        /// Isolation tier for run_command (guest processes are contained here).
+        #[arg(long, default_value = "tier0")] tier: String,
+        /// Host path bind-mounted as `/workspace` inside Tier0 (defaults to cwd).
+        #[arg(long, default_value = ".")] workspace: PathBuf,
+        /// ESCAPE HATCH: run tools UNCONFINED on the host (tier0 only, never tier1/2).
+        #[arg(long, default_value_t = false)] unsafe_no_isolation: bool,
     },
+}
+
+/// Wire the isolation backend for a session. Fail-closed by default: there is
+/// always a backend, and it must honor the policy's min_isolation (exit 2
+/// otherwise). `--unsafe-no-isolation` is the only route to `None`, it is
+/// refused for tier1/tier2 (asking for strong isolation and none at once is a
+/// contradiction), and it always warns — the run is additionally flagged
+/// `isolation:unisolated` in the audit log by the supervisor.
+fn wire_backend(
+    tier_str: &str,
+    t: toolcage_backend::Tier,
+    pol: &toolcage_policy::Policy,
+    spec: &toolcage_backend::SessionSpec,
+    unsafe_no_isolation: bool,
+) -> Option<Box<dyn toolcage_backend::Backend>> {
+    if unsafe_no_isolation {
+        if t != toolcage_backend::Tier::Tier0 {
+            eprintln!("denied: --unsafe-no-isolation conflicts with --tier {tier_str}");
+            std::process::exit(2);
+        }
+        eprintln!(
+            "warning: --unsafe-no-isolation: commands run UNCONFINED on the host \
+             (audited as isolation:unisolated)"
+        );
+        return None;
+    }
+    let mut b: Box<dyn toolcage_backend::Backend> = match t {
+        toolcage_backend::Tier::Tier0 => Box::new(toolcage_backend_ns::NsBackend::new()),
+        toolcage_backend::Tier::Tier1 => Box::new(toolcage_backend_gv::GvBackend::new()),
+        toolcage_backend::Tier::Tier2 => Box::new(toolcage_backend_fc::FcBackend::new()),
+    };
+    if !b.honors(&pol.min_isolation) {
+        eprintln!("denied: backend {tier_str} cannot honor min_isolation {}", pol.min_isolation);
+        std::process::exit(2);
+    }
+    if let Err(e) = b.create(spec) {
+        eprintln!("denied: create isolated session: {e:#}");
+        std::process::exit(2);
+    }
+    Some(b)
 }
 
 fn load_token(p: &Option<PathBuf>) -> anyhow::Result<Option<toolcage_capability::Token>> {
@@ -135,20 +191,11 @@ enum TokenOp {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Run { policy, audit, tier, workspace, argv } => {
+        Cmd::Run { policy, audit, tier, workspace, unsafe_no_isolation, argv } => {
             let text = std::fs::read_to_string(&policy).with_context(|| "read policy")?;
             let pol = toolcage_policy::load_yaml(&text)?;
             // Fail-closed tier selection: refuse policy the backend cannot honor.
             let t = toolcage_backend::Tier::parse(&tier)?;
-            let mut backend: Box<dyn toolcage_backend::Backend> = match t {
-                toolcage_backend::Tier::Tier0 => Box::new(toolcage_backend_ns::NsBackend::new()),
-                toolcage_backend::Tier::Tier1 => Box::new(toolcage_backend_gv::GvBackend::new()),
-                toolcage_backend::Tier::Tier2 => Box::new(toolcage_backend_fc::FcBackend::new()),
-            };
-            if !backend.honors(&pol.min_isolation) {
-                eprintln!("denied: backend {tier} cannot honor min_isolation {}", pol.min_isolation);
-                std::process::exit(2);
-            }
             // Resolve workspace to an absolute path so it works from inside the
             // namespace regardless of cwd changes.
             let workspace = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
@@ -159,13 +206,14 @@ fn main() -> anyhow::Result<()> {
                 workspace_mb: 0, // not enforced yet; cgroup placement lands with the drivers
                 workspace: workspace.display().to_string(),
             };
-            backend.create(&spec).with_context(|| "create isolated session")?;
+            let backend = wire_backend(&tier, t, &pol, &spec, unsafe_no_isolation);
             let mut sup = toolcage_supervisor::Supervisor {
                 policy: pol,
                 audit_path: audit,
                 session: spec.id.clone(),
                 tier: t,
-                backend: Some(backend),
+                backend,
+                allow_unisolated: unsafe_no_isolation,
             };
             let o = sup.exec(&argv)?;
             if let Some(mut b) = sup.backend.take() {
@@ -194,7 +242,7 @@ fn main() -> anyhow::Result<()> {
         Cmd::Fetch { policy, audit, host, method, path, cred, secret_value, approve, token } => {
             let text = std::fs::read_to_string(&policy)?;
             let pol = toolcage_policy::load_yaml(&text)?;
-            let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "cli".into(), tier: toolcage_backend::Tier::Tier0, backend: None };
+            let sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "cli".into(), tier: toolcage_backend::Tier::Tier0, backend: None, allow_unisolated: false };
             let mut broker = toolcage_broker::Broker::new();
             if !secret_value.is_empty() {
                 broker.insert(toolcage_broker::Credential { name: cred, value: secret_value, use_with: "github".into(), methods: vec![], paths: vec![], expires_at: None, encrypted_value: None });
@@ -249,10 +297,25 @@ fn main() -> anyhow::Result<()> {
             }
         },
         Cmd::Mcp { op } => match op {
-            McpOp::Serve { policy, audit } => {
+            McpOp::Serve { policy, audit, tier, workspace, unsafe_no_isolation } => {
                 let text = std::fs::read_to_string(&policy)?;
                 let pol = toolcage_policy::load_yaml(&text)?;
-                let mut sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "mcp".into(), tier: toolcage_backend::Tier::Tier0, backend: None };
+                let t = toolcage_backend::Tier::parse(&tier)?;
+                let workspace = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
+                let spec = toolcage_backend::SessionSpec {
+                    id: format!("mcp-{}", std::process::id()),
+                    tier: t,
+                    mem_mb: pol.limits.memory_mb,
+                    workspace_mb: 0,
+                    workspace: workspace.display().to_string(),
+                };
+                // Tools run as contained guest processes under the same policy and
+                // audit trail as `run` — a poisoned tool is a sandboxed process.
+                let backend = wire_backend(&tier, t, &pol, &spec, unsafe_no_isolation);
+                let mut sup = toolcage_supervisor::Supervisor {
+                    policy: pol, audit_path: audit, session: spec.id.clone(), tier: t,
+                    backend, allow_unisolated: unsafe_no_isolation,
+                };
                 let broker = toolcage_broker::Broker::new();
                 let mut proxy = toolcage_proxy::Proxy::new()?;
                 let stdin = std::io::stdin();
@@ -286,10 +349,23 @@ fn main() -> anyhow::Result<()> {
                     println!("{}", serde_json::to_string(&resp)?);
                 }
             }
-            McpOp::Call { policy, audit, name, args_json } => {
+            McpOp::Call { policy, audit, name, args_json, tier, workspace, unsafe_no_isolation } => {
                 let text = std::fs::read_to_string(&policy)?;
                 let pol = toolcage_policy::load_yaml(&text)?;
-                let mut sup = toolcage_supervisor::Supervisor { policy: pol, audit_path: audit, session: "mcp-call".into(), tier: toolcage_backend::Tier::Tier0, backend: None };
+                let t = toolcage_backend::Tier::parse(&tier)?;
+                let workspace = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
+                let spec = toolcage_backend::SessionSpec {
+                    id: format!("mcp-call-{}", std::process::id()),
+                    tier: t,
+                    mem_mb: pol.limits.memory_mb,
+                    workspace_mb: 0,
+                    workspace: workspace.display().to_string(),
+                };
+                let backend = wire_backend(&tier, t, &pol, &spec, unsafe_no_isolation);
+                let mut sup = toolcage_supervisor::Supervisor {
+                    policy: pol, audit_path: audit, session: spec.id.clone(), tier: t,
+                    backend, allow_unisolated: unsafe_no_isolation,
+                };
                 let broker = toolcage_broker::Broker::new();
                 let mut proxy = toolcage_proxy::Proxy::new()?;
                 let args: serde_json::Value = serde_json::from_str(&args_json)?;

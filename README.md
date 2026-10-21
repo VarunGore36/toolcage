@@ -6,7 +6,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Status: alpha](https://img.shields.io/badge/status-alpha%20%C2%B7%20not%20independently%20reviewed-orange.svg)
-![Tests: 72 passing](https://img.shields.io/badge/tests-72%20passing-brightgreen.svg)
+![Tests: 77 passing](https://img.shields.io/badge/tests-77%20passing-brightgreen.svg)
 ![Rust](https://img.shields.io/badge/built%20with-Rust-black.svg)
 
 [Quickstart](#quickstart) · [Why](#why-toolcage) · [Architecture](#architecture) · [Invariants](#the-seven-invariants) · [Policy](#policy) · [CLI](#cli-reference) · [MCP](#mcp-front-door) · [Limits](#status-and-known-limits) · [Threat model](docs/THREAT_MODEL.md)
@@ -103,6 +103,8 @@ canonicalize at the enforcement point
 
 A tool declares `min_isolation`. If the host can't provide it, the call is **denied and audited**. It is never run at a weaker tier. Tier 0 shares the host kernel; use Tier 1 or 2 for hostile code.
 
+There is no unsandboxed fallback: without a wired isolation backend the call is **denied** (`isolation:unavailable`), never direct-spawned on the host. The only unconfined mode is the explicit `--unsafe-no-isolation` (tier0 only, refused for tier1/2), and those runs are audited as `isolation:unisolated`.
+
 ## The seven invariants
 
 These are the security claims toolcage makes. Each one is tied to a test suite, so a regression is a failing test and not a vibe.
@@ -186,7 +188,7 @@ This is **tamper evidence, not tamper prevention.** An attacker who controls the
 | Command | Purpose |
 |---|---|
 | `$TC doctor` | Probe userns, cgroup v2, Landlock ABI, seccomp, `/dev/kvm` |
-| `$TC run --tier T -- <argv>` | Policy check, audit intent, exec with cleared env (1 MiB streaming output cap, 30 s kill), audit outcome |
+| `$TC run --tier T -- <argv>` | Policy check, audit intent, exec with cleared env (1 MiB streaming output cap, 30 s kill), audit outcome. `--unsafe-no-isolation` opts out of the cage (tier0 only, audited) |
 | `$TC check-net --host H --method M --path P` | Proxy decision and upstream resolution, no network touched |
 | `$TC fetch [--token T] [--approve]` | Proxy + broker fetch with dual auth and approval pause; scrubbed body; both steps audited |
 | `$TC token mint / attenuate` | Create root tokens; delegate narrower ones |
@@ -204,7 +206,7 @@ Clients: [`clients/python/toolcage.py`](clients/python/toolcage.py), [`clients/t
 
 | Tool | Action | Notes |
 |---|---|---|
-| `run_command` | `proc.exec` | argv array; `sh -c` denied |
+| `run_command` | `proc.exec` | argv array; `sh -c` denied; runs inside the `--tier` cage (default tier0), denied without one |
 | `read_file` | `fs.read` | mount-checked |
 | `write_file` | `fs.write` | mount-checked |
 | `http_fetch` | `http.request` | proxy + broker, dual auth |
@@ -213,7 +215,7 @@ Third-party MCP servers run as **guest processes** under the same policy and aud
 
 ## Tests
 
-`cargo test --workspace` runs **72 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
+`cargo test --workspace` runs **77 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
 
 - **Escape suite** against the policy and proxy (I1, I6)
 - **Fuzzing** of the policy, guest-agent, audit, and proxy parsers

@@ -199,12 +199,33 @@ mod tests {
             session: "t".into(),
             tier: toolcage_backend::Tier::Tier0,
             backend: None,
+            allow_unisolated: true,
         };
         let b = toolcage_broker::Broker::new();
         let mut budgets = toolcage_proxy::Budgets::default();
         let mut proxy = toolcage_proxy::Proxy::new().unwrap();
         let rl = toolcage_capability::RevocationList::default();
         assert!(route(&mut sup, &b, &mut proxy, &mut budgets, None, &rl, "nope", &serde_json::json!({})).is_err());
+    }
+    #[test]
+    fn run_command_without_backend_denies_fail_closed() {
+        // run_command must never fall back to a host spawn: with no wired backend
+        // (and no explicit opt-in) the tool call is denied, fail-closed.
+        let mut sup = toolcage_supervisor::Supervisor {
+            policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+            audit_path: std::env::temp_dir().join("tc-mcp-isolation-test.jsonl"),
+            session: "t".into(),
+            tier: toolcage_backend::Tier::Tier0,
+            backend: None,
+            allow_unisolated: false,
+        };
+        let b = toolcage_broker::Broker::new();
+        let mut budgets = toolcage_proxy::Budgets::default();
+        let mut proxy = toolcage_proxy::Proxy::new().unwrap();
+        let rl = toolcage_capability::RevocationList::default();
+        let args = serde_json::json!({"argv": ["/bin/echo", "pwned"]});
+        let e = route(&mut sup, &b, &mut proxy, &mut budgets, None, &rl, "run_command", &args).unwrap_err();
+        assert!(e.to_string().contains("isolation:unavailable"), "got: {e}");
     }
     #[test]
     fn learn_proposes_denials() {

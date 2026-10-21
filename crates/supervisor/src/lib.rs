@@ -8,6 +8,12 @@
 //! - argv hashed (SHA256 with length prefixes), never logged raw: argv can
 //!   carry secrets and prompt-injected strings. Length-prefix avoids
 //!   concatenation ambiguity ("ab"+"c" vs "a"+"bc").
+//! - Fail-closed exec: every tier runs through the wired backend. A missing
+//!   backend is a DENIAL (rule `isolation:unavailable`), never a silent host
+//!   spawn — Tier2 must not quietly degrade to zero isolation. The only
+//!   unconfined path is the explicit `allow_unisolated` operator opt-in, and it
+//!   is marked `isolation:unisolated` in the audit outcome so the log never
+//!   shows an unconfined run as a sandboxed one.
 //! - Output cap 1 MiB post-hoc: Command::output() buffers unbounded BEFORE
 //!   truncate, so a fork-bomb writer can OOM the supervisor. Next step is
 //!   streaming with take(CAP) + kill on overrun; truncation flag already logged.
@@ -34,6 +40,10 @@ pub struct Supervisor {
     pub session: String,
     pub tier: Tier,
     pub backend: Option<Box<dyn Backend>>,
+    /// Explicit operator opt-in to run unconfined (CLI `--unsafe-no-isolation`).
+    /// The ONLY route to a host spawn: with `backend: None` and this flag false,
+    /// `exec` denies (`isolation:unavailable`) instead of falling back.
+    pub allow_unisolated: bool,
 }
 
 pub struct ExecOutcome {
@@ -97,25 +107,53 @@ impl Supervisor {
         if !d.allow {
             return Ok(ExecOutcome { allowed: false, rule_ids: d.rule_ids, exit_code: None, stdout: vec![], stderr: vec![] });
         }
-        // Tier 0 runs inside a real namespace + Landlock + seccomp cage (I1),
-        // Tier 1 runs inside runsc (gVisor). Both go through the wired backend;
-        // otherwise fall back to direct spawn (tests that exercise supervisor-level
-        // limits only).
-        if self.tier == Tier::Tier0 || self.tier == Tier::Tier1 {
-            if let Some(backend) = self.backend.as_mut() {
-                let cr = backend.exec(&self.session, argv)?;
-                w.append(Event {
-                    seq: 0, ts_wall: now_wall(), session: self.session.clone(),
-                    actor: "supervisor".into(), action: "proc.exec".into(),
-                    request_hash: hash_argv(argv), decision: "allow".into(),
-                    rule_ids: d.rule_ids.clone(), token_rev_id: "root".into(),
-                    result: format!("exit={:?} truncated={}", cr.exit_code, cr.truncated),
-                    bytes: (cr.stdout.len() + cr.stderr.len()) as u64, claimed_by: "host".into(),
-                    prev_hash: String::new(), hash: String::new(),
-                })?;
-                return Ok(ExecOutcome { allowed: true, rule_ids: d.rule_ids, exit_code: cr.exit_code, stdout: cr.stdout, stderr: cr.stderr });
-            }
+        // Isolation is mandatory (I1/I6): every tier runs through the wired
+        // backend — Tier 0 = namespaces + Landlock + seccomp, Tier 1 = runsc
+        // (gVisor), Tier 2 = Firecracker. No tier is special-cased here: Tier 2
+        // must never quietly degrade to a host spawn.
+        if let Some(backend) = self.backend.as_mut() {
+            let cr = backend.exec(&self.session, argv)?;
+            w.append(Event {
+                seq: 0, ts_wall: now_wall(), session: self.session.clone(),
+                actor: "supervisor".into(), action: "proc.exec".into(),
+                request_hash: hash_argv(argv), decision: "allow".into(),
+                rule_ids: d.rule_ids.clone(), token_rev_id: "root".into(),
+                result: format!("exit={:?} truncated={}", cr.exit_code, cr.truncated),
+                bytes: (cr.stdout.len() + cr.stderr.len()) as u64, claimed_by: "host".into(),
+                prev_hash: String::new(), hash: String::new(),
+            })?;
+            return Ok(ExecOutcome { allowed: true, rule_ids: d.rule_ids, exit_code: cr.exit_code, stdout: cr.stdout, stderr: cr.stderr });
         }
+        // No wired backend: fail closed and audit the denial. This is the whole
+        // point of the change — a missing cage is a denial, not a fallback. The
+        // `allow_unisolated` escape hatch is honored only for Tier0: Tier1/2
+        // demand a real cage, and refusing beats downgrading.
+        let refusal: Option<(&str, String)> = if !self.allow_unisolated {
+            Some(("isolation:unavailable", "denied: no isolation backend".into()))
+        } else if self.tier != Tier::Tier0 {
+            Some(("isolation:downgrade-refused", format!("denied: {:?} never runs unisolated", self.tier)))
+        } else {
+            None
+        };
+        if let Some((rule, why)) = refusal {
+            w.append(Event {
+                seq: 0, ts_wall: now_wall(), session: self.session.clone(),
+                actor: "supervisor".into(), action: "proc.exec".into(),
+                request_hash: argv_hash, decision: "deny".into(),
+                rule_ids: vec![rule.into()], token_rev_id: "root".into(),
+                result: why, bytes: 0, claimed_by: "host".into(),
+                prev_hash: String::new(), hash: String::new(),
+            })?;
+            return Ok(ExecOutcome {
+                allowed: false,
+                rule_ids: vec![rule.into()],
+                exit_code: None, stdout: vec![], stderr: vec![],
+            });
+        }
+        // Explicit --unsafe-no-isolation opt-in: unconfined host spawn. Marked in
+        // rule_ids AND the audit outcome so the log never shows this as sandboxed.
+        let mut rule_ids = d.rule_ids.clone();
+        rule_ids.push("isolation:unisolated".to_string());
         // env_clear: child never inherits host secrets (I2). Keep only minimal PATH.
         // Streaming cap: read at most cap+1 bytes per stream so a fork-bomb
         // writer cannot OOM the supervisor; overrun sets truncated=true.
@@ -191,14 +229,14 @@ impl Supervisor {
             seq: 0, ts_wall: now_wall(), session: self.session.clone(),
             actor: "supervisor".into(), action: "proc.exec".into(),
             request_hash: argv_hash, decision: "allow".into(),
-            rule_ids: d.rule_ids.clone(), token_rev_id: "root".into(),
+            rule_ids: rule_ids.clone(), token_rev_id: "root".into(),
             result: format!("exit={:?} truncated={} timeout={}", code, truncated, timed_out),
             bytes: (stdout.len() + stderr.len()) as u64, claimed_by: "host".into(),
             prev_hash: String::new(), hash: String::new(),
         })?;
         // Ensure caller stream flush ordering is deterministic.
         let _ = std::io::stdout().flush();
-        Ok(ExecOutcome { allowed: true, rule_ids: d.rule_ids, exit_code: code, stdout, stderr })
+        Ok(ExecOutcome { allowed: true, rule_ids, exit_code: code, stdout, stderr })
     }
 
     /// Fetch via egress proxy + broker (M2). Guest never dials or holds secrets.
