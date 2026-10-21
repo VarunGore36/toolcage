@@ -481,7 +481,7 @@ impl Supervisor {
             } else {
                 self.policy.limits.egress_requests
             };
-            if !budgets.check(alias_or_host, safe_body.len() as u64, max_bytes, max_req) {
+            if !budgets.check(alias_or_host, safe_body.len() as u64, max_bytes, max_req)? {
                 w.append(Event {
                     seq: 0,
                     ts_wall: now_wall(),

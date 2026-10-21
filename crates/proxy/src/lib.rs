@@ -336,7 +336,9 @@ impl Budgets {
         Ok(b)
     }
 
-    /// Persist current budget state to disk atomically.
+    /// Persist current budget state to disk atomically + durably.
+    /// fsyncs the temp file before rename and (best-effort) the parent dir so a
+    /// crash cannot lose committed budget charges.
     fn save(&self) -> anyhow::Result<()> {
         let path = self
             .persist_path
@@ -345,26 +347,54 @@ impl Budgets {
         let data =
             serde_json::to_vec_pretty(self).map_err(|e| anyhow::anyhow!("serialize: {e}"))?;
         let tmp = path.with_extension("tmp");
-        fs::write(&tmp, data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+        {
+            let mut f = fs::File::create(&tmp).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+            f.write_all(&data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+            f.sync_all().map_err(|e| anyhow::anyhow!("fsync: {e}"))?;
+        }
         fs::rename(&tmp, path).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+        if let Some(parent) = path.parent() {
+            if let Ok(f) = fs::File::open(parent) {
+                let _ = f.sync_all();
+            }
+        }
         Ok(())
     }
 
-    pub fn check(&mut self, dest: &str, bytes: u64, max_bytes: u64, max_req: u64) -> bool {
+    /// Charge `bytes` + 1 request to `dest`. Returns Ok(false) when over budget.
+    /// Persist errors fail closed: the call returns Err and nothing is spent.
+    pub fn check(
+        &mut self,
+        dest: &str,
+        bytes: u64,
+        max_bytes: u64,
+        max_req: u64,
+    ) -> anyhow::Result<bool> {
         let b = self.bytes.entry(dest.to_string()).or_insert(0);
         let r = self.requests.entry(dest.to_string()).or_insert(0);
         if *r >= max_req || *b + bytes > max_bytes {
-            return false;
+            return Ok(false);
         }
         *b += bytes;
         *r += 1;
-        // Persist after every successful charge so damage bounds survive restarts.
         if let Some(_path) = &self.persist_path {
-            if let Err(e) = self.save() {
-                eprintln!("budget persist failed: {e}");
-            }
+            self.save()?; // fail-closed: a persist error denies the charge
         }
-        true
+        Ok(true)
+    }
+
+    /// Charge `bytes` to `dest` without counting a new request (true-up after
+    /// an already-authorized transaction). Fail-closed on persist error.
+    pub fn charge_bytes(&mut self, dest: &str, bytes: u64, max_bytes: u64) -> anyhow::Result<bool> {
+        let b = self.bytes.entry(dest.to_string()).or_insert(0);
+        if *b + bytes > max_bytes {
+            return Ok(false);
+        }
+        *b += bytes;
+        if let Some(_path) = &self.persist_path {
+            self.save()?;
+        }
+        Ok(true)
     }
 }
 
@@ -408,10 +438,11 @@ mod tests {
     }
 
     #[test]
-    fn budgets_bound_damage() {
+    fn budgets_bound_damage() -> anyhow::Result<()> {
         let mut b = Budgets::default();
-        assert!(b.check("github", 100, 150, 2));
-        assert!(!b.check("github", 100, 150, 2)); // over bytes
+        assert!(b.check("github", 100, 150, 2)?);
+        assert!(!b.check("github", 100, 150, 2)?); // over bytes
+        Ok(())
     }
 
     #[test]
