@@ -210,6 +210,25 @@ fn load_token(p: &Option<PathBuf>) -> anyhow::Result<Option<toolcage_capability:
     }
 }
 
+/// Decode a 64-char (32-byte) hex string into [u8; 32]. Returns an error
+/// (never panics) on wrong length, odd length, or non-hex input — replaces
+/// the old `hex[2*i..2*i+2]` slicing that panicked on short or non-ASCII input.
+fn parse_hex32(s: &str) -> anyhow::Result<[u8; 32]> {
+    let s = s.trim();
+    let b = s.as_bytes();
+    anyhow::ensure!(
+        b.len() == 64 && b.iter().all(|c| c.is_ascii_hexdigit()),
+        "expected 64 hex chars (32 bytes), got {} chars",
+        b.len()
+    );
+    let mut out = [0u8; 32];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = u8::from_str_radix(&s[2 * i..2 * i + 2], 16)
+            .map_err(|_| anyhow::anyhow!("bad hex at position {}", 2 * i))?;
+    }
+    Ok(out)
+}
+
 #[derive(Subcommand)]
 enum TokenOp {
     /// Generate the capability HMAC key (host-side secret, 64 hex chars).
@@ -657,11 +676,7 @@ fn main() -> anyhow::Result<()> {
                 if let Some(pkf) = pubkey {
                     // REVIEW: pinned-pubkey mode — chain + every sibling
                     // checkpoint must verify, or this fails (no silent skip).
-                    let hex = std::fs::read_to_string(&pkf)?.trim().to_string();
-                    let mut pk = vec![0u8; 32];
-                    for i in 0..32 {
-                        pk[i] = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16)?;
-                    }
+                    let pk = parse_hex32(&std::fs::read_to_string(&pkf)?)?;
                     let (n, head) = toolcage_audit::verify_with_pubkey(&log, Some(&pk))?;
                     println!("ok: {n} events, head {head} (checkpoints verified)");
                 } else {
@@ -670,11 +685,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             Audit::Checkpoint { log, key_hex } => {
-                let hex = std::fs::read_to_string(&key_hex)?.trim().to_string();
-                let mut sk = vec![0u8; 32];
-                for i in 0..32 {
-                    sk[i] = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16)?;
-                }
+                let sk = parse_hex32(&std::fs::read_to_string(&key_hex)?)?;
                 let (n, head) = toolcage_audit::verify(&log)?;
                 let t = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -696,10 +707,7 @@ fn main() -> anyhow::Result<()> {
                 let mut skb = [0u8; 32];
                 rnd.read_exact(&mut skb)?;
                 let sk_hex: String = skb.iter().map(|x| format!("{:02x}", x)).collect();
-                let mut sk = vec![0u8; 32];
-                for i in 0..32 {
-                    sk[i] = u8::from_str_radix(&sk_hex[2 * i..2 * i + 2], 16)?;
-                }
+                let sk = parse_hex32(&sk_hex)?;
                 // REVIEW: pubkey derived locally; secret never leaves host.
                 let cp = toolcage_audit::sign_checkpoint(0, "GENESIS", "0", &sk)?;
                 std::fs::write(out_prefix.with_extension("secret.hex"), &sk_hex)?;
