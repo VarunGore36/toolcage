@@ -16,11 +16,14 @@
 //!
 //! REVIEW: Landlock syscall numbers (444/445/446) and the ruleset struct
 //! layout below match the kernel headers installed on this host
-//! (verified: `landlock_create_ruleset` returns a fd). On other hosts the
-//! landlock layer is skipped if its syscalls are unavailable — namespaces +
-//! seccomp still enforce the network/escaping boundary, and the seccomp
-//! numbers here match x86_64. seccomp for non-x86_64 allows everything
-//! (documented weakening; no Tier0 claim on those archs without porting).
+//! (verified: `landlock_create_ruleset` returns a fd). Landlock is part of the
+//! advertised Tier0 cage and is FAIL-CLOSED: if its syscalls are unavailable
+//! or the ruleset cannot be installed, session creation and the exec'd child
+//! refuse to proceed — a run never degrades silently to namespaces-only.
+//! seccomp stays defense-in-depth (warn and continue where the kernel refuses
+//! it) and the seccomp numbers here match x86_64. seccomp for non-x86_64
+//! allows everything, and Landlock is not ported there — so Tier0 refuses to
+//! run on those archs at all (documented; no Tier0 claim without porting).
 //!
 //! Seccomp blocked (x86_64): socket/accept4/socketpair, clone*/fork/vfork,
 //! unshare/setns, mount/umount2/pivot_root, ptrace, process_vm_writev,
@@ -217,6 +220,13 @@ impl Backend for NsBackend {
             "tier0 backend cannot honor {:?}",
             spec.tier
         );
+        // Landlock is mandatory for Tier0 (fail-closed): the exec'd child
+        // refuses to run without it (exit 124), so reject the session up front
+        // with a clear error instead of surfacing a child death code later.
+        anyhow::ensure!(
+            landlock_abi() >= 0,
+            "landlock unavailable on this host; tier0 refuses to run without the fs boundary"
+        );
         self.sessions.insert(spec.id.clone(), spec.clone());
         Ok(())
     }
@@ -278,8 +288,12 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
 
     let workspace_cstr = CString::new(spec.workspace.as_str())?;
 
-    // Pre-build the seccomp BPF program (allocates a Vec).
-    let seccomp_prog = build_seccomp_prog();
+    // Pre-build the seccomp-BPF instructions (allocates a Vec — pre-fork on
+    // purpose, see the zero-allocation rule above). The Vec must outlive
+    // apply_seccomp: the sock_fprog handed to prctl points into it. v0 bug:
+    // the builder returned a sock_fprog whose Vec was already dropped — a
+    // use-after-free fed to PR_SET_SECCOMP.
+    let seccomp_insns = build_seccomp_insns();
 
     // Pipes for output and handshake.
     let (out_r, out_w) = pipe2(OFlag::O_CLOEXEC)?;
@@ -409,9 +423,15 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
             close(ready_r).ok();
             close(go_w).ok();
 
-            // 1. User namespace: root only inside it.
-            unshare(CloneFlags::CLONE_NEWUSER)
-                .context("unshare CLONE_NEWUSER (try unprivileged_userns_clone)")?;
+            // 1. User namespace: root only inside it. On failure THIS process
+            // must die here: `?` would return into the caller's control flow
+            // and leave a duplicate supervisor running around (see child_die).
+            if unshare(CloneFlags::CLONE_NEWUSER).is_err() {
+                child_die(
+                    126,
+                    b"toolcage: unshare CLONE_NEWUSER failed (unprivileged_userns_clone?)\n",
+                );
+            }
             let _ = unsafe {
                 libc::write(
                     ready_w.as_raw_fd(),
@@ -429,14 +449,17 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
             let _ = unsafe { libc::setresuid(0, 0, 0) };
 
             // 2. Remaining namespaces (backed by capabilities inside the userns).
-            unshare(
+            if unshare(
                 CloneFlags::CLONE_NEWNS
                     | CloneFlags::CLONE_NEWNET
                     | CloneFlags::CLONE_NEWIPC
                     | CloneFlags::CLONE_NEWPID
                     | CloneFlags::CLONE_NEWUTS,
             )
-            .context("unshare mount/net/ipc/pid/uts")?;
+            .is_err()
+            {
+                child_die(126, b"toolcage: unshare mount/net/ipc/pid/uts failed\n");
+            }
 
             // 3. Private mount tree: nothing propagates to the host.
             unsafe {
@@ -450,8 +473,11 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
             }
 
             // Read-only system dirs (guest may read/execute, never write).
-            for sysdir in ["/usr", "/bin", "/lib", "/lib64"] {
-                if Path::new(sysdir).exists() {
+            // CStr literals on purpose: these pointers go to mount(2) as C
+            // strings, and a `&str` would rely on rustc's unspecified trailing
+            // NUL in rodata.
+            for sysdir in [c"/usr", c"/bin", c"/lib", c"/lib64"] {
+                if unsafe { libc::access(sysdir.as_ptr(), libc::F_OK) } == 0 {
                     let _ = unsafe {
                         libc::mount(
                             sysdir.as_ptr() as *const libc::c_char,
@@ -475,31 +501,14 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
 
             // chdir into the workspace.
             if unsafe { libc::chdir(workspace_cstr.as_ptr()) } != 0 {
-                let _ = unsafe {
-                    libc::write(
-                        2,
-                        b"toolcage: chdir workspace failed\n".as_ptr() as *const c_void,
-                        34,
-                    )
-                };
-                unsafe { libc::_exit(125) };
+                child_die(125, b"toolcage: chdir workspace failed\n");
             }
 
             // 4. Landlock filesystem rules (best-effort).
             apply_landlock(&spec.workspace);
 
             // 5. seccomp-BPF: block sockets, namespace/mount/ptrace/module ops.
-            if let Err(e) = apply_seccomp_prebuilt(&seccomp_prog) {
-                let msg = format!("toolcage: seccomp failed: {e}\n");
-                let _ = unsafe {
-                    libc::write(
-                        2,
-                        msg.as_ptr() as *const c_void,
-                        msg.len(),
-                    )
-                };
-                unsafe { libc::_exit(124) };
-            }
+            apply_seccomp(&seccomp_insns);
 
             // env_clear: replace environ with minimal PATH (no secrets leak).
             // Raw pointer manipulation — no allocation.
@@ -554,22 +563,45 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                 )
             };
             if rc == -1 {
-                let _ = unsafe {
-                    libc::write(
-                        2,
-                        b"toolcage: exec failed\n".as_ptr() as *const c_void,
-                        20,
-                    )
-                };
+                child_die(127, b"toolcage: exec failed\n");
             }
+            // execve returns only on failure; the _exit is belt and braces so
+            // this arm stays diverging.
             unsafe { libc::_exit(127) };
         }
         Err(e) => anyhow::bail!("fork failed: {e}"),
     }
 }
 
-/// Build the seccomp-BPF filter program (allocates — call before fork).
-fn build_seccomp_prog() -> sock_fprog {
+// ---------------------------------------------------------------------------
+// Forked-child failure handling (between fork() and execve()): NEVER allocate
+// — the child of a multithreaded parent can deadlock in malloc (another thread
+// may have held the allocator lock at fork). And NEVER `?`/return: a child that
+// returns resumes the CALLER's control flow as a duplicate process. Static
+// byte messages + _exit only.
+// ---------------------------------------------------------------------------
+
+/// Report a fatal child-side failure, then terminate THIS process.
+/// Exit codes: 124 Landlock boundary, 125 chdir, 126 namespace setup, 127 exec.
+fn child_die(code: i32, msg: &[u8]) -> ! {
+    unsafe {
+        libc::write(2, msg.as_ptr() as *const c_void, msg.len());
+        libc::_exit(code as c_int);
+    }
+}
+
+/// Non-fatal child-side warning for best-effort layers (Landlock, seccomp).
+fn child_warn(msg: &[u8]) {
+    unsafe {
+        libc::write(2, msg.as_ptr() as *const c_void, msg.len());
+    }
+}
+
+/// Build the seccomp-BPF filter instructions (allocates — call before fork).
+/// Returns the Vec so the caller owns and keeps it alive: `apply_seccomp`'s
+/// sock_fprog points into this buffer. v0 bug: this returned a bare sock_fprog
+/// whose backing Vec was dropped here — a use-after-free.
+fn build_seccomp_insns() -> Vec<sock_filter> {
     let mut insns: Vec<sock_filter> = Vec::new();
     insns.push(sock_filter {
         code: (BPF_LD | BPF_W | BPF_A) as u16,
@@ -597,32 +629,42 @@ fn build_seccomp_prog() -> sock_fprog {
         jf: 0,
         k: SECCOMP_RET_ALLOW,
     });
-    sock_fprog {
-        len: insns.len() as u16,
-        filter: insns.as_mut_ptr(),
-    }
+    insns
 }
 
-/// Install a pre-built seccomp-BPF program (no allocation).
-fn apply_seccomp_prebuilt(prog: &sock_fprog) -> anyhow::Result<()> {
+/// Install the seccomp-BPF program. No allocation (runs in the forked child):
+/// the sock_fprog lives on this stack and points into `insns`, which the
+/// caller keeps alive across the call.
+///
+/// Tier 0 treats seccomp as defense-in-depth (README "Status and known
+/// limits"): where the kernel refuses the filter (EINVAL on some kernels) or
+/// no_new_privs is unavailable, we warn zero-alloc and continue — namespaces +
+/// Landlock still enforce the boundary.
+fn apply_seccomp(insns: &[sock_filter]) {
     #[cfg(not(target_arch = "x86_64"))]
     {
-        let _ = prog;
-        // Not ported: seccomp allows everything on this arch.
-        Ok(())
+        let _ = insns;
+        // Not ported: seccomp allows everything on this arch (documented
+        // weakening; no Tier0 claim on those archs without porting).
+        child_warn(b"toolcage: seccomp skipped (non-x86_64)\n");
     }
     #[cfg(target_arch = "x86_64")]
     {
+        let prog = sock_fprog {
+            len: insns.len() as u16,
+            filter: insns.as_ptr() as *mut sock_filter,
+        };
         // Make sure no_new_privs is set (required for unprivileged seccomp).
         let r1 = unsafe { prctl(38, 1, 0, 0, 0) }; // PR_SET_NO_NEW_PRIVS = 38
         if r1 != 0 {
-            return Ok(()); // best-effort
+            child_warn(b"toolcage: no_new_privs unavailable, seccomp skipped\n");
+            return;
         }
         let rc = unsafe {
             prctl(
                 22, // PR_SET_SECCOMP
                 SECCOMP_MODE_FILTER as c_ulong,
-                prog as *const sock_fprog as *mut sock_fprog as c_ulong,
+                &prog as *const sock_fprog as c_ulong,
                 0,
                 0,
             )
@@ -630,22 +672,25 @@ fn apply_seccomp_prebuilt(prog: &sock_fprog) -> anyhow::Result<()> {
         if rc != 0 {
             // Seccomp unavailable on this host (EINVAL on some kernels).
             // Namespaces + Landlock still enforce the boundary.
-            let _ = unsafe {
-                libc::write(
-                    2,
-                    b"toolcage: seccomp unavailable, continuing without it\n".as_ptr() as *const c_void,
-                    52,
-                )
-            };
+            child_warn(b"toolcage: seccomp unavailable, continuing without it\n");
         }
-        Ok(())
     }
 }
 
+/// Establish the Landlock filesystem boundary. FAIL-CLOSED (operator
+/// decision): Landlock is part of the advertised Tier 0 cage, so any failure
+/// terminates the forked child (child_die, exit 124) instead of letting the
+/// workload run namespaces-only. No allocation — runs between fork and execve.
 fn apply_landlock(workspace: &str) {
     #[cfg(not(target_arch = "x86_64"))]
     {
         let _ = workspace;
+        // Not ported here, so the fs boundary cannot be established — refuse
+        // to run rather than silently weaken Tier0 (see module header).
+        child_die(
+            124,
+            b"toolcage: landlock not ported on this arch; refusing to run without the fs boundary\n",
+        );
     }
     #[cfg(target_arch = "x86_64")]
     {
@@ -680,11 +725,10 @@ fn apply_landlock(workspace: &str) {
             )
         };
         if ruleset < 0 {
-            eprintln!(
-                "toolcage: landlock create_ruleset unavailable (errno {}), continuing without it",
-                -ruleset
+            child_die(
+                124,
+                b"toolcage: landlock create_ruleset unavailable; refusing to run without the fs boundary\n",
             );
-            return;
         }
         let add_rule = |fd: c_long, path: &str, rights: u64| -> bool {
             let dir = match open(Path::new(path), OFlag::O_PATH | OFlag::O_DIRECTORY, Mode::empty()) {
@@ -714,10 +758,10 @@ fn apply_landlock(workspace: &str) {
         if ok {
             let rc = unsafe { syscall(SYS_LANDLOCK_RESTRICT_SELF, ruleset, 0) };
             if rc < 0 {
-                eprintln!("toolcage: landlock restrict_self failed (errno {})", -rc);
+                child_die(124, b"toolcage: landlock restrict_self failed; refusing to run\n");
             }
         } else {
-            eprintln!("toolcage: landlock add_rule failed, continuing without it");
+            child_die(124, b"toolcage: landlock add_rule failed; refusing to run\n");
         }
         let _ = unsafe { libc::close(ruleset as c_int) };
     }
@@ -737,7 +781,10 @@ mod tests {
     }
 
     fn isolated() -> bool {
-        NsBackend::probe().userns
+        // Tier0 refuses to run without Landlock (fail-closed, enforced in
+        // create()), so live tests need both userns and Landlock.
+        let p = NsBackend::probe();
+        p.userns && p.landlock_abi >= 0
     }
 
     #[test]
@@ -888,6 +935,110 @@ mod tests {
         assert!(!std::path::Path::new("/etc/tc-test-blocked").exists(), "nothing should leak to host /etc");
 
         b.destroy("t4").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn seccomp_insns_are_owned_by_caller() {
+        // Locks the UAF fix's shape: the builder returns the instruction Vec
+        // (caller keeps it alive while the sock_fprog points into it). v0
+        // returned a sock_fprog whose Vec was already dropped.
+        let insns = build_seccomp_insns();
+        assert_eq!(insns.len(), 2 * BLOCKED_SYSCALLS.len() + 2);
+        // First insn loads seccomp_data.nr into the accumulator.
+        assert_eq!(insns[0].code, (BPF_LD | BPF_W | BPF_A) as u16);
+        // Last insn is the fall-through allow; every blocked syscall is
+        // matched in between and returns EPERM.
+        assert_eq!(insns[insns.len() - 1].code, (BPF_RET | BPF_K) as u16);
+        assert_eq!(insns[insns.len() - 1].k, SECCOMP_RET_ALLOW);
+    }
+
+    #[test]
+    fn child_setup_failure_exits_never_resumes_caller() {
+        // Contract for every failure site between fork() and execve(): the
+        // child terminates itself (child_die), it must never `?`-return into
+        // the caller's control flow — that leaves a duplicate of the caller
+        // running, which here would append to the marker file twice.
+        //
+        // Forced at the chdir site with a workspace that is a regular file.
+        if !isolated() {
+            eprintln!("skip: unprivileged user namespaces unavailable");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-childexit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("marker");
+        let wsfile = dir.join("not-a-dir");
+        std::fs::write(&wsfile, "x").unwrap();
+        let spec = SessionSpec {
+            id: "t5".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: wsfile.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        let r = match b.exec("t5", &["/bin/echo".into(), "hi".into()]) {
+            Ok(r) => r,
+            Err(_) => {
+                // Only a child resuming this caller can land here (its setup
+                // `?`-returned). Kill it now, or the rest of the test body
+                // runs in two processes and the parent hangs in waitpid.
+                unsafe { libc::_exit(99) };
+            }
+        };
+        // The child died in setup (125 = chdir); the workload never ran.
+        assert_eq!(r.exit_code, Some(125), "child must _exit on setup failure");
+        assert!(r.stdout.is_empty(), "workload must not run after failed setup");
+        // Written exactly once — by the parent. The parent proceeds only after
+        // reaping the child, so a resuming child would append first and this
+        // would read "xx".
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&marker)
+            .unwrap()
+            .write_all(b"x")
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap(),
+            "x",
+            "forked child resumed the caller as a duplicate process"
+        );
+        b.destroy("t5").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exec_failure_exits_127_with_message() {
+        // execve fails -> child_die(127) with a static message into the
+        // captured stderr pipe. (Also locks that the message is written in
+        // full: v0 hardcoded a length that truncated it.)
+        if !isolated() {
+            eprintln!("skip: unprivileged user namespaces unavailable");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-execfail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = SessionSpec {
+            id: "t6".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        let r = b.exec("t6", &["/nonexistent/toolcage-test-prog".into()]).unwrap();
+        assert_eq!(r.exit_code, Some(127));
+        assert!(
+            String::from_utf8_lossy(&r.stderr).contains("toolcage: exec failed"),
+            "stderr: {:?}",
+            String::from_utf8_lossy(&r.stderr)
+        );
+        b.destroy("t6").unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

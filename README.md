@@ -6,7 +6,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Status: alpha](https://img.shields.io/badge/status-alpha%20%C2%B7%20not%20independently%20reviewed-orange.svg)
-![Tests: 77 passing](https://img.shields.io/badge/tests-77%20passing-brightgreen.svg)
+![Tests: 80 passing](https://img.shields.io/badge/tests-80%20passing-brightgreen.svg)
 ![Rust](https://img.shields.io/badge/built%20with-Rust-black.svg)
 
 [Quickstart](#quickstart) · [Why](#why-toolcage) · [Architecture](#architecture) · [Invariants](#the-seven-invariants) · [Policy](#policy) · [CLI](#cli-reference) · [MCP](#mcp-front-door) · [Limits](#status-and-known-limits) · [Threat model](docs/THREAT_MODEL.md)
@@ -215,7 +215,7 @@ Third-party MCP servers run as **guest processes** under the same policy and aud
 
 ## Tests
 
-`cargo test --workspace` runs **77 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
+`cargo test --workspace` runs **80 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
 
 - **Escape suite** against the policy and proxy (I1, I6)
 - **Fuzzing** of the policy, guest-agent, audit, and proxy parsers
@@ -244,7 +244,7 @@ The audit figure is filesystem-dependent (tmpfs may not flush durably) and is a 
 
 | Area | State |
 |---|---|
-| Tier 0 (namespaces, Landlock) | Implemented, with live isolation tests |
+| Tier 0 (namespaces, Landlock) | Implemented, with live isolation tests. Landlock is **mandatory** (fail-closed): if the kernel can't provide it, session creation is denied and the child refuses to run — no silent fallback to namespaces-only. |
 | Tier 1 (gVisor), Tier 2 (Firecracker) | Drivers implemented and tested for config generation, tier selection, and fail-closed behavior when the runtime is missing. No live `runsc` or microVM execution tests in the suite. |
 | seccomp-BPF | Returns `EINVAL` on the development host's kernel, so Tier 0 there relies on namespaces + Landlock and seccomp is defense in depth. Check `doctor` on your machine. |
 | Audit throughput | fsync per append (crash-safe). Group commit is the next step if throughput is ever needed. |
