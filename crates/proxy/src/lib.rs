@@ -201,17 +201,45 @@ fn is_blocked_ip(addr: &IpAddr) -> bool {
     false
 }
 
-/// Determine default port for a scheme.
-fn default_port(host: &str) -> u16 {
-    // If host contains a port, use it; else 443 for https-ish, 80 otherwise.
-    if host.contains(':') {
-        return host
-            .split(':')
-            .nth(1)
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(443);
+/// Split an upstream specifier into (scheme, host, port).
+/// Accepts "https://host:port", "http://host:port", "host:port", "host".
+/// Defaults to https (the secure default — the proxy's upstreams are APIs).
+/// Returns the host portion without scheme or port, suitable for DNS
+/// resolution and TLS SNI. IPv6 literals aren't supported (all IPv6 is
+/// blocked downstream by is_blocked_ip).
+fn parse_upstream(upstream: &str) -> Result<(&str, &str, u16), ProxyError> {
+    let (scheme, rest) = if let Some(rest) = upstream.strip_prefix("https://") {
+        ("https", rest)
+    } else if let Some(rest) = upstream.strip_prefix("http://") {
+        ("http", rest)
+    } else {
+        ("https", upstream) // secure default
+    };
+    let (host, port) = match rest.find(':') {
+        // A colon means an explicit port; it must be all digits (hostnames
+        // contain no colons; we don't support IPv6 literals, which are
+        // blocked downstream by is_blocked_ip).
+        Some(i) => {
+            let host = &rest[..i];
+            let port: u16 = rest[i + 1..]
+                .parse()
+                .map_err(|_| ProxyError::Dns(format!("{upstream}: bad port")))?;
+            (host, port)
+        }
+        None => (rest, if scheme == "https" { 443 } else { 80 }),
+    };
+    Ok((scheme, host, port))
+}
+
+/// Build the HTTP/1.1 Host header value: "host" for default port,
+/// "host:port" otherwise.
+fn host_header(host: &str, port: u16, scheme: &str) -> String {
+    let default = if scheme == "https" { 443 } else { 80 };
+    if port == default {
+        host.to_string()
+    } else {
+        format!("{host}:{port}")
     }
-    443
 }
 
 /// The egress proxy. All guest network flows through here.
@@ -240,8 +268,8 @@ impl Proxy {
         path: &str,
         headers: &[(String, String)],
     ) -> Result<ProxyResponse, ProxyError> {
-        let port = default_port(upstream);
-        let ip = resolve_allowed_ip(upstream)?;
+        let (scheme, host, port) = parse_upstream(upstream)?;
+        let ip = resolve_allowed_ip(host)?;
         let socket_addr = std::net::SocketAddr::new(ip, port);
 
         let stream = TcpStream::connect_timeout(&socket_addr, self.connect_timeout)
@@ -254,12 +282,11 @@ impl Proxy {
             .map_err(|e| ProxyError::Io(e.to_string()))?;
 
         let mut stream: Box<dyn IoStream> = Box::new(stream);
-        let use_tls = port == 443 || upstream.ends_with(":443");
+        let use_tls = scheme == "https";
         if use_tls {
-            let domain = upstream.split(':').next().unwrap_or(upstream);
             let tls_stream = self
                 .tls
-                .connect(domain, stream)
+                .connect(host, stream)
                 .map_err(|e| ProxyError::Tls(e.to_string()))?;
             stream = Box::new(tls_stream);
         }
@@ -267,7 +294,7 @@ impl Proxy {
         // Build HTTP request.
         let mut req = String::new();
         req.push_str(&format!("{method} {path} HTTP/1.1\r\n"));
-        req.push_str(&format!("Host: {upstream}\r\n"));
+        req.push_str(&format!("Host: {}\r\n", host_header(host, port, scheme)));
         req.push_str("Connection: close\r\n");
         for (name, value) in headers {
             req.push_str(&format!("{name}: {value}\r\n"));
@@ -512,5 +539,39 @@ mod tests {
         assert_eq!(parse_status(resp), Some(200));
         let resp = b"HTTP/1.1 404 Not Found\r\n\r\n";
         assert_eq!(parse_status(resp), Some(404));
+    }
+
+    #[test]
+    fn parse_upstream_scheme_and_port() {
+        // No scheme → https default, port 443.
+        let (s, h, p) = parse_upstream("api.github.com").unwrap();
+        assert_eq!((s, h, p), ("https", "api.github.com", 443));
+        // Explicit https.
+        let (s, h, p) = parse_upstream("https://api.github.com").unwrap();
+        assert_eq!((s, h, p), ("https", "api.github.com", 443));
+        // https with non-default port → TLS still on.
+        let (s, h, p) = parse_upstream("https://api.github.com:8443").unwrap();
+        assert_eq!((s, h, p), ("https", "api.github.com", 8443));
+        // http → no TLS, port 80 default.
+        let (s, h, p) = parse_upstream("http://example.com").unwrap();
+        assert_eq!((s, h, p), ("http", "example.com", 80));
+        let (s, h, p) = parse_upstream("http://example.com:8080").unwrap();
+        assert_eq!((s, h, p), ("http", "example.com", 8080));
+        // Bad port is an error.
+        assert!(parse_upstream("http://example.com:notaport").is_err());
+    }
+
+    #[test]
+    fn host_header_default_and_nondefault() {
+        assert_eq!(
+            host_header("api.github.com", 443, "https"),
+            "api.github.com"
+        );
+        assert_eq!(
+            host_header("api.github.com", 8443, "https"),
+            "api.github.com:8443"
+        );
+        assert_eq!(host_header("example.com", 80, "http"), "example.com");
+        assert_eq!(host_header("example.com", 8080, "http"), "example.com:8080");
     }
 }
