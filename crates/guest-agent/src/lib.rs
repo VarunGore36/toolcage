@@ -68,12 +68,35 @@ pub fn validate(msg: &GuestMsg) -> anyhow::Result<()> {
             Ok(())
         }
         GuestOp::PutFile { path, bytes } => {
-            anyhow::ensure!(path.starts_with("/workspace"), "outside workspace");
+            // Canonicalize (resolve '.', '..', '//') then require the result to
+            // be /workspace or live under /workspace/. A bare starts_with would
+            // wrongly accept "/workspacex" and "/workspace/../etc/passwd".
+            let np = normalize_path(path);
+            anyhow::ensure!(
+                np == "/workspace" || np.starts_with("/workspace/"),
+                "outside workspace"
+            );
             anyhow::ensure!(*bytes <= 64 * 1024 * 1024, "file too big");
             Ok(())
         }
         GuestOp::Heartbeat => Ok(()),
     }
+}
+
+/// Lexical fs normalization (no FS access): resolve '.', '..', '//', leading
+/// slashes. Mirrors capability::normalize_fs semantics.
+fn normalize_path(p: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for comp in p.split('/') {
+        match comp {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            c => parts.push(c),
+        }
+    }
+    format!("/{}", parts.join("/"))
 }
 
 #[cfg(test)]
@@ -116,5 +139,47 @@ mod tests {
             },
         };
         assert!(validate(&bad).is_err());
+    }
+    #[test]
+    fn putfile_path_canonicalized() {
+        // Traversal escapes are rejected even though the raw string starts with
+        // "/workspace", and "/workspacex" is not "/workspace".
+        let bad_paths = [
+            "/workspace/../etc/passwd",
+            "/workspace/..//etc/passwd",
+            "/workspacex",
+            "/workspacex/foo",
+            "/etc/passwd",
+            "/",
+            "",
+        ];
+        for p in bad_paths {
+            let m = GuestMsg {
+                id: "1".into(),
+                op: GuestOp::PutFile {
+                    path: p.into(),
+                    bytes: 1,
+                },
+            };
+            assert!(validate(&m).is_err(), "path {p:?} must be rejected");
+        }
+        // Canonicalized in-workspace paths are accepted.
+        let good_paths = [
+            "/workspace",
+            "/workspace/",
+            "/workspace/./foo",
+            "/workspace/foo/../bar",
+            "//workspace//foo",
+        ];
+        for p in good_paths {
+            let m = GuestMsg {
+                id: "1".into(),
+                op: GuestOp::PutFile {
+                    path: p.into(),
+                    bytes: 1,
+                },
+            };
+            assert!(validate(&m).is_ok(), "path {p:?} must be accepted");
+        }
     }
 }
