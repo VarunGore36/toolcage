@@ -207,6 +207,12 @@ impl PausedVm {
             mem_file_path: gi.mem_file_path.clone(),
             resume_vm: false,
         };
+        // Integrity gate: verify the snapshot hash against the manifest BEFORE
+        // loading. Firecracker only checks a CRC (accidental corruption), so a
+        // tampered snapshot with a valid signature would otherwise load.
+        verify_snapshot_hash(&gi.snapshot_path, &gi.manifest.snapshot_hash).with_context(|| {
+            format!("snapshot hash verification failed for {}", gi.snapshot_path)
+        })?;
         let body = serde_json::to_vec(&load)?;
         let resp = http_put(&socket_path, "/snapshot/load", &body)?;
         let status = http_status(&resp)?;
