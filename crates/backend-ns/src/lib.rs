@@ -41,7 +41,7 @@ use libc::{
 };
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::{AsRawFd, OwnedFd};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -54,6 +54,10 @@ use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
 
 const OUTPUT_CAP: usize = 1024 * 1024;
 const EXEC_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long an output reader waits past the kill deadline for the last bytes.
+/// Bounds the case where a grandchild inherits the pipe write end and keeps it
+/// open after the workload exits: the drain gives up instead of hanging.
+const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
 // x86_64 syscall numbers for the seccomp filter, taken from this host's
 // installed headers (glibc agrees: socket=41, mount=165, unshare=272,
@@ -427,6 +431,19 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
 
             let deadline = Instant::now() + EXEC_TIMEOUT;
             let mut timed_out = false;
+
+            // Drain BOTH output pipes on their own threads while waiting for
+            // the child. The pipes hold ~64 KiB: a workload writing more than
+            // that blocks in write(2) forever while the parent waits for it to
+            // exit — a deadlock that only ended at `deadline`, where the child
+            // was SIGKILLed and the run recorded as a timeout (with
+            // truncated=false, the output having fit under OUTPUT_CAP). The
+            // drain stops at EOF or `drain_until`, so a grandchild holding the
+            // write end open cannot hang the parent either.
+            let drain_until = deadline + DRAIN_GRACE;
+            let out_thread = std::thread::spawn(move || read_capped_until(out_r, drain_until));
+            let err_thread = std::thread::spawn(move || read_capped_until(err_r, drain_until));
+
             let mut status: c_int = 0;
             let exit_code = loop {
                 match unsafe { libc::waitpid(child_raw, &mut status, WNOHANG) } {
@@ -448,45 +465,21 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                 }
             };
 
-            let mut truncated = false;
-            let mut read_capped = |fd: RawFd| -> Vec<u8> {
-                let mut buf = Vec::new();
-                let mut tmp = [0u8; 4096];
-                loop {
-                    let n = unsafe { libc::read(fd, tmp.as_mut_ptr() as *mut c_void, tmp.len()) };
-                    match n {
-                        0 => break,
-                        n if n > 0 => {
-                            let n = n as usize;
-                            buf.extend_from_slice(&tmp[..n]);
-                            if buf.len() > OUTPUT_CAP {
-                                buf.truncate(OUTPUT_CAP);
-                                truncated = true;
-                                let mut drain = [0u8; 65536];
-                                while unsafe {
-                                    libc::read(fd, drain.as_mut_ptr() as *mut c_void, drain.len())
-                                } > 0
-                                {}
-                                break;
-                            }
-                        }
-                        _ => break,
-                    }
-                }
-                buf
-            };
-            let stdout = read_capped(out_r.as_raw_fd());
-            let stderr = read_capped(err_r.as_raw_fd());
-            let _ = close(out_r);
-            let _ = close(err_r);
             let _ = close(ready_r);
             let _ = close(go_w);
+
+            // Readers are gone by now: EOF once the child is reaped (its write
+            // ends are closed), or at `drain_until` at the latest. A failed
+            // join is a panicked reader thread — report empty output rather
+            // than hanging or unwinding here.
+            let (stdout, out_trunc) = out_thread.join().unwrap_or_default();
+            let (stderr, err_trunc) = err_thread.join().unwrap_or_default();
 
             Ok(CommandResult {
                 exit_code: if timed_out { None } else { exit_code },
                 stdout,
                 stderr,
-                truncated,
+                truncated: out_trunc || err_trunc,
             })
         }
         Ok(ForkResult::Child) => {
@@ -722,6 +715,62 @@ fn kill_and_reap(pid: i32) {
         let mut status: c_int = 0;
         let _ = libc::waitpid(pid, &mut status, 0);
     }
+}
+
+/// Read one output pipe to EOF, capped at OUTPUT_CAP. Runs on its own thread
+/// in the parent so a chatty workload cannot fill the pipe and deadlock
+/// against the waitpid loop. Past the cap the excess is discarded but draining
+/// continues, so a large-output workload still reaches its real exit code and
+/// the truncation flag stays honest. Reads are poll-based and never block past
+/// `stop_at`, so a grandchild holding the write end open cannot hang us.
+fn read_capped_until(fd: OwnedFd, stop_at: Instant) -> (Vec<u8>, bool) {
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 4096];
+    let mut truncated = false;
+    loop {
+        if Instant::now() >= stop_at {
+            // Draining gave up: whatever is still unread is lost.
+            truncated = true;
+            break;
+        }
+        let mut pfd = libc::pollfd {
+            fd: fd.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let rc = unsafe { libc::poll(&mut pfd, 1, 100) };
+        if rc < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            break;
+        }
+        if rc == 0 {
+            continue; // poll timeout: re-check stop_at
+        }
+        // Readable, hung up or errored — one read() resolves all three
+        // (0 means EOF).
+        let n = unsafe {
+            libc::read(fd.as_raw_fd(), tmp.as_mut_ptr() as *mut c_void, tmp.len())
+        };
+        match n {
+            0 => break,
+            n if n > 0 => {
+                let n = n as usize;
+                if truncated {
+                    continue; // over cap: discard, keep draining to EOF
+                }
+                buf.extend_from_slice(&tmp[..n]);
+                if buf.len() > OUTPUT_CAP {
+                    buf.truncate(OUTPUT_CAP);
+                    truncated = true;
+                }
+            }
+            _ => break,
+        }
+    }
+    (buf, truncated)
 }
 
 /// Build the seccomp-BPF filter instructions (allocates — call before fork).
@@ -1414,6 +1463,99 @@ mod tests {
             zombie_children()
         );
         b.destroy(&spec.id).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn large_output_does_not_deadlock_or_timeout() {
+        // Regression for the wait-then-drain deadlock: the parent used to
+        // reap the child before reading the pipes, so a workload writing more
+        // than the 64 KiB pipe buffer blocked in write(2) forever, was
+        // SIGKILLed at the 30 s deadline and recorded as a timeout — with
+        // truncated=false and only the buffered ~64 KiB of output.
+        if !isolated() {
+            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-bigout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = SessionSpec {
+            id: "t8".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        // 768 KiB: well under OUTPUT_CAP, but larger than the pipe buffer
+        // (64 KiB by default; coreutils raises it via F_SETPIPE_SZ, up to
+        // /proc/sys/fs/pipe-max-size, 1 MiB on this host). Anything over the
+        // pipe buffer is what used to deadlock. Written into the workspace up
+        // front (the sandbox's /dev is not readable) and echoed back by cat.
+        let payload = vec![b'a'; 768 * 1024];
+        std::fs::write(dir.join("big.bin"), &payload).unwrap();
+        let src = dir.join("big.bin").display().to_string();
+        let start = Instant::now();
+        let r = b
+            .exec("t8", &["/bin/cat".into(), src])
+            .unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(
+            r.exit_code,
+            Some(0),
+            "a large-output run must reach its real exit code, not be killed: {r:?}"
+        );
+        assert_eq!(
+            r.stdout.len(),
+            768 * 1024,
+            "all output must be captured (got {} bytes)",
+            r.stdout.len()
+        );
+        assert!(!r.truncated, "256 KiB is under the OUTPUT_CAP of 1 MiB");
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "large output must not stall until the exec deadline (took {elapsed:?})"
+        );
+        b.destroy("t8").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn over_cap_output_truncates_but_still_reports_exit_code() {
+        // Past OUTPUT_CAP the excess is discarded (truncated=true) but the
+        // workload must still run to completion and report its exit code:
+        // dropping the drain entirely would block the child on write(2) again.
+        // 2 MiB also exceeds every pipe buffer on this host, so this is the
+        // deterministic regression for the wait-then-drain deadlock.
+        if !isolated() {
+            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-overcap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = SessionSpec {
+            id: "t9".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        // 2 MiB on stdout, over the 1 MiB cap.
+        let payload = vec![b'b'; 2 * 1024 * 1024];
+        std::fs::write(dir.join("huge.bin"), &payload).unwrap();
+        let src = dir.join("huge.bin").display().to_string();
+        let r = b.exec("t9", &["/bin/cat".into(), src]).unwrap();
+        assert_eq!(
+            r.exit_code,
+            Some(0),
+            "over-cap output must not be turned into a timeout: {r:?}"
+        );
+        assert!(r.truncated, "output past OUTPUT_CAP must set truncated");
+        assert_eq!(r.stdout.len(), OUTPUT_CAP);
+        b.destroy("t9").unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
