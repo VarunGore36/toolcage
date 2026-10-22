@@ -362,38 +362,72 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child }) => {
             // Parent: original process, allocation is fine here.
-            close(out_w)?;
-            close(err_w)?;
-            close(ready_w)?;
-            close(go_r)?;
+            let child_raw = child.as_raw();
 
-            // Wait until the child has created its user namespace.
-            let mut b = [0u8; 1];
-            let n = unsafe { libc::read(ready_r.as_raw_fd(), b.as_mut_ptr() as *mut c_void, 1) };
-            anyhow::ensure!(n == 1, "child did not signal readiness");
+            // FAIL-CLOSED post-fork contract. The child has already unshared
+            // and is blocked on the go signal: if anything below fails before
+            // that signal is sent, returning the error as-is would drop go_w,
+            // the child would see EOF and run the workload with no supervisor,
+            // no timeout, no output capture and no outcome event (a
+            // permanently open intent in the audit log). Every failure here
+            // therefore SIGKILLs and reaps the child first.
+            let setup = (|| -> anyhow::Result<()> {
+                close(out_w)?;
+                close(err_w)?;
+                close(ready_w)?;
+                close(go_r)?;
 
-            // Rootless uid/gid map: the parent writes the child's maps.
-            // Order matters: setgroups=deny must be written BEFORE gid_map,
-            // otherwise gid_map is rejected with EPERM.
-            let uid = unsafe { getuid() };
-            let gid = unsafe { getgid() };
-            let pid_raw = child.as_raw();
-            std::fs::write(format!("/proc/{pid_raw}/setgroups"), "deny")
-                .context("write child setgroups")?;
-            std::fs::write(format!("/proc/{pid_raw}/uid_map"), format!("0 {uid} 1\n"))
-                .context("write child uid_map (needs unprivileged userns)")?;
-            // gid_map is best-effort: some kernels require CAP_SETGID for the
-            // parent to write it. If it fails, the child still runs.
-            let _ = std::fs::write(format!("/proc/{pid_raw}/gid_map"), format!("0 {gid} 1\n"));
+                // Wait until the child has created its user namespace.
+                let mut b = [0u8; 1];
+                let n =
+                    unsafe { libc::read(ready_r.as_raw_fd(), b.as_mut_ptr() as *mut c_void, 1) };
+                anyhow::ensure!(n == 1, "child did not signal readiness");
+
+                // Rootless uid/gid map: the parent writes the child's maps.
+                // Order matters: setgroups=deny must be written BEFORE gid_map,
+                // otherwise gid_map is rejected with EPERM.
+                let uid = unsafe { getuid() };
+                let gid = unsafe { getgid() };
+                let pid_raw = child_raw;
+                std::fs::write(format!("/proc/{pid_raw}/setgroups"), "deny")
+                    .context("write child setgroups")?;
+                std::fs::write(format!("/proc/{pid_raw}/uid_map"), format!("0 {uid} 1\n"))
+                    .context("write child uid_map (needs unprivileged userns)")?;
+                // gid_map is best-effort: some kernels require CAP_SETGID for the
+                // parent to write it. If it fails, the child still runs.
+                let _ = std::fs::write(format!("/proc/{pid_raw}/gid_map"), format!("0 {gid} 1\n"));
+
+                // Test-only fault injection point (compiled out of release
+                // builds). The post-fork error paths are otherwise unreachable
+                // from a test: none of the setup above is driven by user input.
+                // Scoped to a reserved session id so it cannot fire for the
+                // tests running concurrently in this binary.
+                #[cfg(test)]
+                {
+                    if spec.id == "t-inject-parent-fail" {
+                        anyhow::bail!("injected parent setup failure");
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(e) = setup {
+                kill_and_reap(child_raw);
+                return Err(e);
+            }
 
             // Child may now become root (inside its own user namespace only).
-            let _ =
-                unsafe { libc::write(go_w.as_raw_fd(), &[1u8] as *const u8 as *const c_void, 1) };
+            let n = unsafe {
+                libc::write(go_w.as_raw_fd(), &[1u8] as *const u8 as *const c_void, 1)
+            };
+            if n != 1 {
+                // Without the go signal the workload must not start at all.
+                kill_and_reap(child_raw);
+                anyhow::bail!("failed to release child (go signal)");
+            }
 
             let deadline = Instant::now() + EXEC_TIMEOUT;
             let mut timed_out = false;
             let mut status: c_int = 0;
-            let child_raw = child.as_raw();
             let exit_code = loop {
                 match unsafe { libc::waitpid(child_raw, &mut status, WNOHANG) } {
                     0 => {
@@ -489,7 +523,13 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                 libc::write(ready_w.as_raw_fd(), &[1u8] as *const u8 as *const c_void, 1)
             };
             let mut b = [0u8; 1];
-            let _ = unsafe { libc::read(go_r.as_raw_fd(), b.as_mut_ptr() as *mut c_void, 1) };
+            let n = unsafe { libc::read(go_r.as_raw_fd(), b.as_mut_ptr() as *mut c_void, 1) };
+            if n != 1 {
+                // The parent never released us (setup failed or the parent
+                // died). Refuse to run the workload unsupervised — no
+                // supervisor, no timeout, no output capture would apply.
+                child_die(126, b"toolcage: go signal missing; refusing to run");
+            }
 
             // Root inside this namespace only (uid/gid maps written by the
             // parent during the handshake above).
@@ -668,6 +708,19 @@ fn child_die(code: i32, msg: &[u8]) -> ! {
 fn child_warn(msg: &[u8]) {
     unsafe {
         libc::write(2, msg.as_ptr() as *const c_void, msg.len());
+    }
+}
+
+/// Kill and reap a forked child that must not be allowed to run. Parent-side
+/// only (allocation is fine here): used on every post-fork error path before
+/// the go signal is sent, so a failed setup never leaves a live or zombie
+/// workload behind. Both syscalls are best-effort — the point is that we do
+/// not return while the child is still running or unreaped.
+fn kill_and_reap(pid: i32) {
+    unsafe {
+        libc::kill(pid, SIGKILL);
+        let mut status: c_int = 0;
+        let _ = libc::waitpid(pid, &mut status, 0);
     }
 }
 
@@ -1273,6 +1326,94 @@ mod tests {
             String::from_utf8_lossy(&r.stderr)
         );
         b.destroy("t6").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every zombie direct child of this test process (from /proc/<pid>/stat).
+    fn zombie_children() -> Vec<i32> {
+        let me = std::process::id() as i32;
+        let mut out = Vec::new();
+        let Ok(rd) = std::fs::read_dir("/proc") else {
+            return out;
+        };
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            let Ok(pid) = name.parse::<i32>() else { continue };
+            let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+                continue;
+            };
+            // "pid (comm) state ppid ..." — comm may contain spaces and ')',
+            // so split after the last ')' instead of on whitespace.
+            let Some((_, rest)) = stat.rsplit_once(") ") else { continue };
+            let mut it = rest.split_whitespace();
+            let (Some(state), Some(ppid)) = (it.next(), it.next()) else {
+                continue;
+            };
+            let Ok(ppid) = ppid.parse::<i32>() else { continue };
+            if ppid == me && state == "Z" {
+                out.push(pid);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn parent_setup_failure_is_fail_closed() {
+        // Contract for the parent's post-fork error paths (everything between
+        // fork() and the go signal): a failed setup must not release a
+        // detached workload — one with no supervisor, no timeout, no output
+        // capture and no outcome event — and must not leave a zombie behind.
+        //
+        // Forced via the reserved session id "t-inject-parent-fail" (see
+        // isolated_exec): none of that setup is driven by user input, so the
+        // path is otherwise unreachable without fault injection. The id is the
+        // injection switch, so the tests running concurrently in this binary
+        // are unaffected.
+        if !isolated() {
+            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-parentfail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("ran");
+        let spec = SessionSpec {
+            id: "t-inject-parent-fail".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        let r = b.exec(
+            &spec.id,
+            &[
+                "/bin/sh".into(),
+                "-c".into(),
+                format!("touch {}", marker.display()),
+            ],
+        );
+        assert!(
+            r.is_err(),
+            "injected setup failure must surface as an error, got {r:?}"
+        );
+        assert!(
+            !marker.exists(),
+            "workload must not run when the parent's setup fails"
+        );
+        // The child must be killed AND reaped before the error returns.
+        for _ in 0..20 {
+            if zombie_children().is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(
+            zombie_children().is_empty(),
+            "failed setup left zombie children: {:?}",
+            zombie_children()
+        );
+        b.destroy(&spec.id).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
