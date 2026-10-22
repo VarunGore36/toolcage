@@ -684,10 +684,16 @@ fn build_seccomp_insns() -> Vec<sock_filter> {
         k: 0, // A = seccomp_data.nr (offset 0)
     });
     for &nr in BLOCKED_SYSCALLS {
+        // Match the syscall number in A. Jump offsets are counted from the
+        // instruction AFTER this one: `jt` is taken when A == nr, `jf` when
+        // A != nr. Denylist semantics: equal -> fall through into the next
+        // instruction (RET ERRNO), not-equal -> skip it and keep comparing.
+        // The inverse encoding (jt=1, jf=0) allowed exactly the blocked
+        // syscalls and denied everything else, `execve` included.
         insns.push(sock_filter {
             code: (BPF_JMP | BPF_JEQ | BPF_K) as u16,
-            jt: 1,
-            jf: 0,
+            jt: 0,
+            jf: 1,
             k: nr as u32,
         });
         insns.push(sock_filter {
@@ -1082,6 +1088,99 @@ mod tests {
         // matched in between and returns EPERM.
         assert_eq!(insns[insns.len() - 1].code, (BPF_RET | BPF_K) as u16);
         assert_eq!(insns[insns.len() - 1].k, SECCOMP_RET_ALLOW);
+    }
+
+    /// Interpret the generated filter over `seccomp_data.nr == nr` and return
+    /// the verdict. Only the three opcodes `build_seccomp_insns` emits are
+    /// handled; anything else is a builder bug. This exists because checking
+    /// instruction *shape* cannot catch a swapped jt/jf pair — the v0 filter
+    /// was structurally perfect and semantically inverted.
+    #[cfg(target_arch = "x86_64")]
+    fn run_filter(insns: &[sock_filter], nr: i32) -> u32 {
+        // Classic BPF opcode fragments (as emitted by build_seccomp_insns).
+        const CLASS_LD: u16 = 0x00;
+        const CLASS_JMP: u16 = 0x05;
+        const CLASS_RET: u16 = 0x06;
+        const CLASS_MASK: u16 = 0x07;
+        const JMP_JEQ: u16 = 0x10;
+        let mut a: u32 = 0;
+        let mut pc = 0usize;
+        loop {
+            let ins = &insns[pc];
+            match ins.code & CLASS_MASK {
+                CLASS_LD => {
+                    // LD_W_ABS k=0 -> seccomp_data.nr
+                    assert_eq!(ins.k, 0, "only seccomp_data.nr is loaded");
+                    a = nr as u32;
+                    pc += 1;
+                }
+                CLASS_JMP => {
+                    assert_eq!(
+                        ins.code & 0xf0,
+                        JMP_JEQ,
+                        "only JEQ is emitted"
+                    );
+                    pc += 1 + if a == ins.k { ins.jt } else { ins.jf } as usize;
+                }
+                CLASS_RET => return ins.k,
+                c => panic!("unexpected opcode {c:#x} at pc {pc}"),
+            }
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn seccomp_filter_denies_blocklist_and_allows_the_rest() {
+        // Denylist semantics, executed: every blocked syscall must return
+        // SECCOMP_RET_ERRNO|EPERM, and ordinary syscalls must be ALLOWED.
+        // Guards the jt/jf orientation in build_seccomp_insns.
+        let insns = build_seccomp_insns();
+        let deny_verdict = SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA);
+
+        for &nr in BLOCKED_SYSCALLS {
+            assert_eq!(
+                run_filter(&insns, nr),
+                deny_verdict,
+                "blocked syscall {nr} must be denied with EPERM"
+            );
+        }
+
+        // A representative slice of the syscalls a workload actually needs.
+        for nr in [
+            0,  // read
+            1,  // write
+            2,  // open
+            3,  // close
+            9,  // mmap
+            12, // brk
+            21, // access
+            39, // getpid
+            59, // execve   <-- v0 returned EPERM here: nothing could run
+            60, // exit
+            231, // exit_group
+            257, // openat
+            262, // newfstatat
+            318, // getrandom
+        ] {
+            assert_eq!(
+                run_filter(&insns, nr),
+                SECCOMP_RET_ALLOW,
+                "ordinary syscall {nr} must be allowed"
+            );
+        }
+
+        // And the whole rest of the space (aside from the blocklist) is open.
+        let blocked: Vec<u32> = BLOCKED_SYSCALLS.iter().map(|&n| n as u32).collect();
+        for nr in -2i32..512 {
+            if blocked.contains(&(nr as u32)) {
+                continue;
+            }
+            assert_eq!(
+                run_filter(&insns, nr),
+                SECCOMP_RET_ALLOW,
+                "syscall {nr} is not on the denylist and must be allowed"
+            );
+        }
     }
 
     #[test]
