@@ -362,6 +362,13 @@ fn main() -> anyhow::Result<()> {
             let text = std::fs::read_to_string(&policy)?;
             let pol = toolcage_policy::load_yaml(&text)?;
             let cap_key = load_key(&key_hex)?;
+            // Destination the policy binds this credential to (used below when
+            // the secret is loaded into the broker).
+            let cred_use_with = pol
+                .credentials
+                .iter()
+                .find(|c| c.name == cred)
+                .map(|c| c.use_with.clone());
             // Persistent egress budget file, tied to the audit log so repeated
             // `fetch` calls accumulate damage across invocations (restart-safe).
             let budget_file = audit.with_extension("budgets.json");
@@ -376,15 +383,28 @@ fn main() -> anyhow::Result<()> {
             };
             let mut broker = toolcage_broker::Broker::new();
             if !secret_value.is_empty() {
-                broker.insert(toolcage_broker::Credential {
-                    name: cred,
-                    value: secret_value,
-                    use_with: "github".into(),
-                    methods: vec![],
-                    paths: vec![],
-                    expires_at: None,
-                    encrypted_value: None,
-                });
+                // Bind the secret to the destination the policy names for this
+                // credential. With no policy rule there is no authorized
+                // destination, so the secret is not loaded at all rather than
+                // bound to a hardcoded host.
+                match cred_use_with {
+                    Some(use_with) => {
+                        broker.insert(toolcage_broker::Credential {
+                            name: cred.clone(),
+                            value: secret_value,
+                            use_with,
+                            methods: vec![],
+                            paths: vec![],
+                            expires_at: None,
+                            encrypted_value: None,
+                        });
+                    }
+                    None => {
+                        eprintln!(
+                            "warning: no policy credential named {cred}; secret not loaded"
+                        );
+                    }
+                }
             }
             let tok = load_token(&token)?;
             let rl = toolcage_capability::RevocationList::default();

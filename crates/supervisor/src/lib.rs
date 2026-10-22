@@ -341,6 +341,13 @@ impl Supervisor {
         approved: bool,
     ) -> anyhow::Result<FetchOutcome> {
         let pd = toolcage_proxy::decide(&self.policy, alias_or_host, method, path);
+        // Destination identity (not spelling) for everything below: policy
+        // already resolved the guest's alias to the operator's name, and the
+        // approval gate, the credential binding and the egress budgets must
+        // all key on the same thing. Otherwise `github.internal` passes policy
+        // as `github` while slipping past a gate or budget written for `github`.
+        let dest = toolcage_proxy::policy_host(&self.policy, alias_or_host);
+        let dest_names = toolcage_proxy::destination_names(&self.policy, alias_or_host);
         let mut w = Writer::open(&self.audit_path)?;
         // Token check (I3): valid keyed tag, narrow rights, unexpired, not
         // revoked. Fail closed: with no host key the tag cannot be verified,
@@ -378,12 +385,14 @@ impl Supervisor {
             }
         }
         // Approval gate: pause for out-of-band decision, timeout = deny.
-        if pd.allow
-            && self
-                .policy
-                .needs_approval("http.request", Some(method), Some(alias_or_host))
-            && !approved
-        {
+        // Matched over every spelling of the destination, so a request for
+        // `github.internal` cannot dodge a gate written as `hosts: [github]`
+        // (and vice versa) — policy already treats the two as one destination.
+        let needs_ok = dest_names.iter().any(|n| {
+            self.policy
+                .needs_approval("http.request", Some(method), Some(n))
+        });
+        if pd.allow && needs_ok && !approved {
             w.append(Event {
                 seq: 0,
                 ts_wall: now_wall(),
@@ -432,21 +441,24 @@ impl Supervisor {
             });
         }
         // Broker attaches credential upstream (host-side only). Guest sees placeholder.
-        let cred_name = self
+        //
+        // Destination binding (README: "not attached to requests for any other
+        // host"): `use_with` names a destination, so it is matched against
+        // every spelling of the request's destination — `github` and
+        // `github.internal` are one upstream and share the credential, while a
+        // look-alike such as `github.evil.com` is a different destination and
+        // gets nothing. The broker re-checks the binding exactly with the
+        // credential's own use_with string (defence in depth).
+        let bound_cred = self
             .policy
             .credentials
             .iter()
-            .find(|c| {
-                c.use_with.eq_ignore_ascii_case(alias_or_host)
-                    || (alias_or_host.to_ascii_lowercase().starts_with("github")
-                        && c.use_with.eq_ignore_ascii_case("github"))
-            })
-            .map(|c| c.name.clone());
+            .find(|c| dest_names.iter().any(|n| n.eq_ignore_ascii_case(&c.use_with)));
         let upstream = pd.upstream.clone().unwrap_or_default();
         // Build auth header from broker-injected credential (never goes to guest).
         let mut headers: Vec<(String, String)> = Vec::new();
-        if let Some(cn) = &cred_name {
-            if let Some(secret) = broker.inject(cn, &cred_name_alias(alias_or_host), method, path) {
+        if let Some(c) = bound_cred {
+            if let Some(secret) = broker.inject(&c.name, &c.use_with, method, path) {
                 headers.push(("Authorization".to_string(), format!("Bearer {secret}")));
             }
         }
@@ -464,7 +476,10 @@ impl Supervisor {
             self.policy.limits.egress_requests
         };
         let req_est = request_size_estimate(method, path, &headers);
-        match budgets.check(alias_or_host, req_est, max_bytes, max_req) {
+        // Budgets are keyed on the canonical destination so every spelling of
+        // one upstream draws from one bucket (alias variants must not multiply
+        // the damage bound).
+        match budgets.check(&dest, req_est, max_bytes, max_req) {
             Ok(true) => {}
             Ok(false) | Err(_) => {
                 w.append(Event {
@@ -521,14 +536,17 @@ impl Supervisor {
         };
         let safe_body = broker.scrub(&String::from_utf8_lossy(&resp.body));
         // Egress damage bound (§8): request bytes were reserved before dialing
-        // (pre-charge above). True-up with actual response bytes now;
-        // fail-closed if over budget. Zero limit = unbounded (back-compat).
+        // (pre-charge above). True-up with the bytes that actually left the
+        // host now; fail-closed if over budget. Zero limit = unbounded
+        // (back-compat). Note this charges resp.body, not the scrubbed view:
+        // scrubbing shrinks the body (secrets become "[REDACTED]"), and the
+        // damage bound must count real egress.
         let max_bytes = if self.policy.limits.egress_bytes == 0 {
             u64::MAX
         } else {
             self.policy.limits.egress_bytes
         };
-        if !budgets.charge_bytes(alias_or_host, safe_body.len() as u64, max_bytes)? {
+        if !budgets.charge_bytes(&dest, resp.body.len() as u64, max_bytes)? {
             w.append(Event {
                 seq: 0,
                 ts_wall: now_wall(),
@@ -565,9 +583,8 @@ impl Supervisor {
             result: format!(
                 "proxied upstream={upstream} status={} cred={}",
                 resp.status,
-                cred_name
-                    .as_deref()
-                    .map(toolcage_broker::Broker::log_id)
+                bound_cred
+                    .map(|c| toolcage_broker::Broker::log_id(&c.name))
                     .unwrap_or_else(|| "none".into())
             ),
             bytes: safe_body.len() as u64,
@@ -581,15 +598,6 @@ impl Supervisor {
             rule_ids: pd.rule_ids,
             body: safe_body,
         })
-    }
-}
-
-fn cred_name_alias(alias_or_host: &str) -> String {
-    let k = alias_or_host.to_ascii_lowercase();
-    if k.starts_with("github") {
-        "github".to_string()
-    } else {
-        k
     }
 }
 

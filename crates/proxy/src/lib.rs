@@ -86,37 +86,94 @@ pub struct ProxyDecision {
     pub upstream: Option<String>,
 }
 
-/// Single choke point for all guest network. Policy + alias + metadata forbid.
-pub fn decide(policy: &Policy, alias_or_host: &str, method: &str, path: &str) -> ProxyDecision {
+/// Upstream the proxy dials for a guest-supplied name (the guest never learns
+/// it). Names outside the alias map are dialed as written.
+pub fn upstream_host(alias_or_host: &str) -> String {
+    let key = alias_or_host.to_ascii_lowercase();
+    alias_map().get(&key).cloned().unwrap_or(key)
+}
+
+/// Canonical policy-side name for a guest-supplied host/alias. The proxy maps
+/// aliases to upstreams, while policy rules are written against the name the
+/// operator chose (`alias: github` or `host: registry.npmjs.org`), so every
+/// spelling of one destination must resolve to that single name before policy,
+/// approval, credential binding or budgets are consulted. Names outside the
+/// alias map resolve to themselves (lowercased).
+pub fn policy_host(policy: &Policy, alias_or_host: &str) -> String {
     let aliases = alias_map();
     let key = alias_or_host.to_ascii_lowercase();
-    // Resolve alias first: guest uses alias, proxy maps to real host for upstream,
-    // but policy is checked against the alias the operator wrote.
-    //
-    // Look up the guest's alias to get the upstream, then find which operator
-    // alias maps to that same upstream for policy checking.
-    // E.g. guest uses "github.internal" → upstream "api.github.com" → policy
-    // checks against operator alias "github".
-    let policy_host = aliases
-        .get(&key)
-        .cloned()
-        .and_then(|upstream| {
-            aliases
-                .iter()
-                .find(|(alias, up)| {
-                    up.as_str() == upstream.as_str()
-                        && policy.net.hosts.iter().any(|h| {
-                            h.alias
-                                .as_deref()
-                                .is_some_and(|a| a.eq_ignore_ascii_case(alias))
-                        })
-                })
-                .map(|(alias, _)| alias.clone())
+    let Some(upstream) = aliases.get(&key) else {
+        return key;
+    };
+    // Deterministic pick: several aliases may share one upstream and more
+    // than one may be named in the policy, so HashMap iteration order must not
+    // decide which rule applies. Sorted first match.
+    let mut names: Vec<String> = aliases
+        .iter()
+        .filter(|(alias, up)| {
+            up.as_str() == upstream.as_str()
+                && policy
+                    .net
+                    .hosts
+                    .iter()
+                    .any(|h| h.alias.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(alias)))
         })
-        .unwrap_or_else(|| key.clone());
+        .map(|(alias, _)| alias.clone())
+        .collect();
+    names.sort();
+    if let Some(n) = names.into_iter().next() {
+        return n;
+    }
+    // The operator may have written the rule as `host: registry.npmjs.org`
+    // instead of `alias: registry` — resolve to the upstream in that case.
+    if policy
+        .net
+        .hosts
+        .iter()
+        .any(|h| h.host.as_deref().is_some_and(|hh| hh.eq_ignore_ascii_case(upstream)))
+    {
+        return upstream.clone();
+    }
+    key
+}
+
+/// Every spelling that denotes the same destination as `alias_or_host`: the
+/// canonical policy host, the upstream the proxy dials, and every alias of
+/// that upstream. Callers that enforce a *destination* property (credential
+/// binding, approval gates) must compare against these, not against the raw
+/// guest string — otherwise an alias spelling of a gated host slips past the
+/// check that policy already resolved.
+pub fn destination_names(policy: &Policy, alias_or_host: &str) -> Vec<String> {
+    let aliases = alias_map();
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |s: &str| {
+        let l = s.to_ascii_lowercase();
+        if !out.contains(&l) {
+            out.push(l);
+        }
+    };
+    push(alias_or_host);
+    push(&policy_host(policy, alias_or_host));
+    let key = alias_or_host.to_ascii_lowercase();
+    if let Some(upstream) = aliases.get(&key) {
+        push(upstream);
+        for (alias, up) in &aliases {
+            if up == upstream {
+                push(alias);
+            }
+        }
+    }
+    out
+}
+
+/// Single choke point for all guest network. Policy + alias + metadata forbid.
+pub fn decide(policy: &Policy, alias_or_host: &str, method: &str, path: &str) -> ProxyDecision {
+    // Resolve the guest's spelling to the operator's name first (see
+    // policy_host). E.g. "github.internal" -> upstream "api.github.com" ->
+    // policy checks against the operator alias "github".
     let req = Request {
         action: "http.request".into(),
-        host: Some(policy_host),
+        host: Some(policy_host(policy, alias_or_host)),
         method: Some(method.to_string()),
         path: Some(path.to_string()),
         fs_path: None,
@@ -131,7 +188,7 @@ pub fn decide(policy: &Policy, alias_or_host: &str, method: &str, path: &str) ->
             upstream: None,
         };
     }
-    let upstream = aliases.get(&key).cloned().unwrap_or(key);
+    let upstream = upstream_host(alias_or_host);
     ProxyDecision {
         allow: true,
         rule_ids: d.rule_ids,
