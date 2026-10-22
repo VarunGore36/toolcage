@@ -18,3 +18,4 @@ toolcage-backend = { path = "../backend" }
 
 [dev-dependencies]
 toolcage-guest-agent = { path = "../guest-agent" }
+toolcage-backend-ns = { path = "../backend-ns" }

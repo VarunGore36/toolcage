@@ -1016,6 +1016,7 @@ dependencies = [
  "sha2",
  "toolcage-audit",
  "toolcage-backend",
+ "toolcage-backend-ns",
  "toolcage-broker",
  "toolcage-capability",
  "toolcage-guest-agent",
