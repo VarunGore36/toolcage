@@ -73,11 +73,11 @@ impl FcConfig {
     }
 
     /// vsock UNIX socket path on the host for the guest agent control channel.
+    /// socket is already absolute (/run/toolcage/{id}.sock); strip the suffix
+    /// and append .vsock — do NOT prepend /run/toolcage again (that doubled the
+    /// path: /run/toolcage//run/toolcage/{id}.vsock).
     pub fn vsock_uds_path(&self) -> String {
-        format!(
-            "/run/toolcage/{}.vsock",
-            self.socket.trim_end_matches(".sock")
-        )
+        format!("{}.vsock", self.socket.trim_end_matches(".sock"))
     }
 
     /// Firecracker jailer argv (unprivileged, own netns, tight seccomp+cgroup).
@@ -821,6 +821,21 @@ mod tests {
         let a = c.jailer_argv("s1");
         assert!(a.contains(&"--netns".to_string()));
         assert!(c.vsock_cid >= 3);
+    }
+
+    #[test]
+    fn vsock_uds_path_not_doubled() {
+        // Regression: vsock path must be /run/toolcage/{id}.vsock, NOT
+        // /run/toolcage//run/toolcage/{id}.vsock (which the old format!
+        // produced by prepending /run/toolcage to an already-absolute path).
+        let c = FcConfig::for_session("abc123", 256);
+        assert_eq!(
+            c.vsock_uds_path(),
+            "/run/toolcage/abc123.vsock",
+            "vsock path must not double the /run/toolcage prefix"
+        );
+        let c2 = FcConfig::for_session("session-xyz", 512);
+        assert_eq!(c2.vsock_uds_path(), "/run/toolcage/session-xyz.vsock");
     }
 
     #[test]
