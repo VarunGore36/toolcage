@@ -387,4 +387,61 @@ mod tests {
         assert!(verify_with_pubkey(&p, Some(&pk)).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
+    #[test]
+    fn event_matches_schema_required_fields() {
+        // Guard against schema/code drift: a serialized Event must contain every
+        // field the schema marks required, and must NOT require ts_mono (nothing
+        // emits it). Load the schema from the schemas/ directory.
+        use serde_json::Value;
+        let schema: Value =
+            serde_json::from_str(include_str!("../../../schemas/audit-event-v0.json"))
+                .expect("audit-event-v0.json is valid JSON");
+        let required = schema["required"]
+            .as_array()
+            .expect("schema has required array")
+            .iter()
+            .map(|v| v.as_str().expect("required entry is string").to_string())
+            .collect::<Vec<_>>();
+        // ts_mono is not emitted by any code path; it must not be required.
+        assert!(
+            !required.contains(&"ts_mono".to_string()),
+            "ts_mono must not be required"
+        );
+        // deny-all is emitted by panic_freeze; it must be in the decision enum.
+        let decision_enum = schema["properties"]["decision"]["enum"]
+            .as_array()
+            .expect("decision enum exists")
+            .iter()
+            .map(|v| v.as_str().expect("enum entry is string").to_string())
+            .collect::<Vec<_>>();
+        assert!(
+            decision_enum.contains(&"deny-all".to_string()),
+            "decision enum must include deny-all"
+        );
+        // Serialize a representative Event and check every required field present.
+        let e = Event {
+            seq: 0,
+            ts_wall: "2026-01-01T00:00:00Z".into(),
+            session: "s1".into(),
+            actor: "test".into(),
+            action: "act".into(),
+            request_hash: "abc".into(),
+            decision: "allow".into(),
+            rule_ids: vec![],
+            token_rev_id: "r".into(),
+            result: "ok".into(),
+            bytes: 0,
+            claimed_by: "host".into(),
+            prev_hash: "0".repeat(64),
+            hash: "1".repeat(64),
+        };
+        let serialized = serde_json::to_value(&e).expect("event serializes");
+        let obj = serialized.as_object().expect("event is object");
+        for field in &required {
+            assert!(
+                obj.contains_key(field.as_str()),
+                "serialized event missing required field: {field}"
+            );
+        }
+    }
 }
