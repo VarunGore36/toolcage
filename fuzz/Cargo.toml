@@ -9,9 +9,30 @@ cargo-fuzz = true
 [workspace]
 
 [dependencies]
+libfuzzer-sys = "0.4"
 toolcage-guest-agent = { path = "../crates/guest-agent" }
 toolcage-policy = { path = "../crates/policy" }
 toolcage-audit = { path = "../crates/audit" }
 toolcage-proxy = { path = "../crates/proxy" }
 serde_json = "1"
 arbitrary = "1"
+
+[[bin]]
+name = "fuzz_audit"
+path = "fuzz_targets/audit.rs"
+required-features = []
+
+[[bin]]
+name = "fuzz_guest_agent"
+path = "fuzz_targets/guest_agent.rs"
+required-features = []
+
+[[bin]]
+name = "fuzz_policy"
+path = "fuzz_targets/policy.rs"
+required-features = []
+
+[[bin]]
+name = "fuzz_proxy"
+path = "fuzz_targets/proxy.rs"
+required-features = []

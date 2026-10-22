@@ -1,0 +1,1 @@
+{"id":"1","op":{"Exec":{"argv":["/bin/echo","hi"],"env_refs":["secret:github_token"]}}}

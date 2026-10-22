@@ -1,0 +1,7 @@
+tool: test
+min_isolation: tier0
+net:
+  mode: allowlist
+  hosts:
+    - host: github
+      methods: [GET]

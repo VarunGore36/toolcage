@@ -1,0 +1,14 @@
+tool: test
+min_isolation: tier0
+fs:
+  mounts:
+    - path: /workspace
+      mode: rw
+net:
+  mode: allowlist
+  hosts:
+    - host: github
+      methods: [GET]
+credentials:
+  - name: github_token
+    use_with: github

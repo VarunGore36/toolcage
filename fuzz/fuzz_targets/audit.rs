@@ -4,7 +4,7 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 use serde_json::from_slice;
-use toolcage_audit::{Event, verify};
+use toolcage_audit::Event;
 
 fuzz_target!(|data: &[u8]| {
     let text = match std::str::from_utf8(data) {
