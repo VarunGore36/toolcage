@@ -133,6 +133,15 @@ enum McpOp {
         /// Capability HMAC key file (64 hex chars) for token verification.
         #[arg(long)]
         key_hex: Option<PathBuf>,
+        /// Session capability token (JSON, as minted by `token mint`). REQUIRED
+        /// when --key-hex is armed: the front door is dual-auth, policy AND
+        /// token, so an agent cannot drop the token to escape its attenuation.
+        #[arg(long)]
+        token: Option<PathBuf>,
+        /// Revoked rev_id (repeatable). Checked against every presented token
+        /// and its parent chain on every call.
+        #[arg(long = "revocation")]
+        revocations: Vec<String>,
     },
     /// Single call (for tests): --name run_command --args-json '{...}'.
     Call {
@@ -156,6 +165,15 @@ enum McpOp {
         /// Capability HMAC key file (64 hex chars) for token verification.
         #[arg(long)]
         key_hex: Option<PathBuf>,
+        /// Session capability token (JSON, as minted by `token mint`). REQUIRED
+        /// when --key-hex is armed: the front door is dual-auth, policy AND
+        /// token, so an agent cannot drop the token to escape its attenuation.
+        #[arg(long)]
+        token: Option<PathBuf>,
+        /// Revoked rev_id (repeatable). Checked against every presented token
+        /// and its parent chain on every call.
+        #[arg(long = "revocation")]
+        revocations: Vec<String>,
     },
 }
 
@@ -208,6 +226,22 @@ fn load_token(p: &Option<PathBuf>) -> anyhow::Result<Option<toolcage_capability:
     } else {
         Ok(None)
     }
+}
+
+/// Session revocation list from `--revocation` flags. The presented token is
+/// tracked so that revoking a *parent* id invalidates the whole subtree.
+fn build_revocations(
+    ids: &[String],
+    tok: Option<&toolcage_capability::Token>,
+) -> toolcage_capability::RevocationList {
+    let mut rl = toolcage_capability::RevocationList::default();
+    for id in ids {
+        rl.revoke(id);
+    }
+    if let Some(t) = tok {
+        rl.track(t);
+    }
+    rl
 }
 
 /// Decode a 64-char (32-byte) hex string into [u8; 32]. Returns an error
@@ -527,11 +561,15 @@ fn main() -> anyhow::Result<()> {
                 workspace,
                 unsafe_no_isolation,
                 key_hex,
+                token,
+                revocations,
             } => {
                 let text = std::fs::read_to_string(&policy)?;
                 let pol = toolcage_policy::load_yaml(&text)?;
                 let t = toolcage_backend::Tier::parse(&tier)?;
                 let cap_key = load_key(&key_hex)?;
+                let tok = load_token(&token)?;
+                let rl = build_revocations(&revocations, tok.as_ref());
                 // Persistent egress budget store, derived from the audit log.
                 let budget_file = audit.with_extension("budgets.json");
                 let workspace =
@@ -587,8 +625,8 @@ fn main() -> anyhow::Result<()> {
                                 &broker,
                                 &mut proxy,
                                 &mut budgets,
-                                None,
-                                &toolcage_capability::RevocationList::default(),
+                                tok.as_ref(),
+                                &rl,
                                 &cp.name,
                                 &cp.arguments,
                             ) {
@@ -619,11 +657,15 @@ fn main() -> anyhow::Result<()> {
                 workspace,
                 unsafe_no_isolation,
                 key_hex,
+                token,
+                revocations,
             } => {
                 let text = std::fs::read_to_string(&policy)?;
                 let pol = toolcage_policy::load_yaml(&text)?;
                 let t = toolcage_backend::Tier::parse(&tier)?;
                 let cap_key = load_key(&key_hex)?;
+                let tok = load_token(&token)?;
+                let rl = build_revocations(&revocations, tok.as_ref());
                 // Persistent egress budget store, derived from the audit log.
                 let budget_file = audit.with_extension("budgets.json");
                 let workspace =
@@ -658,8 +700,8 @@ fn main() -> anyhow::Result<()> {
                     &broker,
                     &mut proxy,
                     &mut budgets,
-                    None,
-                    &toolcage_capability::RevocationList::default(),
+                    tok.as_ref(),
+                    &rl,
                     &name,
                     &args,
                 ) {
