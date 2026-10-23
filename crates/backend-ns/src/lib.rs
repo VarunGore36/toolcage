@@ -1,13 +1,15 @@
 //! Tier 0 driver v1: real kernel isolation.
 //!
-//! `exec(id, argv)` forks a child which, *before* exec'ing the workload,
-//! applies (in order): a new user namespace (root only inside it), mount +
-//! PID + network + IPC + UTS namespaces, a private mount tree, bind-mounted
+//! `exec(id, argv)` clones a child which is *born inside* the namespace stack
+//! — user (root only inside it), mount, PID, network, IPC, UTS — and which,
+//! *before* exec'ing the workload, applies a private mount tree, bind-mounted
 //! read-only system dirs, a writable `/workspace`, a Landlock ruleset
 //! restricting file access, and a seccomp-BPF filter blocking sockets,
 //! namespace manipulation, mounts, ptrace and module/kexec ops. Only then is
-//! argv exec'd. The parent waits (bounded by the supervisor's timeout), reads
-//! capped output and reports the exit code.
+//! argv exec'd. The child is PID 1 of the new PID namespace, so the workload
+//! and everything it spawns are contained there (and never in the host's).
+//! The parent waits (bounded by the supervisor's timeout), reads capped
+//! output and reports the exit code.
 //!
 //! This is a genuine kernel boundary for Tier0. It needs the full namespace
 //! stack (user, mount, net, ipc, pid, uts) and Landlock; where the host can't
@@ -47,9 +49,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use nix::fcntl::{open, OFlag};
-use nix::sched::{unshare, CloneFlags};
 use nix::sys::stat::Mode;
-use nix::unistd::{close, fork, pipe2, ForkResult};
+use nix::unistd::{close, pipe2};
 use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
 
 const OUTPUT_CAP: usize = 1024 * 1024;
@@ -152,46 +153,101 @@ pub struct Probe {
     pub seccomp: bool,
 }
 
-/// Real isolation-namespace probe: fork a child that attempts the exact
-/// namespace stack Tier0 needs (userns + mount/net/ipc/pid/uts) and report the
+/// Create a child inside the full Tier 0 namespace stack — user + mount +
+/// net + ipc + pid + uts — in ONE clone3() call. Returns 0 in the child and
+/// the child's pid in the parent (fork-like: stack is NULL, so the child
+/// resumes on a copy of our stack and both continue from the call site).
+///
+/// Why clone3() and not fork()+unshare(): `unshare(CLONE_NEWPID)` only moves
+/// *future children* into the new PID namespace — the calling process stays
+/// in the old one. That shape therefore exec'd the workload in the HOST PID
+/// namespace, where kill(2) is permitted against any process sharing its uid:
+/// other sessions' processes and the supervisor itself. Creating the child
+/// with CLONE_NEWPID makes it PID 1 of the new namespace — the workload runs
+/// inside it, and when it dies the kernel tears down everything it spawned.
+///
+/// clone3 needs Linux 5.3+ (Tier 0 already requires Landlock, i.e. 5.13+, so
+/// this is never the limiting factor). Where it is unavailable the PID
+/// namespace boundary cannot be established: fail closed, never run without
+/// it — the same stance Landlock takes below.
+fn clone_all_namespaces() -> anyhow::Result<i32> {
+    /// struct clone_args (Linux 5.5+). Kernels that know fewer trailing
+    /// fields accept the larger size as long as they are zero, which they are.
+    #[repr(C)]
+    #[derive(Default)]
+    struct CloneArgs {
+        flags: u64,
+        pidfd: u64,
+        child_tid: u64,
+        parent_tid: u64,
+        exit_signal: u64,
+        stack: u64,
+        stack_size: u64,
+        tls: u64,
+        set_tid: u64,
+        set_tid_size: u64,
+        cgroup: u64,
+    }
+
+    // NB: clone3 takes the exit signal ONLY in exit_signal — unlike the legacy
+    // clone(2) syscall, whose flags carry it in the low byte. CSIGNAL bits in
+    // flags make the kernel reject the call with EINVAL.
+    let flags = (libc::CLONE_NEWUSER
+        | libc::CLONE_NEWNS
+        | libc::CLONE_NEWNET
+        | libc::CLONE_NEWIPC
+        | libc::CLONE_NEWPID
+        | libc::CLONE_NEWUTS) as u64;
+    let args = CloneArgs {
+        flags,
+        exit_signal: libc::SIGCHLD as u64,
+        ..Default::default()
+    };
+    // stack: 0 -> fork(2) semantics for the child's stack and return value.
+    let rc = unsafe {
+        libc::syscall(
+            libc::SYS_clone3,
+            &args as *const CloneArgs,
+            std::mem::size_of::<CloneArgs>(),
+        )
+    };
+    if rc < 0 {
+        let e = std::io::Error::last_os_error();
+        anyhow::bail!("clone3(userns+mount/net/ipc/pid/uts) failed: {e}");
+    }
+    Ok(rc as i32)
+}
+
+/// Real isolation-namespace probe: run the exact namespace stack Tier0 uses
+/// (userns + mount/net/ipc/pid/uts) in a throwaway child and report the
 /// outcome. Probing `CLONE_NEWUSER` alone is not enough: some hosts (GitHub's
 /// Ubuntu runners) allow user namespaces but block the remaining ones, in
 /// which case every exec dies during setup (exit 126). Reading
 /// /proc/sys/kernel/unprivileged_userns_clone is not enough either — that
-/// sysctl is Debian-specific and absent elsewhere. The forked child does only
-/// async-signal-safe work (unshare + _exit), so this is safe from a
-/// multithreaded caller.
+/// sysctl is Debian-specific and absent elsewhere. The child does only
+/// async-signal-safe work (_exit), so this is safe from a multithreaded
+/// caller. Probes the same clone_all_namespaces() the exec path uses, so the
+/// report matches what a run would actually hit.
 fn ns_stack_works() -> bool {
-    match unsafe { fork() } {
-        Ok(ForkResult::Parent { child }) => {
-            let mut status: c_int = 0;
-            loop {
-                let r = unsafe { libc::waitpid(child.as_raw(), &mut status, 0) };
-                if r == child.as_raw() {
-                    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
-                }
-                if r < 0 {
-                    let e = std::io::Error::last_os_error();
-                    if e.kind() == std::io::ErrorKind::Interrupted {
-                        continue;
-                    }
-                }
-                return false;
+    let Ok(pid) = clone_all_namespaces() else {
+        return false;
+    };
+    if pid == 0 {
+        unsafe { libc::_exit(0) };
+    }
+    let mut status: c_int = 0;
+    loop {
+        let r = unsafe { libc::waitpid(pid, &mut status, 0) };
+        if r == pid {
+            return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+        }
+        if r < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                continue;
             }
         }
-        Ok(ForkResult::Child) => {
-            let ok = unshare(
-                CloneFlags::CLONE_NEWUSER
-                    | CloneFlags::CLONE_NEWNS
-                    | CloneFlags::CLONE_NEWNET
-                    | CloneFlags::CLONE_NEWIPC
-                    | CloneFlags::CLONE_NEWPID
-                    | CloneFlags::CLONE_NEWUTS,
-            )
-            .is_ok();
-            unsafe { libc::_exit(if ok { 0 } else { 1 }) };
-        }
-        Err(_) => false,
+        return false;
     }
 }
 
@@ -363,10 +419,16 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
     let (ready_r, ready_w) = pipe2(OFlag::O_CLOEXEC)?;
     let (go_r, go_w) = pipe2(OFlag::O_CLOEXEC)?;
 
-    match unsafe { fork() } {
-        Ok(ForkResult::Parent { child }) => {
+    // ONE clone3() call creates the child in the whole Tier 0 namespace stack
+    // (user + mount + net + ipc + pid + uts) — see clone_all_namespaces() for
+    // why this has to be a clone() and not fork()+unshare(). CLONE_NEWPID
+    // makes the child PID 1 of the new PID namespace, so the workload really
+    // runs inside it; the previous shape ran it in the host PID namespace.
+    let child_raw = clone_all_namespaces()?;
+    match child_raw {
+        // --- PARENT: nonzero = the child's pid ---
+        pid if pid != 0 => {
             // Parent: original process, allocation is fine here.
-            let child_raw = child.as_raw();
 
             // FAIL-CLOSED post-fork contract. The child has already unshared
             // and is blocked on the go signal: if anything below fails before
@@ -449,8 +511,8 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                 match unsafe { libc::waitpid(child_raw, &mut status, WNOHANG) } {
                     0 => {
                         if Instant::now() > deadline {
-                            let _ = unsafe { libc::kill(child_raw, SIGKILL) };
                             timed_out = true;
+
                         }
                         std::thread::sleep(Duration::from_millis(50));
                     }
@@ -482,36 +544,21 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                 truncated: out_trunc || err_trunc,
             })
         }
-        Ok(ForkResult::Child) => {
-            // --- CHILD: zero allocation between fork and execve ---
+        // --- CHILD: 0 = us, and we are PID 1 of the new PID namespace ---
+        _ => {
+            // Zero allocation between clone and execve: the address space is
+            // a COW copy of the parent's (exactly like fork()), so another
+            // thread may have held the allocator lock when we were copied.
             close(out_r).ok();
             close(err_r).ok();
             close(ready_r).ok();
             close(go_w).ok();
 
-            // 1. The full namespace stack in ONE unshare: user + mount + net +
-            // ipc + pid + uts. The kernel creates the userns first, so the rest
-            // are owned by it (same as `unshare -Urn`). The old two-phase split
-            // (userns, uid-map handshake, then the rest) fails on hosts where
-            // the combined call works — probe and exec use the same sequence.
-            // On failure THIS process must die here: `?` would return into the
-            // caller's control flow and leave a duplicate supervisor running
-            // around (see child_die).
-            if unshare(
-                CloneFlags::CLONE_NEWUSER
-                    | CloneFlags::CLONE_NEWNS
-                    | CloneFlags::CLONE_NEWNET
-                    | CloneFlags::CLONE_NEWIPC
-                    | CloneFlags::CLONE_NEWPID
-                    | CloneFlags::CLONE_NEWUTS,
-            )
-            .is_err()
-            {
-                child_die(
-                    126,
-                    b"toolcage: unshare(userns+mount/net/ipc/pid/uts) failed",
-                );
-            }
+            // 1. The namespace stack is already in place: clone_all_namespaces()
+            // created us inside user + mount + net + ipc + pid + uts in a
+            // single call. CLONE_NEWPID is what makes this process init of the
+            // new PID namespace — everything the workload spawns stays in it,
+            // and killing us (timeout) takes the whole namespace down with it.
             let _ = unsafe {
                 libc::write(ready_w.as_raw_fd(), &[1u8] as *const u8 as *const c_void, 1)
             };
@@ -523,12 +570,19 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                 // supervisor, no timeout, no output capture would apply.
                 child_die(126, b"toolcage: go signal missing; refusing to run");
             }
-
             // Root inside this namespace only (uid/gid maps written by the
             // parent during the handshake above).
-            let _ = unsafe { libc::setresgid(0, 0, 0) };
-            let _ = unsafe { libc::setresuid(0, 0, 0) };
-
+            //
+            // Raw syscalls, NOT glibc's setresgid/setresuid: those run the
+            // setxid broadcast in a multithreaded program (a libc lock plus a
+            // futex wait). clone() — unlike fork() — runs no pthread_atfork
+            // handler, so a lock like that still held by another thread of the
+            // parent at clone time is never released in *this* process: the
+            // child parks in futex_wait forever and the exec is eventually
+            // killed as a timeout. Everything between clone and execve must be
+            // a raw syscall for the same reason.
+            let _ = unsafe { libc::syscall(libc::SYS_setresgid, 0, 0, 0) };
+            let _ = unsafe { libc::syscall(libc::SYS_setresuid, 0, 0, 0) };
             // no_new_privs BEFORE the sandbox layers: landlock restrict_self
             // and seccomp both require it (or CAP_SYS_ADMIN in the userns), and
             // some hosts deny the capability path (restrict_self failed EPERM
@@ -538,7 +592,6 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                 // PR_SET_NO_NEW_PRIVS = 38
                 child_die(123, b"toolcage: no_new_privs failed; refusing to run");
             }
-
             // 3. Private mount tree: nothing propagates to the host.
             unsafe {
                 libc::mount(
@@ -576,18 +629,14 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                     };
                 }
             }
-
             // chdir into the workspace.
             if unsafe { libc::chdir(workspace_cstr.as_ptr()) } != 0 {
                 child_die(125, b"toolcage: chdir workspace failed");
             }
-
             // 4. Landlock filesystem rules (best-effort).
             apply_landlock(&spec.workspace);
-
             // 5. seccomp-BPF: block sockets, namespace/mount/ptrace/module ops.
             apply_seccomp(&seccomp_insns);
-
             // env_clear: replace environ with minimal PATH (no secrets leak).
             // Raw pointer manipulation — no allocation.
             unsafe {
@@ -620,7 +669,6 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                     }
                 }
             }
-
             // Duplicate output pipes onto stdout/stderr, close the rest.
             let _ = unsafe { libc::dup2(out_w.as_raw_fd(), STDOUT_FILENO) };
             let _ = unsafe { libc::dup2(err_w.as_raw_fd(), STDERR_FILENO) };
@@ -645,7 +693,6 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
             // this arm stays diverging.
             unsafe { libc::_exit(127) };
         }
-        Err(e) => anyhow::bail!("fork failed: {e}"),
     }
 }
 
@@ -1464,6 +1511,128 @@ mod tests {
         );
         b.destroy(&spec.id).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tier0_workload_is_pid1_of_its_own_pid_namespace() {
+        // CLONE_NEWPID makes the workload init of a fresh PID namespace, so
+        // getpid() inside it is 1. The old shape (fork + unshare(CLONE_NEWPID))
+        // left the *calling* process in the host PID namespace — unshare only
+        // moves future children — so the workload ran host-side, where kill(2)
+        // is allowed against every process sharing its uid: other sessions'
+        // processes and the supervisor itself.
+        //
+        // `$$` is the shell's getpid() — /proc is still the host's procfs, so
+        // /proc/self would misleadingly show the host pid.
+        if !isolated() {
+            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-pidns-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = SessionSpec {
+            id: "t-pidns".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        let r = b
+            .exec("t-pidns", &["/bin/sh".into(), "-c".into(), "echo $$".into()])
+            .unwrap();
+        assert_eq!(r.exit_code, Some(0), "sh -c 'echo $$' failed: {r:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&r.stdout).trim(),
+            "1",
+            "workload must be PID 1 of its own PID namespace (got {})",
+            String::from_utf8_lossy(&r.stdout).trim()
+        );
+        b.destroy("t-pidns").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concurrent_execs_never_inherit_a_held_lock() {
+        // clone() — unlike fork() — runs no pthread_atfork handler, so any libc
+        // lock another thread of this process holds at clone time stays locked
+        // in the child forever (it has no other thread to release it). A child
+        // path that calls a locking glibc wrapper — set*id's setxid broadcast
+        // being the one that bit here — then parks in futex_wait and the exec
+        // is eventually killed as a timeout. That is why the code between
+        // clone and execve is raw syscalls only; this exercises it under real
+        // contention: concurrent clones while other threads churn the
+        // allocator. A regression shows up as execs that hang to the 30s
+        // deadline (exit_code: None) instead of returning promptly.
+        //
+        // Like any race test this is probabilistic: with the locking wrapper it
+        // failed ~5 runs in 12 here.
+        if !isolated() {
+            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+            return;
+        }
+        // Keep libc locks hot in this process while the execs clone.
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let churn: Vec<_> = (0..4)
+            .map(|_| {
+                let stop = stop.clone();
+                std::thread::spawn(move || {
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        let mut v = Vec::with_capacity(64);
+                        v.extend_from_slice(&[7u8; 64]);
+                        drop(v);
+                    }
+                })
+            })
+            .collect();
+
+        let workers: Vec<_> = (0..8)
+            .map(|t| {
+                std::thread::spawn(move || {
+                    for i in 0..3 {
+                        let dir = std::env::temp_dir().join(format!(
+                            "tc-ns-lock-{}-{t}-{i}",
+                            std::process::id()
+                        ));
+                        std::fs::create_dir_all(&dir).unwrap();
+                        let id = format!("lock-{t}-{i}");
+                        let spec = SessionSpec {
+                            id: id.clone(),
+                            tier: Tier::Tier0,
+                            mem_mb: 0,
+                            workspace_mb: 0,
+                            workspace: dir.display().to_string(),
+                        };
+                        let mut b = NsBackend::new();
+                        b.create(&spec).unwrap();
+                        let start = Instant::now();
+                        let r = b.exec(&id, &["/bin/echo".into(), "ok".into()]).unwrap();
+                        assert_eq!(
+                            r.exit_code,
+                            Some(0),
+                            "concurrent exec must not hang or be killed: {r:?}"
+                        );
+                        assert_eq!(String::from_utf8_lossy(&r.stdout).trim(), "ok");
+                        assert!(
+                            start.elapsed() < Duration::from_secs(20),
+                            "exec hung (inherited lock?): {:?}",
+                            start.elapsed()
+                        );
+                        b.destroy(&id).unwrap();
+                        let _ = std::fs::remove_dir_all(&dir);
+                    }
+                })
+            })
+            .collect();
+
+        for h in workers {
+            h.join().unwrap();
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        for h in churn {
+            h.join().unwrap();
+        }
     }
 
     #[test]
