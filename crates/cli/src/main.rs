@@ -269,6 +269,23 @@ fn build_revocations(
     rl
 }
 
+/// Write secret material (keys / tokens / credentials) mode 0600:
+/// `fs::write` defaults to 0644, which leaves secret bytes world-readable
+/// on a multi-user host.
+fn write_secret(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
+    use std::fs::OpenOptions;
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    f.write_all(bytes)?;
+    Ok(())
+}
+
 /// Decode a 64-char (32-byte) hex string into [u8; 32]. Returns an error
 /// (never panics) on wrong length, odd length, or non-hex input — replaces
 /// the old `hex[2*i..2*i+2]` slicing that panicked on short or non-ASCII input.
@@ -509,7 +526,7 @@ fn main() -> anyhow::Result<()> {
                 // REVIEW: key file stays host-side (never a guest, never a
                 // token). Never commit *.key.hex.
                 let dest = out_prefix.with_extension("key.hex");
-                std::fs::write(&dest, k.to_hex())?;
+                write_secret(&dest, k.to_hex().as_bytes())?;
                 println!("wrote {}", dest.display());
             }
             TokenOp::Mint { rev, out, key_hex } => {
@@ -527,7 +544,7 @@ fn main() -> anyhow::Result<()> {
                         expires_at: 9_999_999_999,
                     },
                 );
-                std::fs::write(&out, serde_json::to_string_pretty(&t)?)?;
+                write_secret(&out, serde_json::to_string_pretty(&t)?.as_bytes())?;
                 println!("minted {rev} -> {}", out.display());
             }
             TokenOp::Attenuate {
@@ -577,7 +594,7 @@ fn main() -> anyhow::Result<()> {
                         expires_at: child_exp,
                     },
                 )?;
-                std::fs::write(&out, serde_json::to_string_pretty(&c)?)?;
+                write_secret(&out, serde_json::to_string_pretty(&c)?.as_bytes())?;
                 println!("attenuated {} -> {rev}", p.rev_id);
             }
         },
@@ -800,7 +817,7 @@ fn main() -> anyhow::Result<()> {
                 let sk = parse_hex32(&sk_hex)?;
                 // REVIEW: pubkey derived locally; secret never leaves host.
                 let cp = toolcage_audit::sign_checkpoint(0, "GENESIS", "0", &sk)?;
-                std::fs::write(out_prefix.with_extension("secret.hex"), &sk_hex)?;
+                write_secret(&out_prefix.with_extension("secret.hex"), sk_hex.as_bytes())?;
                 std::fs::write(out_prefix.with_extension("pub.hex"), &cp.pubkey_hex)?;
                 println!(
                     "wrote {} + {}",
