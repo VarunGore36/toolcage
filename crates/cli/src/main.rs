@@ -359,7 +359,10 @@ fn main() -> anyhow::Result<()> {
             use std::io::Write as _Write;
             let _ = std::io::stdout().flush();
             let _ = std::io::stderr().flush();
-            std::process::exit(o.exit_code.unwrap_or(0));
+            // exit_code is None when the child died from a signal or was
+            // killed by the wall-clock timeout: that is a failure, not
+            // success. unwrap_or(0) used to report both as exit 0.
+            std::process::exit(o.exit_code.unwrap_or(1));
         }
         Cmd::CheckNet {
             policy,
