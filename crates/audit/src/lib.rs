@@ -166,12 +166,26 @@ fn checkpoint_msg(seq: u64, head: &str, time: &str) -> Vec<u8> {
 }
 
 fn hex_decode(s: &str) -> anyhow::Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(s.len() / 2);
-    anyhow::ensure!(s.len().is_multiple_of(2), "odd hex");
-    for i in (0..s.len()).step_by(2) {
-        out.push(u8::from_str_radix(&s[i..i + 2], 16)?);
+    let b = s.as_bytes();
+    anyhow::ensure!(b.len() % 2 == 0, "odd hex");
+    let mut out = Vec::with_capacity(b.len() / 2);
+    for i in (0..b.len()).step_by(2) {
+        out.push((hex_val(b[i])? << 4) | hex_val(b[i + 1])?);
     }
     Ok(out)
+}
+
+/// Value of one ASCII hex digit. Operates on bytes, so multi-byte UTF-8
+/// input (which the old &s[i..i+2] str slicing turned into a panic) is
+/// rejected here with an error instead. A verification tool must refuse
+/// bad input, never crash on it.
+fn hex_val(c: u8) -> anyhow::Result<u8> {
+    match c {
+        b'0'..=b'9' => Ok(c - b'0'),
+        b'a'..=b'f' => Ok(c - b'a' + 10),
+        b'A'..=b'F' => Ok(c - b'A' + 10),
+        _ => anyhow::bail!("invalid hex digit"),
+    }
 }
 
 fn hex_of(b: &[u8]) -> String {
@@ -443,5 +457,77 @@ mod tests {
                 "serialized event missing required field: {field}"
             );
         }
+    }
+
+    #[test]
+    fn garbage_hex_does_not_panic_verifier() {
+        // hex_decode sliced &s[i..i+2] over a &str, which panics on multi-byte
+        // UTF-8 input with an even byte length (e.g. an emoji). Decode now
+        // operates on bytes and rejects anything that is not ASCII hex.
+        assert!(hex_decode("😀").is_err()); // 4 bytes, even, slices mid-char
+        assert!(hex_decode("zz").is_err()); // non-hex digits
+        assert!(hex_decode("z").is_err());  // odd length
+        assert_eq!(
+            hex_decode("deadBEEF").unwrap(),
+            vec![0xde, 0xad, 0xbe, 0xef]
+        );
+
+        // A checkpoint sibling with garbage sig_hex must fail verification,
+        // not crash: verify_with_pubkey parses every *.checkpoint.* file next
+        // to the log. Plant one with a 4-byte emoji sig (even length -> the
+        // old code panicked at &s[i..i+2]).
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("toolcage-audit-hex-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("audit.jsonl");
+        let _ = std::fs::remove_file(&p);
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                let n = e.file_name().to_string_lossy().to_string();
+                if n.starts_with("audit.jsonl.checkpoint.") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+        let sk = [7u8; 32];
+        let cp = super::sign_checkpoint(3, "abc123", "99", &sk).unwrap();
+        let pk_hex = cp.pubkey_hex.clone();
+        let mut pk = vec![0u8; 32];
+        for i in 0..32 {
+            pk[i] = u8::from_str_radix(&pk_hex[2 * i..2 * i + 2], 16).unwrap();
+        }
+        let mut bad = cp.clone();
+        bad.sig_hex = "😀".into(); // valid length, not ASCII hex
+        let mut f = std::fs::File::create(dir.join("audit.jsonl.checkpoint.3")).unwrap();
+        f.write_all(serde_json::to_string(&bad).unwrap().as_bytes())
+            .unwrap();
+        // A valid three-event log (same shape as the other checkpoint tests),
+        // so verification reaches the checkpoint scan.
+        let mut w = super::Writer::open(&p).unwrap();
+        for i in 0..3 {
+            w.append(super::Event {
+                seq: 0,
+                ts_wall: "2026-01-01T00:00:00Z".into(),
+                session: "s1".into(),
+                actor: "test".into(),
+                action: format!("act{i}"),
+                request_hash: "abc".into(),
+                decision: "allow".into(),
+                rule_ids: vec![],
+                token_rev_id: "r".into(),
+                result: "ok".into(),
+                bytes: 0,
+                claimed_by: "host".into(),
+                prev_hash: String::new(),
+                hash: String::new(),
+            })
+            .unwrap();
+        }
+        assert!(verify(&p).is_ok());
+        assert!(
+            verify_with_pubkey(&p, Some(&pk)).is_err(),
+            "garbage sig_hex must fail verification, not panic"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
