@@ -253,7 +253,15 @@ pub fn verify_with_pubkey(path: &Path, pubkey: Option<&[u8]>) -> anyhow::Result<
                 heads.push(expect_prev.clone());
             }
         }
-        let dir = path.parent().unwrap_or(std::path::Path::new("."));
+        let dir = match path.parent() {
+            // parent() of a bare file name is Some(""), not None — that empty
+            // component must be treated as the current directory, or
+            // read_dir("") silently fails and every relative log path reports
+            // "no checkpoint files found".
+            Some(p) if p.as_os_str().is_empty() => Path::new("."),
+            Some(p) => p,
+            None => Path::new("."),
+        };
         let stem = path.file_name().unwrap().to_string_lossy().to_string();
         let mut found = 0;
         if let Ok(rd) = std::fs::read_dir(dir) {
@@ -529,5 +537,60 @@ mod tests {
             "garbage sig_hex must fail verification, not panic"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn verify_with_pubkey_works_for_relative_log_path() {
+        // Bug: path.parent() of a bare file name is Some(""), not None, so
+        // read_dir("") silently failed and every relative log path reported
+        // "no checkpoint files found" even with valid checkpoints next to it.
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("toolcage-audit-rel-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let prev_cwd = std::env::current_dir().unwrap();
+        let _ = std::env::set_current_dir(&dir);
+        let result = (|| -> anyhow::Result<()> {
+            let p = Path::new("audit.jsonl");
+            let _ = std::fs::remove_file(p);
+            let sk = [11u8; 32];
+            let mut w = super::Writer::open(p).unwrap();
+            for i in 0..3 {
+                w.append(super::Event {
+                    seq: 0,
+                    ts_wall: "2026-01-01T00:00:00Z".into(),
+                    session: "s1".into(),
+                    actor: "test".into(),
+                    action: format!("act{i}"),
+                    request_hash: "abc".into(),
+                    decision: "allow".into(),
+                    rule_ids: vec![],
+                    token_rev_id: "r".into(),
+                    result: "ok".into(),
+                    bytes: 0,
+                    claimed_by: "host".into(),
+                    prev_hash: String::new(),
+                    hash: String::new(),
+                })
+                .unwrap();
+            }
+            let (n, head) = super::verify(p).unwrap();
+            assert_eq!(n, 3);
+            let cp = super::sign_checkpoint(n, &head, "99", &sk).unwrap();
+            let pk_hex = cp.pubkey_hex.clone();
+            let mut pk = vec![0u8; 32];
+            for i in 0..32 {
+                pk[i] = u8::from_str_radix(&pk_hex[2 * i..2 * i + 2], 16).unwrap();
+            }
+            let dest = dir.join(format!("audit.jsonl.checkpoint.{n}"));
+            let mut f = std::fs::File::create(&dest).unwrap();
+            f.write_all(serde_json::to_string(&cp).unwrap().as_bytes())
+                .unwrap();
+            // Relative path: used to fail with "no checkpoint files found".
+            super::verify_with_pubkey(p, Some(&pk))?;
+            Ok(())
+        })();
+        let _ = std::env::set_current_dir(&prev_cwd);
+        let _ = std::fs::remove_dir_all(&dir);
+        result.unwrap();
     }
 }
