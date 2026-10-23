@@ -525,7 +525,11 @@ fn main() -> anyhow::Result<()> {
                 let k = toolcage_capability::Key::from_bytes(kb);
                 // REVIEW: key file stays host-side (never a guest, never a
                 // token). Never commit *.key.hex.
-                let dest = out_prefix.with_extension("key.hex");
+                // Append .key.hex instead of with_extension: with_extension
+                // replaces the existing extension, so out/a.v1 and out/a.v2
+                // would both collapse to out/a.key.hex and clobber each other.
+                let key_name = format!("{}.key.hex", out_prefix.display());
+                let dest = std::path::Path::new(&key_name);
                 write_secret(&dest, k.to_hex().as_bytes())?;
                 println!("wrote {}", dest.display());
             }
@@ -800,7 +804,8 @@ fn main() -> anyhow::Result<()> {
                     .as_secs()
                     .to_string();
                 let cp = toolcage_audit::sign_checkpoint(n, &head, &t, &sk)?;
-                let dest = log.with_extension(format!("jsonl.checkpoint.{n}"));
+                let checkpoint_name = format!("{}.checkpoint.{}", log.display(), n);
+                let dest = std::path::Path::new(&checkpoint_name);
                 // REVIEW: key file stays host-side; checkpoint (sig+pubkey) is
                 // public. Never commit *-secret.hex.
                 std::fs::write(&dest, serde_json::to_string_pretty(&cp)?)?;
@@ -817,12 +822,18 @@ fn main() -> anyhow::Result<()> {
                 let sk = parse_hex32(&sk_hex)?;
                 // REVIEW: pubkey derived locally; secret never leaves host.
                 let cp = toolcage_audit::sign_checkpoint(0, "GENESIS", "0", &sk)?;
-                write_secret(&out_prefix.with_extension("secret.hex"), sk_hex.as_bytes())?;
-                std::fs::write(out_prefix.with_extension("pub.hex"), &cp.pubkey_hex)?;
+                // Append instead of with_extension: out/a.v1 and out/a.v2 must
+                // get distinct key files, not both collapse to out/a.*.hex.
+                let secret_name = format!("{}.secret.hex", out_prefix.display());
+                let pubkey_name = format!("{}.pub.hex", out_prefix.display());
+                let secret = std::path::Path::new(&secret_name);
+                let pubkey = std::path::Path::new(&pubkey_name);
+                write_secret(secret, sk_hex.as_bytes())?;
+                std::fs::write(pubkey, &cp.pubkey_hex)?;
                 println!(
                     "wrote {} + {}",
-                    out_prefix.with_extension("secret.hex").display(),
-                    out_prefix.with_extension("pub.hex").display()
+                    secret.display(),
+                    pubkey.display()
                 );
             }
         },

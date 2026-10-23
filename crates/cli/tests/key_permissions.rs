@@ -70,3 +70,92 @@ fn secret_files_are_mode_0600() {
         "pub.hex is public and must not be restricted to 0600"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn keygen_out_prefix_is_not_extension_replaced() {
+    // --out-prefix out/a.v1 must produce out/a.v1.key.hex, not out/a.key.hex.
+    // with_extension replaces the existing extension, so out/a.v1 and out/a.v2
+    // would both collapse to out/a.key.hex and clobber each other.
+    let dir = std::env::temp_dir().join(format!(
+        "tc-keyclob-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let base = dir.join("out/a");
+    std::fs::create_dir_all(base.parent().unwrap()).unwrap();
+
+    let s1 = cli_run(&["token", "keygen", "--out-prefix", base.with_extension("v1").to_str().unwrap()]);
+    assert!(s1.success(), "keygen v1 must succeed");
+    assert!(
+        base.with_extension("v1.key.hex").exists(),
+        "out/a.v1.key.hex must exist"
+    );
+    assert!(
+        !base.with_extension("key.hex").exists(),
+        "old buggy name out/a.key.hex must not be created"
+    );
+
+    let s2 = cli_run(&["token", "keygen", "--out-prefix", base.with_extension("v2").to_str().unwrap()]);
+    assert!(s2.success(), "keygen v2 must succeed");
+    assert!(
+        base.with_extension("v2.key.hex").exists(),
+        "out/a.v2.key.hex must exist"
+    );
+    assert!(
+        base.with_extension("v1.key.hex").exists(),
+        "out/a.v1.key.hex must not be clobbered by v2"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn checkpoint_file_uses_log_name() {
+    // --log audit.log must produce audit.log.checkpoint.N (not
+    // audit.jsonl.checkpoint.N), otherwise verify_with_pubkey scans the wrong
+    // name and reports "no checkpoint files found".
+    let dir = std::env::temp_dir().join(format!(
+        "tc-ckptname-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let key = dir.join("key");
+    let s = cli_run(&["token", "keygen", "--out-prefix", key.to_str().unwrap()]);
+    assert!(s.success(), "keygen must succeed");
+
+    // Generate a valid audit log via a real run (Tier0).
+    let log = dir.join("audit.log"); // NOTE: .log, not .jsonl
+    let policy = std::env::current_dir().unwrap().join("../../schemas/policy-v0.yaml");
+    let s = cli_run(&[
+        "run",
+        "--policy",
+        policy.to_str().unwrap(),
+        "--audit",
+        log.to_str().unwrap(),
+        "--",
+        "/bin/true",
+    ]);
+    assert!(s.success(), "run must succeed to seed the audit log");
+
+    let s = cli_run(&[
+        "audit",
+        "checkpoint",
+        "--log",
+        log.to_str().unwrap(),
+        "--key-hex",
+        key.with_extension("key.hex").to_str().unwrap(),
+    ]);
+    assert!(s.success(), "audit checkpoint must succeed");
+
+    assert!(
+        dir.join("audit.log.checkpoint.2").exists(),
+        "audit.log.checkpoint.2 must exist"
+    );
+    assert!(
+        !dir.join("audit.jsonl.checkpoint.2").exists(),
+        "audit.jsonl.checkpoint.2 (old buggy name) must not be created"
+    );
+}
+
