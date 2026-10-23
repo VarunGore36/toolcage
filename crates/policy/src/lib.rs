@@ -233,22 +233,30 @@ pub fn request_target_is_clean(p: &str) -> bool {
 
 /// Shell binaries whose `-c`-style flag executes an arbitrary command string.
 /// A bare denylist is inherently incomplete; prefer an explicit exec allowlist
-/// in a later milestone. Until then, deny these plus any inline-code flag.
+/// in a later milestone. Until then, deny these plus any inline-code flag,
+/// wherever they appear in argv (argv[0] or reached via `env sh -c`).
 const SHELL_BINS: &[&str] = &[
     "sh", "bash", "dash", "zsh", "fish", "ksh", "tcsh", "csh", "busybox",
 ];
 
 /// Interpreters and the flag that feeds them an inline code string.
-fn interpreter_inline_flag(bin: &str) -> Option<&'static str> {
-    match bin {
-        "python" | "python3" => Some("-c"),
-        "perl" => Some("-e"),
-        "ruby" => Some("-e"),
-        "node" => Some("-e"),
-        "lua" => Some("-e"),
-        "php" => Some("-r"),
-        _ => None,
-    }
+fn interpreter_flag(bin: &str) -> Option<&'static str> {
+    let known: &[(&str, &'static str)] = &[
+        ("python", "-c"), ("python3", "-c"),
+        ("perl", "-e"), ("ruby", "-e"), ("node", "-e"), ("lua", "-e"), ("php", "-r"),
+    ];
+    known.iter().find_map(|(k, f)| bin_matches(bin, *k).then_some(*f))
+}
+
+/// True if `name` names a known binary, tolerating version suffixes:
+/// `python3.12` → `python3`, `bash5` → `bash`, `busybox-1.35` → `busybox`.
+/// The known name must be a prefix; everything after it must look like a
+/// version (digits and dots) so `python3x` does not match `python`.
+fn bin_matches(name: &str, known: &str) -> bool {
+    name == known
+        || name
+            .strip_prefix(known)
+            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b'-'))
 }
 
 /// True for shell short-flag args that run an inline command string:
@@ -353,11 +361,29 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
                 if argv.len() >= 2 {
                     let bin = argv[0].rsplit('/').next().unwrap_or(&argv[0]);
                     let rest = &argv[1..];
-                    if SHELL_BINS.contains(&bin) && rest.iter().any(|a| shell_inline_flag(a)) {
+                    // A shell binary anywhere in argv (argv[0] itself, or reached
+                    // indirectly via `env sh -c`) running an inline-code string
+                    // executes arbitrary command text outside argv-array
+                    // scrutiny. Running a shell script file is the same class of
+                    // risk as `sh -c`, so either form is denied.
+                    let shell_here = SHELL_BINS
+                        .iter()
+                        .any(|s| bin_matches(bin, s))
+                        || rest
+                            .iter()
+                            .any(|a| SHELL_BINS.iter().any(|s| bin_matches(a, s)));
+                    if shell_here && rest.iter().any(|a| shell_inline_flag(a)) {
                         return deny("deny:shell", "shell -c is not allowed; use argv arrays");
                     }
-                    if let Some(flag) = interpreter_inline_flag(bin) {
-                        if rest.iter().any(|a| a == flag) {
+                    if shell_here && rest.iter().any(|a| !a.starts_with('-')) {
+                        return deny(
+                            "deny:shell",
+                            "shell script files are not allowed; use argv arrays",
+                        );
+                    }
+                    if let Some(flag) = interpreter_flag(bin) {
+                        // Detached (`-c code`) and joined (`-ccode`, `-e'code'`).
+                        if rest.iter().any(|a| a == flag || a.starts_with(flag)) {
                             return deny(
                                 "deny:shell",
                                 "interpreter inline code is not allowed; use argv arrays",

