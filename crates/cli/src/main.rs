@@ -183,6 +183,27 @@ enum McpOp {
 /// refused for tier1/tier2 (asking for strong isolation and none at once is a
 /// contradiction), and it always warns — the run is additionally flagged
 /// `isolation:unisolated` in the audit log by the supervisor.
+/// Can backend tier `tier` honor a policy demanding `min_isolation`?
+/// Lattice: Tier0 < Tier1 < Tier2; a tier honors its own floor and anything
+/// below it, never above. Unknown min_isolation strings deny. Used by the
+/// CLI so the policy floor is enforced even when --unsafe-no-isolation runs
+/// with no backend instance to consult.
+fn tier_honors_min(tier: toolcage_backend::Tier, min_isolation: &str) -> bool {
+    let need = match toolcage_backend::Tier::parse(min_isolation) {
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    matches!(
+        (need, tier),
+        (toolcage_backend::Tier::Tier0, _)
+            | (
+                toolcage_backend::Tier::Tier1,
+                toolcage_backend::Tier::Tier1 | toolcage_backend::Tier::Tier2
+            )
+            | (toolcage_backend::Tier::Tier2, toolcage_backend::Tier::Tier2)
+    )
+}
+
 fn wire_backend(
     tier_str: &str,
     t: toolcage_backend::Tier,
@@ -190,6 +211,17 @@ fn wire_backend(
     spec: &toolcage_backend::SessionSpec,
     unsafe_no_isolation: bool,
 ) -> Option<Box<dyn toolcage_backend::Backend>> {
+    // The policy's min_isolation floor applies to every run, including
+    // --unsafe-no-isolation: an unconfined tier0 backend cannot honor a
+    // policy demanding tier1/tier2, so refuse here instead of silently
+    // running unconfined and weakening the policy.
+    if !tier_honors_min(t, &pol.min_isolation) {
+        eprintln!(
+            "denied: tier {tier_str} cannot honor min_isolation {}",
+            pol.min_isolation
+        );
+        std::process::exit(2);
+    }
     if unsafe_no_isolation {
         if t != toolcage_backend::Tier::Tier0 {
             eprintln!("denied: --unsafe-no-isolation conflicts with --tier {tier_str}");
@@ -206,13 +238,6 @@ fn wire_backend(
         toolcage_backend::Tier::Tier1 => Box::new(toolcage_backend_gv::GvBackend::new()),
         toolcage_backend::Tier::Tier2 => Box::new(toolcage_backend_fc::FcBackend::new()),
     };
-    if !b.honors(&pol.min_isolation) {
-        eprintln!(
-            "denied: backend {tier_str} cannot honor min_isolation {}",
-            pol.min_isolation
-        );
-        std::process::exit(2);
-    }
     if let Err(e) = b.create(spec) {
         eprintln!("denied: create isolated session: {e:#}");
         std::process::exit(2);
