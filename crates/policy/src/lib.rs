@@ -188,6 +188,49 @@ fn path_match(pattern: &str, path: &str) -> bool {
     }
 }
 
+/// RFC 7230 token: the only shape allowed in a request method. Anything else
+/// (space, CR/LF, NUL) would let the guest restructure the request line that
+/// the proxy later writes verbatim.
+pub fn method_is_token(m: &str) -> bool {
+    !m.is_empty()
+        && m.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+}
+
+/// A request target we can both authorise AND forward unchanged.
+///
+/// The path is matched as a string and then written verbatim into the upstream
+/// request line, so anything that makes the string we authorised differ from
+/// the resource the upstream serves is denied here:
+///   - control characters, space, quotes, backslash: request-line and header
+///     injection (`/x HTTP/1.1\r\nX-Injected: 1`), request smuggling;
+///   - "." / ".." segments and percent-encoded dots or separators: traversal
+///     past a `/**` prefix, since the upstream decodes and normalizes those
+///     itself (`/repos/acme/app/../../../evil` matches the prefix as a string
+///     but resolves to `/evil` upstream).
+/// A clean target is already canonical, so prefix matching on it is sound.
+pub fn request_target_is_clean(p: &str) -> bool {
+    if !p.starts_with('/') {
+        return false;
+    }
+    // The whole target is written into the request line, so nothing that could
+    // end it early (or split a header off it) may appear anywhere in it.
+    if !p
+        .bytes()
+        .all(|b| b > 0x20 && b != 0x7f && b != b'\\' && b != b'"' && b != b'<')
+    {
+        return false;
+    }
+    // Traversal checks apply to the path component; the query is free-form and
+    // the upstream does not resolve it as a path.
+    let path = p.split('?').next().unwrap_or("");
+    let lower = path.to_ascii_lowercase();
+    if lower.contains("%2e") || lower.contains("%2f") || lower.contains("%5c") {
+        return false;
+    }
+    path.split('/').all(|seg| seg != "." && seg != "..")
+}
+
 /// Shell binaries whose `-c`-style flag executes an arbitrary command string.
 /// A bare denylist is inherently incomplete; prefer an explicit exec allowlist
 /// in a later milestone. Until then, deny these plus any inline-code flag.
@@ -239,6 +282,16 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
             let host = req.host.as_deref().unwrap_or("").to_ascii_lowercase();
             let method = req.method.as_deref().unwrap_or("GET").to_ascii_uppercase();
             let path = req.path.as_deref().unwrap_or("/");
+            // Request-line hygiene before any rule matching: the method and
+            // path are forwarded verbatim upstream, so a guest must not be able
+            // to smuggle a different resource or extra headers past the rule
+            // that was checked (see request_target_is_clean).
+            if !method_is_token(&method) || !request_target_is_clean(path) {
+                return deny(
+                    "deny:request-target",
+                    "malformed or ambiguous request target",
+                );
+            }
             for h in &policy.net.hosts {
                 // A rule matches if EITHER host or alias equals the request host.
                 let rule_match = h

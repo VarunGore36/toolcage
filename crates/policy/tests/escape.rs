@@ -152,3 +152,82 @@ fn shell_escape_blocked() {
         assert!(!d.allow);
     }
 }
+
+fn at(host: &str, method: &str, path: &str) -> policy::Request {
+    policy::Request {
+        action: "http.request".into(),
+        host: Some(host.into()),
+        method: Some(method.into()),
+        path: Some(path.into()),
+        fs_path: None,
+        argv: None,
+    }
+}
+
+#[test]
+fn request_target_traversal_denied() {
+    // `github` allows /repos/acme/app/**. A traversal that matches that prefix
+    // as a string but resolves outside it upstream must be refused before any
+    // rule matching — otherwise the rule that is checked is not the resource
+    // that gets served.
+    let p = sample();
+    for path in [
+        "/repos/acme/app/../../../orgs/evil/repos",
+        "/repos/acme/app/../../..",
+        "/repos/acme/app/./../other",
+        "/repos/acme/app/%2e%2e/%2e%2e/evil",
+        "/repos/acme/app/%2E%2E/evil",
+        "/repos/acme/app/%2fetc",
+        "/repos/acme/app/x%5c..%5cevil",
+        // absolute-form target: not rooted where it claims to be
+        "https://evil.example.com/repos/acme/app/x",
+    ] {
+        let d = policy::decide(&p, &at("github", "GET", path));
+        assert!(!d.allow, "traversal target must be denied: {path}");
+        assert_eq!(d.rule_ids, vec!["deny:request-target".to_string()], "{path}");
+    }
+}
+
+#[test]
+fn request_line_injection_denied() {
+    // The method and path are written verbatim into the upstream request line.
+    // A CR/LF/NUL/space there injects headers or a second request on the
+    // connection that carries the broker-injected Authorization header.
+    let p = sample();
+    for path in [
+        "/repos/acme/app/x HTTP/1.1\r\nX-Injected: 1\r\n\r\nGET /smuggled",
+        "/repos/acme/app/x\r\nX-Injected: 1",
+        "/repos/acme/app/x\nX-Injected: 1",
+        "/repos/acme/app/x\0/extra",
+        "/repos/acme/app/x name",
+    ] {
+        let d = policy::decide(&p, &at("github", "GET", path));
+        assert!(!d.allow, "injected target must be denied: {path:?}");
+        assert_eq!(d.rule_ids, vec!["deny:request-target".to_string()]);
+    }
+    for method in ["GET / HTTP/1.1\r\nX: 1", "GET\r\nX: 1", "GET POST", "GE\0T", ""] {
+        let d = policy::decide(&p, &at("github", method, "/repos/acme/app/x"));
+        assert!(!d.allow, "injected method must be denied: {method:?}");
+        assert_eq!(d.rule_ids, vec!["deny:request-target".to_string()]);
+    }
+}
+
+#[test]
+fn clean_request_target_still_allowed() {
+    // The hygiene check must not break legitimate traffic.
+    let p = sample();
+    for path in [
+        "/repos/acme/app",
+        "/repos/acme/app/",
+        "/repos/acme/app/pulls/12",
+        // A query string is a legal request target; the upstream does not
+        // resolve it as a path, so it stays allowed (and its own separators
+        // are not traversal).
+        "/repos/acme/app/pulls?state=open",
+    ] {
+        let d = policy::decide(&p, &at("github", "GET", path));
+        assert!(d.allow, "clean target must be allowed: {path} ({d:?})");
+    }
+    // POST is allowed by the rule (approval is enforced above policy).
+    assert!(policy::decide(&p, &at("github", "POST", "/repos/acme/app/x")).allow);
+}

@@ -325,6 +325,26 @@ impl Proxy {
         path: &str,
         headers: &[(String, String)],
     ) -> Result<ProxyResponse, ProxyError> {
+        // Defense in depth at the wire. The request head below is assembled by
+        // string formatting, so a method, path or header carrying CR/LF/NUL/
+        // space — or a traversal sequence the upstream would resolve to a
+        // different resource than the one policy authorised — must never reach
+        // the socket. policy::decide already refuses such targets; this covers
+        // callers that reach fetch() with a host that was checked elsewhere.
+        if !toolcage_policy::method_is_token(method)
+            || !toolcage_policy::request_target_is_clean(path)
+        {
+            return Err(ProxyError::Policy(
+                "malformed or ambiguous request target".into(),
+            ));
+        }
+        for (name, value) in headers {
+            if !toolcage_policy::method_is_token(name)
+                || !value.bytes().all(|b| b > 0x1f && b != 0x7f)
+            {
+                return Err(ProxyError::Policy("malformed header".into()));
+            }
+        }
         let (scheme, host, port) = parse_upstream(upstream)?;
         let ip = resolve_allowed_ip(host)?;
         let socket_addr = std::net::SocketAddr::new(ip, port);
@@ -534,6 +554,43 @@ mod tests {
     fn raw_unknown_host_denied() {
         let d = decide(&sample(), "evil.example.com", "GET", "/");
         assert!(!d.allow);
+    }
+
+    #[test]
+    fn fetch_refuses_request_line_injection_before_dialing() {
+        // The request head is string-formatted onto the wire, so a
+        // guest-controlled method/path must not inject headers or smuggle a
+        // second request on the connection that carries the broker-injected
+        // credential. The check runs before any dial, so this is hermetic: a
+        // regression would show up as a DNS lookup here, not as a clean
+        // Policy error.
+        let p = Proxy::new().unwrap();
+        for path in [
+            "/x HTTP/1.1\r\nX-Injected: 1\r\n\r\nGET /smuggled",
+            "/x\r\nX-Injected: 1",
+            "/x\nX-Injected: 1",
+            "/x\0y",
+            "/x name",
+            "/../etc/passwd",
+            "/a/../../etc/passwd",
+            "/a/%2e%2e/evil",
+        ] {
+            match p.fetch("api.github.com", "GET", path, &[]) {
+                Err(ProxyError::Policy(_)) => {}
+                other => panic!("target {path:?} must be rejected before dialing: {other:?}"),
+            }
+        }
+        for method in ["GET / HTTP/1.1\r\nX: 1", "GET\r\nX: 1", "GET POST", "GE\0T", ""] {
+            match p.fetch("api.github.com", method, "/x", &[]) {
+                Err(ProxyError::Policy(_)) => {}
+                other => panic!("method {method:?} must be rejected before dialing: {other:?}"),
+            }
+        }
+        let hdrs = vec![("X-A".to_string(), "v\r\nX-Injected: 1".to_string())];
+        match p.fetch("api.github.com", "GET", "/x", &hdrs) {
+            Err(ProxyError::Policy(_)) => {}
+            other => panic!("injected header must be rejected before dialing: {other:?}"),
+        }
     }
 
     #[test]
