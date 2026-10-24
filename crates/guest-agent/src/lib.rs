@@ -55,16 +55,38 @@ pub fn validate(msg: &GuestMsg) -> anyhow::Result<()> {
             }
             for e in env_refs {
                 // Only placeholders cross the boundary: `secret:name` or
-                // `plain:name`, never values. Split at ':' and match the kind as
-                // a bare word — kept away from the literal prefix+colon shape so
-                // generic secret scanners don't flag this check as a credential.
+                // `plain:name`, never values. Split at ':' and match the kind
+                // as a bare word — kept away from the literal prefix+colon
+                // shape so generic secret scanners don't flag this check as a
+                // credential.
+                anyhow::ensure!(e.len() <= 4096, "env ref too long");
+                anyhow::ensure!(!e.contains('\0'), "nul in env ref");
+                anyhow::ensure!(!e.contains('\n'), "newline in env ref");
                 let (kind, name) = e.split_once(':').unwrap_or(("", ""));
                 anyhow::ensure!(
                     matches!(kind, "secret" | "plain") && !name.is_empty(),
                     "bad env ref"
                 );
-                anyhow::ensure!(!e.contains('\n'), "newline in env ref");
+                // Env var names must follow the portable charset and must not
+                // be dangerous overrides that the guest could use to hijack its
+                // own runtime (LD_PRELOAD, LD_LIBRARY_PATH, ...).
+                anyhow::ensure!(
+                    name
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                        && name.as_bytes().first().is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_'),
+                    "bad env ref name"
+                );
+                anyhow::ensure!(
+                    !matches!(
+                        name.to_ascii_uppercase().as_str(),
+                        "LD_PRELOAD" | "LD_LIBRARY_PATH" | "LD_AUDIT" | "LD_DEBUG"
+                            | "PATH" | "HOME"
+                    ),
+                    "dangerous env ref name"
+                );
             }
+            anyhow::ensure!(env_refs.len() <= 64, "too many env refs");
             Ok(())
         }
         GuestOp::PutFile { path, bytes } => {
@@ -146,6 +168,60 @@ mod tests {
             },
         };
         assert!(validate(&bad).is_err());
+    }
+    #[test]
+    fn env_refs_bounded_and_named_safely() {
+        // A valid secret ref passes.
+        let ok = GuestMsg {
+            id: "1".into(),
+            op: GuestOp::Exec {
+                argv: vec!["/bin/x".into()],
+                env_refs: vec!["secret:github_token".into()],
+            },
+        };
+        assert!(validate(&ok).is_ok());
+        // Dangerous override names are rejected even with a valid kind.
+        for bad_name in ["LD_PRELOAD", "ld_preload", "LD_LIBRARY_PATH", "PATH", "HOME"] {
+            let m = GuestMsg {
+                id: "1".into(),
+                op: GuestOp::Exec {
+                    argv: vec!["/bin/x".into()],
+                    env_refs: vec![format!("secret:{bad_name}")],
+                },
+            };
+            assert!(validate(&m).is_err(), "env ref {bad_name} must be rejected");
+        }
+        // Names must follow the portable env-var charset.
+        for bad in ["secret:a=b", "secret:a b", "secret:a\0b", "secret:1bad", "secret:-bad"] {
+            let m = GuestMsg {
+                id: "1".into(),
+                op: GuestOp::Exec {
+                    argv: vec!["/bin/x".into()],
+                    env_refs: vec![bad.into()],
+                },
+            };
+            assert!(validate(&m).is_err(), "env ref {bad:?} must be rejected");
+        }
+        // Too many refs and too-long refs are rejected.
+        let many: Vec<String> = (0..65).map(|i| format!("secret:k{i}")).collect();
+        let m = GuestMsg {
+            id: "1".into(),
+            op: GuestOp::Exec {
+                argv: vec!["/bin/x".into()],
+                env_refs: many,
+            },
+        };
+        assert!(validate(&m).is_err(), "65 env refs must be rejected");
+        let long_name = "x".repeat(5000);
+        let long = format!("{long_name}:v");
+        let m = GuestMsg {
+            id: "1".into(),
+            op: GuestOp::Exec {
+                argv: vec!["/bin/x".into()],
+                env_refs: vec![long],
+            },
+        };
+        assert!(validate(&m).is_err(), "over-long env ref must be rejected");
     }
     #[test]
     fn putfile_path_canonicalized() {
