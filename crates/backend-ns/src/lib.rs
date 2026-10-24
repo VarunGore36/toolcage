@@ -50,7 +50,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use nix::fcntl::{open, OFlag};
 use nix::sys::stat::Mode;
-use nix::unistd::{close, pipe2};
+use nix::unistd::{close, fork, pipe2, ForkResult};
 use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
 
 const OUTPUT_CAP: usize = 1024 * 1024;
@@ -250,6 +250,63 @@ fn ns_stack_works() -> bool {
     }
 }
 
+/// Probe whether seccomp-BPF can actually be installed on this host.
+/// Runs in a forked child so installing (even a permissive) filter cannot
+/// affect the caller: seccomp is sticky per-thread, and the child exits
+/// immediately after. Returns true if PR_SET_SECCOMP accepts a filter.
+#[cfg(target_arch = "x86_64")]
+fn seccomp_works() -> bool {
+    match unsafe { fork() } {
+        Ok(ForkResult::Parent { child }) => {
+            let mut status: c_int = 0;
+            loop {
+                match unsafe { libc::waitpid(child.as_raw(), &mut status, 0) } {
+                    r if r == child.as_raw() => {
+                        return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+                    }
+                    r if r < 0 => {
+                        let e = std::io::Error::last_os_error();
+                        if e.kind() == std::io::ErrorKind::Interrupted {
+                            continue;
+                        }
+                        return false;
+                    }
+                    _ => return false,
+                }
+            }
+        }
+        Ok(ForkResult::Child) => {
+            // Trivial allow-all filter: load seccomp_data.nr, return ALLOW.
+            let filter = [sock_filter {
+                code: (BPF_RET | BPF_K) as u16,
+                jt: 0,
+                jf: 0,
+                k: SECCOMP_RET_ALLOW,
+            }];
+            let prog = sock_fprog {
+                len: filter.len() as u16,
+                filter: filter.as_ptr() as *mut sock_filter,
+            };
+            let rc = unsafe {
+                prctl(
+                    22, // PR_SET_SECCOMP
+                    SECCOMP_MODE_FILTER as c_ulong,
+                    &prog as *const sock_fprog as c_ulong,
+                    0,
+                    0,
+                )
+            };
+            unsafe { libc::_exit(if rc == 0 { 0 } else { 1 }) };
+        }
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn seccomp_works() -> bool {
+    false
+}
+
 fn landlock_abi() -> i32 {
     #[cfg(target_arch = "x86_64")]
     {
@@ -309,7 +366,7 @@ impl NsBackend {
             namespaces: ns_stack_works(),
             cgroup2: std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").exists(),
             landlock_abi: landlock_abi(),
-            seccomp: true,
+            seccomp: seccomp_works(),
         }
     }
 }
