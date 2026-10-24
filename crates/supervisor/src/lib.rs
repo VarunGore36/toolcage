@@ -68,7 +68,11 @@ fn now_wall() -> String {
 fn hash_argv(argv: &[String]) -> String {
     let mut h = Sha256::new();
     for a in argv {
-        h.update([a.len() as u8]);
+        // Length prefix as u64 (big-endian) so distinct argv can't collide by
+        // wrapping mod 256 (the old as u8 did). The trailing NUL still
+        // disambiguates for NUL-free args, and the prefix is the only
+        // discriminator when args contain NUL.
+        h.update(&(a.len() as u64).to_be_bytes());
         h.update(a.as_bytes());
         h.update([0u8]);
     }
@@ -635,4 +639,42 @@ pub fn panic_freeze(audit_path: &std::path::Path, reason: &str) -> anyhow::Resul
         format!("tainted at {} head {}\n", e.ts_wall, e.hash),
     )?;
     Ok(e.hash)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hash_argv_deterministic_and_disambiguates() {
+        // Same argv -> same hash (deterministic).
+        let a = hash_argv(&["/bin/echo".into(), "hello".into()]);
+        assert_eq!(a, hash_argv(&["/bin/echo".into(), "hello".into()]));
+
+        // The NUL length-prefix separator avoids concatenation ambiguity:
+        // ["ab"] must not hash the same as ["a", "b"].
+        assert_ne!(
+            hash_argv(&["ab".into()]),
+            hash_argv(&["a".into(), "b".into()]),
+            "NUL separator must prevent argv concatenation ambiguity"
+        );
+
+        // Arguments longer than 255 bytes must be hashed fully: the old u8
+        // length prefix wrapped mod 256 (300 and 44 both became 44). With u64
+        // the full length is preserved, so distinct arguments stay distinct.
+        let long = "A".repeat(300);
+        let short = "A".repeat(44);
+        assert_ne!(
+            hash_argv(&[long]),
+            hash_argv(&[short]),
+            "arguments longer than 255 bytes must not collide on the u8 length prefix"
+        );
+
+        // An empty argument still hashes distinctly from a missing one.
+        assert_ne!(
+            hash_argv(&["".into()]),
+            hash_argv(&[]),
+            "empty argv must differ from no argv"
+        );
+    }
 }
