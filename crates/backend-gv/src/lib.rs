@@ -268,18 +268,31 @@ impl Backend for GvBackend {
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);
         let mut timed_out = false;
         let exit_code = loop {
-            match child.try_wait()? {
-                Some(st) => break st.code(),
-                None => {
+            match child.try_wait() {
+                Ok(Some(st)) => break st.code(),
+                Ok(None) => {
                     if Instant::now() > deadline {
                         let _ = child.kill();
+                        // Kill the in-sandbox workload too: the runsc exec
+                        // client may outlive (or fail to signal) the workload
+                        // inside the sandbox, which would keep running after
+                        // the exec is recorded as timed out.
+                        let _ =
+                            Command::new(&self.runsc_path).arg("kill").arg(id).status();
                         timed_out = true;
                         break None;
                     }
                     std::thread::sleep(Duration::from_millis(50));
                 }
+                Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(e.into());
+                }
             }
         };
+        // Reap the child so no zombie is left behind after a timeout kill.
+        let _ = child.wait();
 
         let mut truncated = timed_out;
         let mut stdout_buf = rx_out
