@@ -212,6 +212,19 @@ impl PausedVm {
         verify_snapshot_hash(&gi.snapshot_path, &gi.manifest.snapshot_hash).with_context(|| {
             format!("snapshot hash verification failed for {}", gi.snapshot_path)
         })?;
+        // The mem file holds the guest's live RAM — where running code/state
+        // actually lives. Verify it (plus kernel and rootfs) the same way as the
+        // snapshot: a tampered mem file with an intact, correctly-signed manifest
+        // must not load silently.
+        verify_snapshot_hash(&gi.mem_file_path, &gi.manifest.mem_file_hash).with_context(|| {
+            format!("mem file hash verification failed for {}", gi.mem_file_path)
+        })?;
+        verify_snapshot_hash(&gi.manifest.kernel, &gi.manifest.kernel_hash).with_context(|| {
+            format!("kernel hash verification failed for {}", gi.manifest.kernel)
+        })?;
+        verify_snapshot_hash(&gi.manifest.rootfs, &gi.manifest.rootfs_hash).with_context(|| {
+            format!("rootfs hash verification failed for {}", gi.manifest.rootfs)
+        })?;
         let body = serde_json::to_vec(&load)?;
         let resp = http_put(&socket_path, "/snapshot/load", &body)?;
         let status = http_status(&resp)?;
@@ -925,6 +938,38 @@ mod tests {
         let hash = hex_encode(&sha2::Sha256::digest(b"fake-snapshot-data"));
         assert!(verify_snapshot_hash(snap.to_str().unwrap(), &hash).is_ok());
         assert!(verify_snapshot_hash(snap.to_str().unwrap(), "deadbeef").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn golden_image_all_hashes_verified_before_load() {
+        // Regression: before this fix only snapshot_hash was verified; a tampered
+        // mem_file (guest RAM) with a correctly-signed manifest loaded silently.
+        // snapshot, mem_file, kernel and rootfs hashes must each be checked.
+        let dir = std::env::temp_dir().join(format!("tc-hash-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+        let snap = write("snapshot", b"snapshot-data");
+        let mem = write("mem", b"guest-ram-data");
+        let kernel = write("kernel", b"vmlinux-data");
+        let rootfs = write("rootfs", b"rootfs-data");
+        let hash = |p: &std::path::Path| hex_encode(&sha2::Sha256::digest(&std::fs::read(p).unwrap()));
+
+        // All correct hashes pass.
+        assert!(verify_snapshot_hash(snap.to_str().unwrap(), &hash(&snap)).is_ok());
+        assert!(verify_snapshot_hash(mem.to_str().unwrap(), &hash(&mem)).is_ok());
+        assert!(verify_snapshot_hash(kernel.to_str().unwrap(), &hash(&kernel)).is_ok());
+        assert!(verify_snapshot_hash(rootfs.to_str().unwrap(), &hash(&rootfs)).is_ok());
+
+        // Tampering any one file fails — including mem_file (guest RAM).
+        assert!(verify_snapshot_hash(mem.to_str().unwrap(), &hash(&snap)).is_err());
+        assert!(verify_snapshot_hash(kernel.to_str().unwrap(), "deadbeef").is_err());
+        assert!(verify_snapshot_hash(rootfs.to_str().unwrap(), &hash(&snap)).is_err());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
