@@ -68,6 +68,13 @@ pub fn validate(msg: &GuestMsg) -> anyhow::Result<()> {
             Ok(())
         }
         GuestOp::PutFile { path, bytes } => {
+            // Path must be absolute and NUL-free: normalize_path() would turn a
+            // relative "workspace/foo" into "/workspace/foo" and accept it, but
+            // the consumer opens the raw string relative to cwd — a classic
+            // check-vs-use sandbox escape. NUL is rejected like argv (C APIs
+            // truncate at NUL, diverging the checked and opened paths).
+            anyhow::ensure!(path.starts_with('/'), "path must be absolute");
+            anyhow::ensure!(!path.contains('\0'), "nul in path");
             // Canonicalize (resolve '.', '..', '//') then require the result to
             // be /workspace or live under /workspace/. A bare starts_with would
             // wrongly accept "/workspacex" and "/workspace/../etc/passwd".
@@ -154,6 +161,36 @@ mod tests {
             "",
         ];
         for p in bad_paths {
+            let m = GuestMsg {
+                id: "1".into(),
+                op: GuestOp::PutFile {
+                    path: p.into(),
+                    bytes: 1,
+                },
+            };
+            assert!(validate(&m).is_err(), "path {p:?} must be rejected");
+        }
+        // Relative paths normalize under /workspace but resolve relative to cwd
+        // — a check-vs-use escape. Must be rejected outright.
+        let relative_paths = [
+            "workspace/foo",
+            "workspace/../etc/passwd",
+            "./workspace/foo",
+            "../etc/passwd",
+        ];
+        for p in relative_paths {
+            let m = GuestMsg {
+                id: "1".into(),
+                op: GuestOp::PutFile {
+                    path: p.into(),
+                    bytes: 1,
+                },
+            };
+            assert!(validate(&m).is_err(), "relative path {p:?} must be rejected");
+        }
+        // NUL bytes diverge the checked path from any C-API opened path.
+        let nul_paths = ["/workspace/foo\0/etc", "/workspace/\0etc/passwd"];
+        for p in nul_paths {
             let m = GuestMsg {
                 id: "1".into(),
                 op: GuestOp::PutFile {
