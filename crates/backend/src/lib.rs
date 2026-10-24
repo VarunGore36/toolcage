@@ -76,7 +76,15 @@ pub trait Backend {
     fn destroy(&mut self, id: &str) -> anyhow::Result<()>;
     /// Run argv inside an isolated session. Tier0 implements this with
     /// namespaces + Landlock + seccomp; other tiers return Err until wired.
-    fn exec(&mut self, _id: &str, _argv: &[String]) -> anyhow::Result<CommandResult> {
+    /// `timeout_secs` bounds wall-clock time; `cap` bounds each output stream.
+    /// Kill on timeout (fail-closed); truncation flagged in audit outcome.
+    fn exec(
+        &mut self,
+        _id: &str,
+        _argv: &[String],
+        _timeout_secs: u64,
+        _cap: usize,
+    ) -> anyhow::Result<CommandResult> {
         anyhow::bail!("backend exec not implemented for tier {:?}", self.tier())
     }
 }

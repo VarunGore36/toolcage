@@ -148,7 +148,7 @@ impl Supervisor {
         // (gVisor), Tier 2 = Firecracker. No tier is special-cased here: Tier 2
         // must never quietly degrade to a host spawn.
         if let Some(backend) = self.backend.as_mut() {
-            let cr = backend.exec(&self.session, argv)?;
+            let cr = backend.exec(&self.session, argv, timeout_secs, cap)?;
             w.append(Event {
                 seq: 0,
                 ts_wall: now_wall(),

@@ -33,7 +33,6 @@ use anyhow::Context;
 use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
 
 const OUTPUT_CAP: usize = 1024 * 1024;
-const EXEC_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct GvBackend {
     pub runsc_path: PathBuf,
@@ -221,7 +220,13 @@ impl Backend for GvBackend {
         Ok(())
     }
 
-    fn exec(&mut self, id: &str, argv: &[String]) -> anyhow::Result<CommandResult> {
+    fn exec(
+        &mut self,
+        id: &str,
+        argv: &[String],
+        timeout_secs: u64,
+        cap: usize,
+    ) -> anyhow::Result<CommandResult> {
         anyhow::ensure!(
             self.runsc_present(),
             "runsc not installed; tier1 unavailable"
@@ -251,16 +256,16 @@ impl Backend for GvBackend {
 
         thread::spawn(move || {
             let mut buf = Vec::new();
-            let _ = stdout.take((OUTPUT_CAP + 1) as u64).read_to_end(&mut buf);
+            let _ = stdout.take((cap + 1) as u64).read_to_end(&mut buf);
             let _ = tx_out.send(buf);
         });
         thread::spawn(move || {
             let mut buf = Vec::new();
-            let _ = stderr.take((OUTPUT_CAP + 1) as u64).read_to_end(&mut buf);
+            let _ = stderr.take((cap + 1) as u64).read_to_end(&mut buf);
             let _ = tx_err.send(buf);
         });
 
-        let deadline = Instant::now() + EXEC_TIMEOUT;
+        let deadline = Instant::now() + Duration::from_secs(timeout_secs);
         let mut timed_out = false;
         let exit_code = loop {
             match child.try_wait()? {
@@ -284,12 +289,12 @@ impl Backend for GvBackend {
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or_default();
 
-        if stdout_buf.len() > OUTPUT_CAP {
-            stdout_buf.truncate(OUTPUT_CAP);
+        if stdout_buf.len() > cap {
+            stdout_buf.truncate(cap);
             truncated = true;
         }
-        if stderr_buf.len() > OUTPUT_CAP {
-            stderr_buf.truncate(OUTPUT_CAP);
+        if stderr_buf.len() > cap {
+            stderr_buf.truncate(cap);
             truncated = true;
         }
 
@@ -394,7 +399,7 @@ mod tests {
             eprintln!("skip: runsc is installed on this host");
             return;
         }
-        let err = b.exec("nonexistent", &["/bin/echo".into(), "hi".into()]);
+        let err = b.exec("nonexistent", &["/bin/echo".into(), "hi".into()], 30, OUTPUT_CAP);
         assert!(err.is_err(), "exec without runsc must fail closed");
     }
 

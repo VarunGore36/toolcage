@@ -40,7 +40,6 @@ use sha2::Digest;
 use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
 
 const OUTPUT_CAP: usize = 1024 * 1024;
-const EXEC_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------
 // Firecracker session configuration
@@ -641,15 +640,20 @@ impl FcVm {
     }
 
     /// Execute a command inside the guest via vsock + guest agent.
-    fn exec_vsock(&self, argv: &[String]) -> anyhow::Result<CommandResult> {
+    fn exec_vsock(
+        &self,
+        argv: &[String],
+        timeout_secs: u64,
+        cap: usize,
+    ) -> anyhow::Result<CommandResult> {
         let mut stream = UnixStream::connect(&self.vsock_uds).with_context(|| {
             format!(
                 "connect to guest agent vsock at {}",
                 self.vsock_uds.display()
             )
         })?;
-        stream.set_read_timeout(Some(EXEC_TIMEOUT))?;
-        stream.set_write_timeout(Some(EXEC_TIMEOUT))?;
+        stream.set_read_timeout(Some(Duration::from_secs(timeout_secs)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(timeout_secs)))?;
 
         // Guest agent protocol: Exec request as JSON-RPC-like frame
         let exec_req = serde_json::json!({
@@ -668,7 +672,7 @@ impl FcVm {
         stream.read_exact(&mut len_buf)?;
         let payload_len = u32::from_be_bytes(len_buf) as usize;
         anyhow::ensure!(
-            payload_len <= OUTPUT_CAP + 4096,
+            payload_len <= cap + 4096,
             "guest response too large: {payload_len} bytes"
         );
         let mut payload = vec![0u8; payload_len];
@@ -679,11 +683,12 @@ impl FcVm {
         let stdout = resp["stdout"].as_str().unwrap_or("").as_bytes().to_vec();
         let stderr = resp["stderr"].as_str().unwrap_or("").as_bytes().to_vec();
 
+        let truncated = stdout.len() > cap || stderr.len() > cap;
         Ok(CommandResult {
             exit_code,
-            stdout: truncate(stdout, OUTPUT_CAP),
-            stderr: truncate(stderr, OUTPUT_CAP),
-            truncated: false,
+            stdout: truncate(stdout, cap),
+            stderr: truncate(stderr, cap),
+            truncated,
         })
     }
 }
@@ -796,7 +801,13 @@ impl Backend for FcBackend {
         Ok(())
     }
 
-    fn exec(&mut self, id: &str, argv: &[String]) -> anyhow::Result<CommandResult> {
+    fn exec(
+        &mut self,
+        id: &str,
+        argv: &[String],
+        timeout_secs: u64,
+        cap: usize,
+    ) -> anyhow::Result<CommandResult> {
         let vm = self
             .vms
             .get(id)
@@ -804,7 +815,7 @@ impl Backend for FcBackend {
         // Verify VM is still running before exec.
         let state = vm.state()?;
         anyhow::ensure!(state == "Running", "VM {id} not running (state={state})");
-        vm.exec_vsock(argv)
+        vm.exec_vsock(argv, timeout_secs, cap)
     }
 }
 

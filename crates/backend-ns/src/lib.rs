@@ -54,7 +54,6 @@ use nix::unistd::{close, pipe2};
 use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
 
 const OUTPUT_CAP: usize = 1024 * 1024;
-const EXEC_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long an output reader waits past the kill deadline for the last bytes.
 /// Bounds the case where a grandchild inherits the pipe write end and keeps it
 /// open after the workload exits: the drain gives up instead of hanging.
@@ -353,17 +352,28 @@ impl Backend for NsBackend {
         self.sessions.remove(id);
         Ok(())
     }
-    fn exec(&mut self, id: &str, argv: &[String]) -> anyhow::Result<CommandResult> {
+    fn exec(
+        &mut self,
+        id: &str,
+        argv: &[String],
+        timeout_secs: u64,
+        cap: usize,
+    ) -> anyhow::Result<CommandResult> {
         let spec = self
             .sessions
             .get(id)
             .cloned()
             .with_context(|| format!("session {id} not created"))?;
-        isolated_exec(&spec, argv)
+        isolated_exec(&spec, argv, timeout_secs, cap)
     }
 }
 
-fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandResult> {
+fn isolated_exec(
+    spec: &SessionSpec,
+    argv: &[String],
+    timeout_secs: u64,
+    cap: usize,
+) -> anyhow::Result<CommandResult> {
     if argv.is_empty() {
         anyhow::bail!("empty argv");
     }
@@ -491,7 +501,7 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                 anyhow::bail!("failed to release child (go signal)");
             }
 
-            let deadline = Instant::now() + EXEC_TIMEOUT;
+            let deadline = Instant::now() + Duration::from_secs(timeout_secs);
             let mut timed_out = false;
 
             // Drain BOTH output pipes on their own threads while waiting for
@@ -503,8 +513,8 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
             // drain stops at EOF or `drain_until`, so a grandchild holding the
             // write end open cannot hang the parent either.
             let drain_until = deadline + DRAIN_GRACE;
-            let out_thread = std::thread::spawn(move || read_capped_until(out_r, drain_until));
-            let err_thread = std::thread::spawn(move || read_capped_until(err_r, drain_until));
+            let out_thread = std::thread::spawn(move || read_capped_until(out_r, drain_until, cap));
+            let err_thread = std::thread::spawn(move || read_capped_until(err_r, drain_until, cap));
 
             let mut status: c_int = 0;
             let exit_code = loop {
@@ -512,7 +522,7 @@ fn isolated_exec(spec: &SessionSpec, argv: &[String]) -> anyhow::Result<CommandR
                     0 => {
                         if Instant::now() > deadline {
                             timed_out = true;
-
+                            let _ = unsafe { libc::kill(child_raw, SIGKILL) };
                         }
                         std::thread::sleep(Duration::from_millis(50));
                     }
@@ -770,7 +780,7 @@ fn kill_and_reap(pid: i32) {
 /// continues, so a large-output workload still reaches its real exit code and
 /// the truncation flag stays honest. Reads are poll-based and never block past
 /// `stop_at`, so a grandchild holding the write end open cannot hang us.
-fn read_capped_until(fd: OwnedFd, stop_at: Instant) -> (Vec<u8>, bool) {
+fn read_capped_until(fd: OwnedFd, stop_at: Instant, cap: usize) -> (Vec<u8>, bool) {
     let mut buf = Vec::new();
     let mut tmp = [0u8; 4096];
     let mut truncated = false;
@@ -809,8 +819,8 @@ fn read_capped_until(fd: OwnedFd, stop_at: Instant) -> (Vec<u8>, bool) {
                     continue; // over cap: discard, keep draining to EOF
                 }
                 buf.extend_from_slice(&tmp[..n]);
-                if buf.len() > OUTPUT_CAP {
-                    buf.truncate(OUTPUT_CAP);
+                if buf.len() > cap {
+                    buf.truncate(cap);
                     truncated = true;
                 }
             }
@@ -1035,10 +1045,10 @@ mod tests {
         };
         let mut b = NsBackend::new();
         b.create(&spec).unwrap();
-        let r = b.exec("t1", &["/bin/true".into()]).unwrap();
+        let r = b.exec("t1", &["/bin/true".into()], 30, OUTPUT_CAP).unwrap();
         assert_eq!(r.exit_code, Some(0));
         let r = b
-            .exec("t1", &["/bin/echo".into(), "hello-cage".into()])
+            .exec("t1", &["/bin/echo".into(), "hello-cage".into()], 30, OUTPUT_CAP)
             .unwrap();
         assert_eq!(r.exit_code, Some(0));
         assert_eq!(String::from_utf8_lossy(&r.stdout), "hello-cage\n");
@@ -1104,7 +1114,7 @@ mod tests {
         let mut b = NsBackend::new();
         b.create(&spec).unwrap();
         // cwd is the workspace, so relative path works.
-        let r = b.exec("t2", &["./net-helper".into()]).unwrap();
+        let r = b.exec("t2", &["./net-helper".into()], 30, OUTPUT_CAP).unwrap();
         assert_eq!(
             r.exit_code,
             Some(0),
@@ -1135,7 +1145,7 @@ mod tests {
         // so a shell script cannot spawn `env` on hosts where seccomp actually
         // installs (this host returns EINVAL for seccomp; runners do not).
         // `env` prints exactly the scrubbed environment.
-        let r = b.exec("t3", &["/usr/bin/env".into()]).unwrap();
+        let r = b.exec("t3", &["/usr/bin/env".into()], 30, OUTPUT_CAP).unwrap();
         assert_eq!(r.exit_code, Some(0));
         let out = String::from_utf8_lossy(&r.stdout);
         // env is cleared before exec (only PATH); nothing else may leak.
@@ -1186,6 +1196,8 @@ mod tests {
                     "-c".into(),
                     "echo ok > tc-write-test".into(),
                 ],
+                30,
+                OUTPUT_CAP,
             )
             .unwrap();
         assert_eq!(
@@ -1207,6 +1219,8 @@ mod tests {
                     "-c".into(),
                     "echo nope > /etc/tc-test-blocked".into(),
                 ],
+                30,
+                OUTPUT_CAP,
             )
             .unwrap();
         assert_ne!(
@@ -1358,7 +1372,7 @@ mod tests {
         };
         let mut b = NsBackend::new();
         b.create(&spec).unwrap();
-        let r = match b.exec("t5", &["/bin/echo".into(), "hi".into()]) {
+        let r = match b.exec("t5", &["/bin/echo".into(), "hi".into()], 30, OUTPUT_CAP) {
             Ok(r) => r,
             Err(_) => {
                 // Only a child resuming this caller can land here (its setup
@@ -1413,7 +1427,7 @@ mod tests {
         let mut b = NsBackend::new();
         b.create(&spec).unwrap();
         let r = b
-            .exec("t6", &["/nonexistent/toolcage-test-prog".into()])
+            .exec("t6", &["/nonexistent/toolcage-test-prog".into()], 30, OUTPUT_CAP)
             .unwrap();
         assert_eq!(r.exit_code, Some(127));
         assert!(
@@ -1488,6 +1502,8 @@ mod tests {
                 "-c".into(),
                 format!("touch {}", marker.display()),
             ],
+            30,
+            OUTPUT_CAP,
         );
         assert!(
             r.is_err(),
@@ -1540,7 +1556,7 @@ mod tests {
         let mut b = NsBackend::new();
         b.create(&spec).unwrap();
         let r = b
-            .exec("t-pidns", &["/bin/sh".into(), "-c".into(), "echo $$".into()])
+            .exec("t-pidns", &["/bin/sh".into(), "-c".into(), "echo $$".into()], 30, OUTPUT_CAP)
             .unwrap();
         assert_eq!(r.exit_code, Some(0), "sh -c 'echo $$' failed: {r:?}");
         assert_eq!(
@@ -1607,7 +1623,9 @@ mod tests {
                         let mut b = NsBackend::new();
                         b.create(&spec).unwrap();
                         let start = Instant::now();
-                        let r = b.exec(&id, &["/bin/echo".into(), "ok".into()]).unwrap();
+                        let r = b
+                            .exec(&id, &["/bin/echo".into(), "ok".into()], 30, OUTPUT_CAP)
+                            .unwrap();
                         assert_eq!(
                             r.exit_code,
                             Some(0),
@@ -1667,7 +1685,7 @@ mod tests {
         let src = dir.join("big.bin").display().to_string();
         let start = Instant::now();
         let r = b
-            .exec("t8", &["/bin/cat".into(), src])
+            .exec("t8", &["/bin/cat".into(), src], 30, OUTPUT_CAP)
             .unwrap();
         let elapsed = start.elapsed();
         assert_eq!(
@@ -1716,7 +1734,7 @@ mod tests {
         let payload = vec![b'b'; 2 * 1024 * 1024];
         std::fs::write(dir.join("huge.bin"), &payload).unwrap();
         let src = dir.join("huge.bin").display().to_string();
-        let r = b.exec("t9", &["/bin/cat".into(), src]).unwrap();
+        let r = b.exec("t9", &["/bin/cat".into(), src], 30, OUTPUT_CAP).unwrap();
         assert_eq!(
             r.exit_code,
             Some(0),
@@ -1725,6 +1743,86 @@ mod tests {
         assert!(r.truncated, "output past OUTPUT_CAP must set truncated");
         assert_eq!(r.stdout.len(), OUTPUT_CAP);
         b.destroy("t9").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exec_limits_timeout_honored() {
+        // timeout_secs is now honored by the Tier0 backend (previously ignored:
+        // every run was killed at the hardcoded 30s). A 10s sleep with a 2s
+        // timeout must be killed promptly, not after 30s.
+        if !isolated() {
+            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-timeout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = SessionSpec {
+            id: "t-timeout".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        let start = Instant::now();
+        let r = b.exec("t-timeout", &["/bin/sleep".into(), "10".into()], 2, OUTPUT_CAP).unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(
+            r.exit_code,
+            None,
+            "a timeout-killed run must return exit_code None, got {:?}",
+            r.exit_code
+        );
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "timeout kill must be prompt, not the old 30s deadline (took {elapsed:?})"
+        );
+        b.destroy("t-timeout").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exec_limits_cap_honored() {
+        // cap is now honored by the Tier0 backend (previously ignored:
+        // every run used the hardcoded 1 MiB). Output past cap is truncated
+        // and the flag set.
+        if !isolated() {
+            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cap: usize = 100;
+        let spec = SessionSpec {
+            id: "t-cap".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        // Produce 2000 bytes, well over the 100-byte cap.
+        let payload = vec![b'z'; 2000];
+        std::fs::write(dir.join("big.bin"), &payload).unwrap();
+        let src = dir.join("big.bin").display().to_string();
+        let r = b.exec("t-cap", &["/bin/cat".into(), src], 30, cap).unwrap();
+        assert_eq!(
+            r.exit_code,
+            Some(0),
+            "cat must complete even when output is truncated, got {:?}",
+            r.exit_code
+        );
+        assert!(r.truncated, "output past cap must set truncated");
+        assert_eq!(
+            r.stdout.len(),
+            cap,
+            "output must be truncated to cap, got {}",
+            r.stdout.len()
+        );
+        b.destroy("t-cap").unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
