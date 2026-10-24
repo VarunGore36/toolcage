@@ -3,6 +3,8 @@
 # Runs from workbase/. Per plan §11: benchmark harness runs on every merge.
 set -euo pipefail
 
+cd "$(dirname "$0")/.."
+
 echo "== toolcage bench v0 =="
 date -u
 
@@ -18,11 +20,19 @@ LOG=${TMPDIR:-/tmp}/tc-bench.jsonl
 mkdir -p "$(dirname "$LOG")"
 rm -f "$LOG"
 # Probe run: Tier0 needs unprivileged userns + Landlock (e.g. GitHub's Ubuntu
-# 24.04 runners block userns via AppArmor) — skip the baseline there instead
-# of failing the job. Policy and audit numbers above still measure.
-if ! ./target/release/toolcage-cli run --policy schemas/policy-v0.yaml --audit "$LOG" -- /bin/true >/dev/null 2>&1; then
-  echo "skip: Tier0 exec unavailable on this host (needs unprivileged userns + Landlock) — no run baseline"
-  exit 0
+# 24.04 runners block userns via AppArmor). Skip the baseline there instead of
+# failing the job — policy and audit numbers above still measure. Any other
+# failure (real CLI regression, broken policy) is reported loud, not silently
+# disguised as "Tier0 unavailable".
+PROBE_OUT=$(./target/release/toolcage-cli run --policy schemas/policy-v0.yaml --audit "$LOG" -- /bin/true 2>&1) || PROBE_RC=$?
+if [ "${PROBE_RC:-0}" -ne 0 ]; then
+  if echo "$PROBE_OUT" | grep -qiE "unprivileged|userns|landlock|seccomp|namespace|isolation|AppArmor"; then
+    echo "skip: Tier0 exec unavailable on this host (needs unprivileged userns + Landlock) — no run baseline"
+    exit 0
+  fi
+  echo "ERROR: CLI run probe failed (not a Tier0 availability issue):"
+  echo "$PROBE_OUT"
+  exit 1
 fi
 N=200
 start=$(date +%s.%N)
