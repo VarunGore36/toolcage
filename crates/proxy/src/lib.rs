@@ -373,6 +373,10 @@ impl Proxy {
         req.push_str(&format!("{method} {path} HTTP/1.1\r\n"));
         req.push_str(&format!("Host: {}\r\n", host_header(host, port, scheme)));
         req.push_str("Connection: close\r\n");
+        // Ask for an uncompressed body: the secret scrub downstream matches
+        // literal bytes, and a compressed body cannot be scrubbed (see the
+        // Content-Encoding check below).
+        req.push_str("Accept-Encoding: identity\r\n");
         for (name, value) in headers {
             req.push_str(&format!("{name}: {value}\r\n"));
         }
@@ -395,13 +399,95 @@ impl Proxy {
 
         // Split headers from body.
         let body_start = find_body_start(&buf);
-        let body = buf[body_start..].to_vec();
+        let head = &buf[..body_start];
+        let raw_body = &buf[body_start..];
+
+        let body = decode_response_body(head, raw_body)?;
 
         // Extract status code.
         let status = parse_status(&buf).unwrap_or(0);
 
         Ok(ProxyResponse { status, body })
     }
+}
+
+/// Turn a raw response body into the bytes safe to hand to the guest: decode
+/// transfer-coding framing and refuse content encodings we cannot scrub.
+///
+/// The secret scrub downstream matches literal bytes in this body, so any
+/// framing or compression that hides those bytes defeats it (a secret split
+/// across a chunk boundary, or one inside gzip, is not matched and reaches the
+/// guest intact). Fail closed rather than return bytes we cannot sanitize.
+fn decode_response_body(head: &[u8], raw_body: &[u8]) -> Result<Vec<u8>, ProxyError> {
+    // Content-Encoding: a compressed body cannot be scrubbed.
+    if let Some(enc) = header_value(head, "content-encoding") {
+        let enc = enc.trim().to_ascii_lowercase();
+        if !enc.is_empty() && enc != "identity" {
+            return Err(ProxyError::Policy(format!(
+                "content-encoded response ({enc}) cannot be scrubbed; refusing"
+            )));
+        }
+    }
+    // Transfer-Encoding: chunked means the body is framed with chunk headers.
+    match header_value(head, "transfer-encoding") {
+        Some(te) if te.to_ascii_lowercase().contains("chunked") => {
+            decode_chunked(raw_body).ok_or_else(|| {
+                ProxyError::Io("malformed chunked response body".to_string())
+            })
+        }
+        _ => Ok(raw_body.to_vec()),
+    }
+}
+
+/// Extract a header value from a response head (case-insensitive name).
+fn header_value(head: &[u8], name: &str) -> Option<String> {
+    let text = String::from_utf8_lossy(head);
+    let want = name.to_ascii_lowercase();
+    for line in text.split("\r\n").skip(1) {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim().eq_ignore_ascii_case(&want) {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Decode an HTTP/1.1 chunked body into its payload. Returns None on any
+/// malformed framing (fail closed: better to error than return bytes we
+/// cannot sanitize or account for).
+fn decode_chunked(body: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    loop {
+        // Chunk size line: "<hex>[;ext]\r\n".
+        let line_end = find_crlf(body, pos)?;
+        let line = std::str::from_utf8(&body[pos..line_end]).ok()?;
+        let size_str = line.split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size_str, 16).ok()?;
+        pos = line_end + 2;
+        // Chunk data + CRLF.
+        if pos + size > body.len() {
+            return None;
+        }
+        out.extend_from_slice(&body[pos..pos + size]);
+        pos += size;
+        if size == 0 {
+            // Terminating chunk: optional trailers, then a final CRLF.
+            // The payload is complete; anything after is trailers we drop.
+            return Some(out);
+        }
+        // Skip the CRLF after the chunk data.
+        if find_crlf(body, pos).is_none() {
+            return None;
+        }
+        pos += 2;
+    }
+}
+
+/// Index of the CRLF at or after `from`, or None.
+fn find_crlf(buf: &[u8], from: usize) -> Option<usize> {
+    (from..buf.len().saturating_sub(1)).find(|&i| buf[i] == b'\r' && buf[i + 1] == b'\n')
 }
 
 /// Find the start of the body in an HTTP response (after \r\n\r\n).
@@ -687,5 +773,70 @@ mod tests {
         );
         assert_eq!(host_header("example.com", 80, "http"), "example.com");
         assert_eq!(host_header("example.com", 8080, "http"), "example.com:8080");
+    }
+
+    #[test]
+    fn chunked_body_is_decoded_so_scrub_can_match_secrets() {
+        // Regression: the raw chunked framing was handed to broker.scrub(), so
+        // a secret split across a chunk boundary ("s3cr" | "3t-secret") was not
+        // matched by the substring replace and reached the guest intact. The
+        // framing must be decoded first so the secret is contiguous.
+        let head = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let raw = b"4\r\ns3cr\r\n9\r\n3t-secret\r\n0\r\n\r\n";
+        let body = decode_response_body(head, raw).unwrap();
+        assert_eq!(body, b"s3cr3t-secret", "chunks must be reassembled");
+        // The reassembled body is exactly what scrub() will see.
+        assert!(
+            String::from_utf8_lossy(&body).contains("s3cr3t-secret"),
+            "scrub must be able to match the whole secret"
+        );
+    }
+
+    #[test]
+    fn content_encoded_response_is_refused() {
+        // A gzip (or any non-identity) body cannot be scrubbed — the secret is
+        // invisible to the substring replace. Fail closed instead of returning
+        // bytes we cannot sanitize.
+        for enc in ["gzip", "deflate", "br", "GZIP", "gzip, br"] {
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Encoding: {enc}\r\n\r\n");
+            let raw = b"\x1f\x8b secret-in-here";
+            assert!(
+                decode_response_body(head.as_bytes(), raw).is_err(),
+                "content-encoding {enc} must be refused"
+            );
+        }
+        // identity (or absent) is fine.
+        let head = b"HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\n\r\n";
+        assert!(decode_response_body(head, b"plain").is_ok());
+        let head = b"HTTP/1.1 200 OK\r\n\r\n";
+        assert_eq!(decode_response_body(head, b"plain").unwrap(), b"plain");
+    }
+
+    #[test]
+    fn malformed_chunked_body_is_rejected() {
+        // Fail closed: bad framing must error, not return partial bytes.
+        let head = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+        let bad: &[&[u8]] = &[
+            b"4\r\ns3cr\r\n",                 // truncated: no terminator
+            b"zz\r\ns3cr\r\n0\r\n\r\n",       // non-hex size
+            b"20\r\nshort\r\n0\r\n\r\n",      // size larger than payload
+        ];
+        for raw in bad {
+            assert!(
+                decode_response_body(head, raw).is_err(),
+                "malformed chunked body must be rejected: {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn header_value_is_case_insensitive() {
+        let head = b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nX-Other: 1\r\n\r\n";
+        assert_eq!(
+            header_value(head, "content-encoding").as_deref(),
+            Some(" gzip")
+        );
+        assert_eq!(header_value(head, "CONTENT-ENCODING").as_deref(), Some(" gzip"));
+        assert_eq!(header_value(head, "missing").as_deref(), None);
     }
 }
