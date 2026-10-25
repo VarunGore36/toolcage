@@ -54,8 +54,15 @@ enum Cmd {
         path: String,
         #[arg(long, default_value = "github_token")]
         cred: String,
+        /// Secret value. UNSAFE: argv is visible to other local users via
+        /// `ps` / `/proc/*/cmdline` and usually lands in shell history. Prefer
+        /// --secret-file.
         #[arg(long, default_value = "")]
         secret_value: String,
+        /// File holding the secret value. Read host-side, never on argv —
+        /// the safe way to pass a credential to `fetch`.
+        #[arg(long)]
+        secret_file: Option<PathBuf>,
         /// Out-of-band approval (operator approved). Without it, gated actions pause.
         #[arg(long, default_value_t = false)]
         approve: bool,
@@ -243,6 +250,31 @@ fn wire_backend(
         std::process::exit(2);
     }
     Some(b)
+}
+
+/// Budget persistence file for an audit log. The suffix is APPENDED, not
+/// substituted for the extension: `with_extension("budgets.json")` collapsed
+/// `audit.jsonl` / `audit.log` / `audit.v1` / `audit.v2` into one shared
+/// `audit.budgets.json`, so one session could drain another's damage bound.
+fn budget_file(audit: &std::path::Path) -> PathBuf {
+    PathBuf::from(format!("{}.budgets.json", audit.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn budget_file_appends_not_replaces_extension() {
+        use super::budget_file;
+        use std::path::Path;
+        // Distinct logs get distinct budget stores.
+        let a = budget_file(Path::new("audit.jsonl"));
+        let b = budget_file(Path::new("audit.log"));
+        assert_eq!(a, Path::new("audit.jsonl.budgets.json"));
+        assert_eq!(b, Path::new("audit.log.budgets.json"));
+        assert_ne!(a, b, "distinct logs must not share a budget store");
+        // The old with_extension naming collapsed them all.
+        assert_ne!(a, Path::new("audit.budgets.json"));
+    }
 }
 
 fn load_token(p: &Option<PathBuf>) -> anyhow::Result<Option<toolcage_capability::Token>> {
@@ -434,6 +466,7 @@ fn main() -> anyhow::Result<()> {
             path,
             cred,
             secret_value,
+            secret_file,
             approve,
             token,
             key_hex,
@@ -441,6 +474,21 @@ fn main() -> anyhow::Result<()> {
             let text = std::fs::read_to_string(&policy)?;
             let pol = toolcage_policy::load_yaml(&text)?;
             let cap_key = load_key(&key_hex)?;
+            // The credential is host-side material. Prefer --secret-file so it
+            // never reaches argv, where every local user can read it from
+            // ps / /proc/*/cmdline (and it lands in shell history).
+            let secret_value = match &secret_file {
+                Some(f) => std::fs::read_to_string(f)?.trim().to_string(),
+                None => {
+                    if !secret_value.is_empty() {
+                        eprintln!(
+                            "warning: --secret-value puts the credential on the command \
+                             line (visible to other users via ps); prefer --secret-file"
+                        );
+                    }
+                    secret_value
+                }
+            };
             // Destination the policy binds this credential to (used below when
             // the secret is loaded into the broker).
             let cred_use_with = pol
@@ -450,7 +498,7 @@ fn main() -> anyhow::Result<()> {
                 .map(|c| c.use_with.clone());
             // Persistent egress budget file, tied to the audit log so repeated
             // `fetch` calls accumulate damage across invocations (restart-safe).
-            let budget_file = audit.with_extension("budgets.json");
+            let budget_file = budget_file(&audit);
             let sup = toolcage_supervisor::Supervisor {
                 policy: pol,
                 audit_path: audit,
@@ -620,7 +668,7 @@ fn main() -> anyhow::Result<()> {
                 let tok = load_token(&token)?;
                 let rl = build_revocations(&revocations, tok.as_ref());
                 // Persistent egress budget store, derived from the audit log.
-                let budget_file = audit.with_extension("budgets.json");
+                let budget_file = budget_file(&audit);
                 let workspace =
                     std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
                 let spec = toolcage_backend::SessionSpec {
@@ -716,7 +764,7 @@ fn main() -> anyhow::Result<()> {
                 let tok = load_token(&token)?;
                 let rl = build_revocations(&revocations, tok.as_ref());
                 // Persistent egress budget store, derived from the audit log.
-                let budget_file = audit.with_extension("budgets.json");
+                let budget_file = budget_file(&audit);
                 let workspace =
                     std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
                 let spec = toolcage_backend::SessionSpec {

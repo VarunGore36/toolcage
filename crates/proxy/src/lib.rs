@@ -152,15 +152,25 @@ pub fn destination_names(policy: &Policy, alias_or_host: &str) -> Vec<String> {
             out.push(l);
         }
     };
-    push(alias_or_host);
-    push(&policy_host(policy, alias_or_host));
     let key = alias_or_host.to_ascii_lowercase();
-    if let Some(upstream) = aliases.get(&key) {
-        push(upstream);
-        for (alias, up) in &aliases {
-            if up == upstream {
-                push(alias);
-            }
+    // Resolve the guest's spelling to the upstream it dials: an alias maps to
+    // its upstream (`github` -> `api.github.com`), and an upstream maps to
+    // itself (`registry.npmjs.org`, which policy allows via a `host:` rule).
+    // Then every alias of that upstream — plus the upstream, the canonical
+    // policy host, and the raw spelling — names the same destination. Without
+    // the upstream round-trip, a request written with the upstream name (the
+    // spelling policy allows) would not expand to the alias, dodging a gate or
+    // credential binding written with the alias.
+    let upstream = match aliases.get(&key) {
+        Some(up) => up.clone(),
+        None => key.clone(),
+    };
+    push(&key);
+    push(&policy_host(policy, alias_or_host));
+    push(&upstream);
+    for (alias, up) in &aliases {
+        if up.as_str() == upstream.as_str() {
+            push(alias);
         }
     }
     out
@@ -838,5 +848,42 @@ mod tests {
         );
         assert_eq!(header_value(head, "CONTENT-ENCODING").as_deref(), Some(" gzip"));
         assert_eq!(header_value(head, "missing").as_deref(), None);
+    }
+
+    #[test]
+    fn destination_names_expand_both_alias_and_upstream_spellings() {
+        // A gate or credential binding written with the alias (`registry`,
+        // `github`) must match a request spelled with the upstream hostname
+        // (`registry.npmjs.org`, `api.github.com`) — which is exactly the
+        // spelling policy allows via a `host:` rule. Otherwise the upstream
+        // spelling dodges the gate.
+        let p = sample();
+
+        // Upstream spelling -> includes the alias.
+        let names = destination_names(&p, "registry.npmjs.org");
+        assert!(
+            names.iter().any(|n| n == "registry"),
+            "upstream spelling must expand to the alias: {names:?}"
+        );
+
+        // Alias spelling -> includes the upstream and sibling aliases.
+        let names = destination_names(&p, "github");
+        assert!(names.iter().any(|n| n == "api.github.com"), "{names:?}");
+        assert!(names.iter().any(|n| n == "github.internal"), "{names:?}");
+
+        // Upstream spelling of an aliased host -> includes the alias too.
+        let names = destination_names(&p, "api.github.com");
+        assert!(
+            names.iter().any(|n| n == "github"),
+            "api.github.com must expand to the github alias: {names:?}"
+        );
+
+        // A look-alike host is a different destination and must not expand
+        // into the real one's names.
+        let names = destination_names(&p, "github.evil.com");
+        assert!(
+            !names.iter().any(|n| n == "api.github.com"),
+            "look-alike must not expand to the real upstream: {names:?}"
+        );
     }
 }
