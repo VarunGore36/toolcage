@@ -245,6 +245,31 @@ fn wire_backend(
     Some(b)
 }
 
+/// Budget persistence file for an audit log. The suffix is APPENDED, not
+/// substituted for the extension: `with_extension("budgets.json")` collapsed
+/// `audit.jsonl` / `audit.log` / `audit.v1` / `audit.v2` into one shared
+/// `audit.budgets.json`, so one session could drain another's damage bound.
+fn budget_file(audit: &std::path::Path) -> PathBuf {
+    PathBuf::from(format!("{}.budgets.json", audit.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn budget_file_appends_not_replaces_extension() {
+        use super::budget_file;
+        use std::path::Path;
+        // Distinct logs get distinct budget stores.
+        let a = budget_file(Path::new("audit.jsonl"));
+        let b = budget_file(Path::new("audit.log"));
+        assert_eq!(a, Path::new("audit.jsonl.budgets.json"));
+        assert_eq!(b, Path::new("audit.log.budgets.json"));
+        assert_ne!(a, b, "distinct logs must not share a budget store");
+        // The old with_extension naming collapsed them all.
+        assert_ne!(a, Path::new("audit.budgets.json"));
+    }
+}
+
 fn load_token(p: &Option<PathBuf>) -> anyhow::Result<Option<toolcage_capability::Token>> {
     if let Some(f) = p {
         Ok(Some(serde_json::from_str(&std::fs::read_to_string(f)?)?))
@@ -450,7 +475,7 @@ fn main() -> anyhow::Result<()> {
                 .map(|c| c.use_with.clone());
             // Persistent egress budget file, tied to the audit log so repeated
             // `fetch` calls accumulate damage across invocations (restart-safe).
-            let budget_file = audit.with_extension("budgets.json");
+            let budget_file = budget_file(&audit);
             let sup = toolcage_supervisor::Supervisor {
                 policy: pol,
                 audit_path: audit,
@@ -620,7 +645,7 @@ fn main() -> anyhow::Result<()> {
                 let tok = load_token(&token)?;
                 let rl = build_revocations(&revocations, tok.as_ref());
                 // Persistent egress budget store, derived from the audit log.
-                let budget_file = audit.with_extension("budgets.json");
+                let budget_file = budget_file(&audit);
                 let workspace =
                     std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
                 let spec = toolcage_backend::SessionSpec {
@@ -716,7 +741,7 @@ fn main() -> anyhow::Result<()> {
                 let tok = load_token(&token)?;
                 let rl = build_revocations(&revocations, tok.as_ref());
                 // Persistent egress budget store, derived from the audit log.
-                let budget_file = audit.with_extension("budgets.json");
+                let budget_file = budget_file(&audit);
                 let workspace =
                     std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
                 let spec = toolcage_backend::SessionSpec {
