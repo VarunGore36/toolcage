@@ -37,7 +37,8 @@
 
 use libc::{
     c_char, c_int, c_long, c_uint, c_ulong, c_void, getgid, getuid, prctl, sock_filter, sock_fprog,
-    syscall, BPF_A, BPF_JEQ, BPF_JMP, BPF_K, BPF_LD, BPF_RET, BPF_W, EPERM, SECCOMP_MODE_FILTER,
+    syscall, BPF_ABS, BPF_A, BPF_JEQ, BPF_JMP, BPF_K, BPF_LD, BPF_RET, BPF_W, EPERM,
+    SECCOMP_MODE_FILTER,
     SECCOMP_RET_ALLOW, SECCOMP_RET_DATA, SECCOMP_RET_ERRNO, SIGKILL, STDERR_FILENO, STDOUT_FILENO,
     WEXITSTATUS, WIFEXITED, WNOHANG,
 };
@@ -893,8 +894,16 @@ fn read_capped_until(fd: OwnedFd, stop_at: Instant, cap: usize) -> (Vec<u8>, boo
 /// whose backing Vec was dropped here — a use-after-free.
 fn build_seccomp_insns() -> Vec<sock_filter> {
     let mut insns: Vec<sock_filter> = Vec::new();
+    // Load seccomp_data.nr into the accumulator. NOTE the addressing mode:
+    // this is BPF_ABS (load from an offset in the seccomp_data struct), NOT
+    // BPF_A (0x10, the MISC-A field — identical to BPF_B). BPF_LD|BPF_W|BPF_A
+    // assembles to opcode 0x10, i.e. BPF_LD|BPF_B|BPF_IMM ("load byte
+    // immediate"), which the kernel's classic-BPF validator rejects with
+    // EINVAL — so PR_SET_SECCOMP failed and apply_seccomp warned "seccomp
+    // unavailable, continuing without it" on every host. The syscall filter
+    // was never installed.
     insns.push(sock_filter {
-        code: (BPF_LD | BPF_W | BPF_A) as u16,
+        code: (BPF_LD | BPF_W | BPF_ABS) as u16,
         jt: 0,
         jf: 0,
         k: 0, // A = seccomp_data.nr (offset 0)
@@ -1302,8 +1311,12 @@ mod tests {
         // returned a sock_fprog whose Vec was already dropped.
         let insns = build_seccomp_insns();
         assert_eq!(insns.len(), 2 * BLOCKED_SYSCALLS.len() + 2);
-        // First insn loads seccomp_data.nr into the accumulator.
-        assert_eq!(insns[0].code, (BPF_LD | BPF_W | BPF_A) as u16);
+        // First insn loads seccomp_data.nr into the accumulator. Must be
+        // BPF_ABS (the seccomp_data offset addressing mode) — BPF_A is a
+        // different constant (0x10 == BPF_B) that assembles to an invalid
+        // opcode the kernel rejects with EINVAL.
+        assert_eq!(insns[0].code, (BPF_LD | BPF_W | BPF_ABS) as u16);
+        assert_eq!(insns[0].k, 0, "loads seccomp_data.nr at offset 0");
         // Last insn is the fall-through allow; every blocked syscall is
         // matched in between and returns EPERM.
         assert_eq!(insns[insns.len() - 1].code, (BPF_RET | BPF_K) as u16);
@@ -1311,38 +1324,33 @@ mod tests {
     }
 
     /// Interpret the generated filter over `seccomp_data.nr == nr` and return
-    /// the verdict. Only the three opcodes `build_seccomp_insns` emits are
-    /// handled; anything else is a builder bug. This exists because checking
-    /// instruction *shape* cannot catch a swapped jt/jf pair — the v0 filter
-    /// was structurally perfect and semantically inverted.
+    /// the verdict. Each instruction is matched on its FULL opcode, not just
+    /// the class nibble: masking with 0x07 would accept any LD-class code,
+    /// including the invalid BPF_LD|BPF_W|BPF_A (0x10) the kernel rejects.
+    /// This exists because checking instruction *shape* cannot catch a swapped
+    /// jt/jf pair or a mistyped addressing mode — the v0 filter was
+    /// structurally perfect and semantically inverted.
     #[cfg(target_arch = "x86_64")]
     fn run_filter(insns: &[sock_filter], nr: i32) -> u32 {
-        // Classic BPF opcode fragments (as emitted by build_seccomp_insns).
-        const CLASS_LD: u16 = 0x00;
-        const CLASS_JMP: u16 = 0x05;
-        const CLASS_RET: u16 = 0x06;
-        const CLASS_MASK: u16 = 0x07;
-        const JMP_JEQ: u16 = 0x10;
+        // Exact opcodes as emitted by build_seccomp_insns.
+        const OP_LD_W_ABS: u16 = (BPF_LD | BPF_W | BPF_ABS) as u16;
+        const OP_JMP_JEQ_K: u16 = (BPF_JMP | BPF_JEQ | BPF_K) as u16;
+        const OP_RET_K: u16 = (BPF_RET | BPF_K) as u16;
         let mut a: u32 = 0;
         let mut pc = 0usize;
         loop {
             let ins = &insns[pc];
-            match ins.code & CLASS_MASK {
-                CLASS_LD => {
+            match ins.code {
+                OP_LD_W_ABS => {
                     // LD_W_ABS k=0 -> seccomp_data.nr
                     assert_eq!(ins.k, 0, "only seccomp_data.nr is loaded");
                     a = nr as u32;
                     pc += 1;
                 }
-                CLASS_JMP => {
-                    assert_eq!(
-                        ins.code & 0xf0,
-                        JMP_JEQ,
-                        "only JEQ is emitted"
-                    );
+                OP_JMP_JEQ_K => {
                     pc += 1 + if a == ins.k { ins.jt } else { ins.jf } as usize;
                 }
-                CLASS_RET => return ins.k,
+                OP_RET_K => return ins.k,
                 c => panic!("unexpected opcode {c:#x} at pc {pc}"),
             }
         }
@@ -1400,6 +1408,66 @@ mod tests {
                 SECCOMP_RET_ALLOW,
                 "syscall {nr} is not on the denylist and must be allowed"
             );
+        }
+    }
+
+    /// Opcodes the kernel's classic-BPF validator + seccomp_check_filter accept
+    /// for a seccomp filter (everything `build_seccomp_insns` emits). Anything
+    /// else is rejected with EINVAL and the filter is never installed — the
+    /// bug this test guards: `BPF_LD|BPF_W|BPF_A` (0x10, the MISC-A field)
+    /// assembled to BPF_LD|BPF_B|BPF_IMM, which is not in this set.
+    #[cfg(target_arch = "x86_64")]
+    fn kernel_seccomp_opcode_ok(code: u16) -> bool {
+        matches!(
+            code,
+            c if c == (BPF_LD | BPF_W | BPF_ABS) as u16
+                || c == (BPF_JMP | BPF_JEQ | BPF_K) as u16
+                || c == (BPF_RET | BPF_K) as u16
+        )
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn seccomp_filter_opcodes_are_kernel_valid() {
+        // Regression for the invalid BPF addressing mode: the load must use
+        // BPF_ABS (seccomp_data offset), not BPF_A. The two constants are easy
+        // to confuse — BPF_A (0x10) == BPF_B (0x10) — and the old code emitted
+        // an opcode the kernel rejected, so seccomp silently never installed
+        // (every run logged "seccomp unavailable, continuing without it").
+        let insns = build_seccomp_insns();
+
+        // The load: exact opcode, offset 0, and explicitly not the BPF_A form.
+        assert_eq!(
+            insns[0].code,
+            (BPF_LD | BPF_W | BPF_ABS) as u16,
+            "first insn must load seccomp_data.nr via BPF_ABS"
+        );
+        assert_ne!(
+            insns[0].code,
+            (BPF_LD | BPF_W | BPF_A) as u16,
+            "BPF_A (== BPF_B) is not a load addressing mode; the kernel rejects it"
+        );
+        assert_eq!(insns[0].k, 0, "loads seccomp_data.nr at offset 0");
+
+        // Every instruction must be one the kernel will accept for seccomp.
+        for (pc, ins) in insns.iter().enumerate() {
+            assert!(
+                kernel_seccomp_opcode_ok(ins.code),
+                "instruction {pc} has opcode {:#x}, which the kernel's seccomp \
+                 validator rejects (EINVAL) — the filter would never install",
+                ins.code
+            );
+        }
+
+        // And the structural shape: pairs of (JEQ, RET ERRNO) plus the two
+        // ends. Verified as exact opcodes, so a mistyped addressing mode or
+        // class cannot slip through.
+        assert_eq!(insns[insns.len() - 1].code, (BPF_RET | BPF_K) as u16);
+        assert_eq!(insns[insns.len() - 1].k, SECCOMP_RET_ALLOW);
+        for chunk in insns[1..insns.len() - 1].chunks(2) {
+            assert_eq!(chunk[0].code, (BPF_JMP | BPF_JEQ | BPF_K) as u16);
+            assert_eq!(chunk[1].code, (BPF_RET | BPF_K) as u16);
+            assert_eq!(chunk[1].k, SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA));
         }
     }
 
