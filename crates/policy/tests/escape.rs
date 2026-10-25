@@ -138,6 +138,47 @@ fn shell_and_interpreter_bypasses_blocked() {
     denied(vec!["sh", "evil.sh"]);
     denied(vec!["bash", "script.sh"]);
     denied(vec!["/bin/busybox", "sh", "evil.sh"]);
+
+    // Interpreters reached through a wrapper must be caught the same as when
+    // they are argv[0]: the check used to look only at argv[0], so
+    // `env python3 -c` slipped past while `python3 -c` was denied.
+    denied(vec!["env", "python3", "-c", "print(1)"]);
+    denied(vec!["nice", "python3", "-c", "print(1)"]);
+    denied(vec!["timeout", "5", "python3", "-c", "print(1)"]);
+    denied(vec!["env", "perl5", "-E", "system 1"]);
+    denied(vec!["/usr/bin/env", "python3.12", "-c", "print(1)"]);
+
+    // Every spelling of the inline-code flag, not just the lowercase one:
+    // `perl -E`, `node -p`, `node --eval=`, `php -R` all execute arbitrary
+    // code exactly like the denied `-e`/`-r` forms.
+    denied(vec!["perl", "-E", "system 1"]);
+    denied(vec!["ruby", "-E", "system 1"]);
+    denied(vec!["node", "-p", "1"]);
+    denied(vec!["node", "-P", "1"]);
+    denied(vec!["node", "--eval=1"]);
+    denied(vec!["node", "--print=1"]);
+    denied(vec!["php", "-R", "echo 1;"]);
+    denied(vec!["python3", "-C", "print(1)"]);
+
+    // No false positives: non-interpreters with look-alike flags, and
+    // interpreters running a script file, stay allowed.
+    let allowed = |argv: Vec<&str>| {
+        let d = policy::decide(
+            &p,
+            &policy::Request {
+                action: "proc.exec".into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: None,
+                argv: Some(argv.iter().map(|s| s.to_string()).collect()),
+            },
+        );
+        assert!(d.allow, "{argv:?} must be allowed");
+    };
+    allowed(vec!["grep", "-c", "x"]);
+    allowed(vec!["python", "script.py"]);
+    allowed(vec!["/bin/ls", "-la"]);
 }
 
 #[test]

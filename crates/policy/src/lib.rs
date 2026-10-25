@@ -239,13 +239,28 @@ const SHELL_BINS: &[&str] = &[
     "sh", "bash", "dash", "zsh", "fish", "ksh", "tcsh", "csh", "busybox",
 ];
 
-/// Interpreters and the flag that feeds them an inline code string.
-fn interpreter_flag(bin: &str) -> Option<&'static str> {
-    let known: &[(&str, &'static str)] = &[
-        ("python", "-c"), ("python3", "-c"),
-        ("perl", "-e"), ("ruby", "-e"), ("node", "-e"), ("lua", "-e"), ("php", "-r"),
+/// Interpreters and the flags that feed them an inline code string. Several
+/// spellings matter: `-c`/`-C` for python, `-e`/`-E` for perl/ruby/node/lua,
+/// `-p`/`--eval`/`--print` for node, `-r`/`-R` for php. The old single
+/// lowercase spelling let `perl -E`, `node -p` and `php -R` through — all of
+/// which execute arbitrary code exactly like the denied forms. Binaries are
+/// matched with version tolerance (`python3.12`, `perl5`).
+fn interpreter_flags(bin: &str) -> &'static [&'static str] {
+    const NONE: &[&str] = &[];
+    let known: &[(&str, &[&str])] = &[
+        ("python", &["-c", "-C"]),
+        ("python3", &["-c", "-C"]),
+        ("perl", &["-e", "-E"]),
+        ("ruby", &["-e", "-E"]),
+        ("node", &["-e", "-E", "-p", "-P", "--eval", "--print"]),
+        ("lua", &["-e", "-E"]),
+        ("php", &["-r", "-R"]),
     ];
-    known.iter().find_map(|(k, f)| bin_matches(bin, *k).then_some(*f))
+    known
+        .iter()
+        .find(|(k, _)| bin_matches(bin, k))
+        .map(|(_, f)| *f)
+        .unwrap_or(NONE)
 }
 
 /// True if `name` names a known binary, tolerating version suffixes:
@@ -358,7 +373,7 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
             // outside argv-array scrutiny. v0 has no shell policy, so deny here;
             // prefer an explicit exec allowlist in a later milestone.
             if let Some(argv) = &req.argv {
-                if argv.len() >= 2 {
+                if !argv.is_empty() {
                     let bin = argv[0].rsplit('/').next().unwrap_or(&argv[0]);
                     let rest = &argv[1..];
                     // A shell binary anywhere in argv (argv[0] itself, or reached
@@ -381,9 +396,22 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
                             "shell script files are not allowed; use argv arrays",
                         );
                     }
-                    if let Some(flag) = interpreter_flag(bin) {
-                        // Detached (`-c code`) and joined (`-ccode`, `-e'code'`).
-                        if rest.iter().any(|a| a == flag || a.starts_with(flag)) {
+                    // Interpreters given inline code are denied WHEREVER they
+                    // appear in argv, not just argv[0]: `env python3 -c`, `nice
+                    // perl -E` and `timeout 5 python3 -c` must be caught just
+                    // like `python3 -c`. Every spelling of the inline-code flag
+                    // is matched (see interpreter_flags): `-c`, `-e`, `-E`, `-p`,
+                    // `--eval`, `-r`, `-R`, and the joined forms (`-ccode`).
+                    for a in argv {
+                        let name = a.rsplit('/').next().unwrap_or(a);
+                        let flags = interpreter_flags(name);
+                        if flags.is_empty() {
+                            continue;
+                        }
+                        if argv
+                            .iter()
+                            .any(|b| flags.iter().any(|f| b == f || b.starts_with(*f)))
+                        {
                             return deny(
                                 "deny:shell",
                                 "interpreter inline code is not allowed; use argv arrays",
