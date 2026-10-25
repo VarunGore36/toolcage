@@ -54,8 +54,15 @@ enum Cmd {
         path: String,
         #[arg(long, default_value = "github_token")]
         cred: String,
+        /// Secret value. UNSAFE: argv is visible to other local users via
+        /// `ps` / `/proc/*/cmdline` and usually lands in shell history. Prefer
+        /// --secret-file.
         #[arg(long, default_value = "")]
         secret_value: String,
+        /// File holding the secret value. Read host-side, never on argv —
+        /// the safe way to pass a credential to `fetch`.
+        #[arg(long)]
+        secret_file: Option<PathBuf>,
         /// Out-of-band approval (operator approved). Without it, gated actions pause.
         #[arg(long, default_value_t = false)]
         approve: bool,
@@ -459,6 +466,7 @@ fn main() -> anyhow::Result<()> {
             path,
             cred,
             secret_value,
+            secret_file,
             approve,
             token,
             key_hex,
@@ -466,6 +474,21 @@ fn main() -> anyhow::Result<()> {
             let text = std::fs::read_to_string(&policy)?;
             let pol = toolcage_policy::load_yaml(&text)?;
             let cap_key = load_key(&key_hex)?;
+            // The credential is host-side material. Prefer --secret-file so it
+            // never reaches argv, where every local user can read it from
+            // ps / /proc/*/cmdline (and it lands in shell history).
+            let secret_value = match &secret_file {
+                Some(f) => std::fs::read_to_string(f)?.trim().to_string(),
+                None => {
+                    if !secret_value.is_empty() {
+                        eprintln!(
+                            "warning: --secret-value puts the credential on the command \
+                             line (visible to other users via ps); prefer --secret-file"
+                        );
+                    }
+                    secret_value
+                }
+            };
             // Destination the policy binds this credential to (used below when
             // the secret is loaded into the broker).
             let cred_use_with = pol
