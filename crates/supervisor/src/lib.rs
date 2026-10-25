@@ -352,6 +352,16 @@ impl Supervisor {
         // as `github` while slipping past a gate or budget written for `github`.
         let dest = toolcage_proxy::policy_host(&self.policy, alias_or_host);
         let dest_names = toolcage_proxy::destination_names(&self.policy, alias_or_host);
+        // Credential bound to this destination, computed up front so the token
+        // gate can enforce the `cred_use` axis at the point it matters: the
+        // broker attaches this credential upstream, so the token must be
+        // allowed to use it. Passing `None` here (the old code) skipped the
+        // axis entirely, making `cred_use` attenuation advisory.
+        let bound_cred = self
+            .policy
+            .credentials
+            .iter()
+            .find(|c| dest_names.iter().any(|n| n.eq_ignore_ascii_case(&c.use_with)));
         let mut w = Writer::open(&self.audit_path)?;
         // Token check (I3): valid keyed tag, narrow rights, unexpired, not
         // revoked. Fail closed: with no host key the tag cannot be verified,
@@ -377,7 +387,14 @@ impl Supervisor {
                     .cap_key
                     .as_ref()
                     .map(|k| {
-                        t.verify_tag(k) && t.allows(k, None, Some(alias_or_host), Some(method), None)
+                        t.verify_tag(k)
+                            && t.allows(
+                                k,
+                                None,
+                                Some(alias_or_host),
+                                Some(method),
+                                bound_cred.map(|c| c.name.as_str()),
+                            )
                     })
                     .unwrap_or(false);
                 if !authorized || revocation.is_revoked(t) {
@@ -476,11 +493,6 @@ impl Supervisor {
         // look-alike such as `github.evil.com` is a different destination and
         // gets nothing. The broker re-checks the binding exactly with the
         // credential's own use_with string (defence in depth).
-        let bound_cred = self
-            .policy
-            .credentials
-            .iter()
-            .find(|c| dest_names.iter().any(|n| n.eq_ignore_ascii_case(&c.use_with)));
         let upstream = pd.upstream.clone().unwrap_or_default();
         // Build auth header from broker-injected credential (never goes to guest).
         let mut headers: Vec<(String, String)> = Vec::new();

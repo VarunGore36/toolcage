@@ -151,3 +151,131 @@ fn policy_only_when_no_cap_key_armed() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Same as POLICY but binds a credential to the `github` destination, so the
+/// request would carry `Authorization: Bearer ...` upstream.
+const POLICY_WITH_CRED: &str = r#"
+tool: token-gate-cred-test
+version: 0
+min_isolation: tier0
+fs:
+  mounts:
+    - path: /workspace
+      mode: rw
+      source: session-copy
+net:
+  mode: allowlist
+  hosts:
+    - alias: github
+      methods: [GET, POST]
+      paths: ["/**"]
+credentials:
+  - name: github_token
+    use_with: github
+limits:
+  egress_bytes: 1
+"#;
+
+fn fetch_cred(
+    sup: &mut Supervisor,
+    token: Option<&toolcage_capability::Token>,
+    rl: &toolcage_capability::RevocationList,
+) -> toolcage_supervisor::FetchOutcome {
+    let b = toolcage_broker::Broker::new();
+    let mut budgets = toolcage_proxy::Budgets::default();
+    let mut proxy = toolcage_proxy::Proxy::new().unwrap();
+    sup.fetch_via_proxy(
+        &b,
+        &mut budgets,
+        &mut proxy,
+        "github",
+        "GET",
+        "/x",
+        token,
+        rl,
+        false,
+    )
+    .unwrap()
+}
+
+#[test]
+fn cred_use_axis_is_enforced_on_credential_attachment() {
+    // Bug: the token check passed `cred` as None, so the `cred_use` rights
+    // axis was never consulted — a token attenuated to `cred_use: []` ("must
+    // not use any credential") still got `github_token` attached upstream.
+    // The axis must gate the attachment: a request that would carry a
+    // credential the token may not use is denied.
+    let dir = std::env::temp_dir().join(format!(
+        "tc-tokgate-cred-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("audit.jsonl");
+    let k = key();
+    let rl = toolcage_capability::RevocationList::default();
+
+    // Token narrowed to use NO credentials -> the credential-bearing request
+    // must be denied at the token gate.
+    let none_allowed = toolcage_capability::Token::root(
+        &k,
+        "root-cred-none",
+        toolcage_capability::Rights {
+            fs_prefixes: vec![],
+            net_hosts: vec!["github".into()],
+            methods: vec!["GET".into()],
+            cred_use: vec![],
+            budget_bytes: 0,
+            expires_at: 0,
+        },
+    );
+    let mut sup = Supervisor {
+        policy: toolcage_policy::load_yaml(POLICY_WITH_CRED).unwrap(),
+        audit_path: audit.clone(),
+        session: "tokgate-cred".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: false,
+        cap_key: Some(k.clone()),
+    };
+    let o = fetch_cred(&mut sup, Some(&none_allowed), &rl);
+    assert_eq!(
+        o.rule_ids,
+        vec!["token:deny".to_string()],
+        "cred_use: [] must forbid the github_token credential: {:?}",
+        o.rule_ids
+    );
+
+    // Token narrowed to use exactly that credential -> passes the gate and
+    // reaches the budget check.
+    let ok_tok = toolcage_capability::Token::root(
+        &k,
+        "root-cred-ok",
+        toolcage_capability::Rights {
+            fs_prefixes: vec![],
+            net_hosts: vec!["github".into()],
+            methods: vec!["GET".into()],
+            cred_use: vec!["github_token".into()],
+            budget_bytes: 0,
+            expires_at: 0,
+        },
+    );
+    let mut sup = Supervisor {
+        policy: toolcage_policy::load_yaml(POLICY_WITH_CRED).unwrap(),
+        audit_path: audit.clone(),
+        session: "tokgate-cred2".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: false,
+        cap_key: Some(k.clone()),
+    };
+    let o = fetch_cred(&mut sup, Some(&ok_tok), &rl);
+    assert_eq!(
+        o.rule_ids,
+        vec!["budget:exceeded".to_string()],
+        "cred_use permitting github_token must clear the gate: {:?}",
+        o.rule_ids
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
