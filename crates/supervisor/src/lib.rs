@@ -574,12 +574,12 @@ impl Supervisor {
             }
         };
         let safe_body = broker.scrub(&String::from_utf8_lossy(&resp.body));
-        // Egress damage bound (§8): request bytes were reserved before dialing
-        // (pre-charge above). True-up with the bytes that actually left the
-        // host now; fail-closed if over budget. Zero limit = unbounded
-        // (back-compat). Note this charges resp.body, not the scrubbed view:
-        // scrubbing shrinks the body (secrets become "[REDACTED]"), and the
-        // damage bound must count real egress.
+        // Egress damage bound (§8): the request was pre-charged before dialing;
+        // charge the response now too. Note this counts resp.body (the real
+        // bytes on the wire), not the scrubbed view — scrubbing shrinks the
+        // body (secrets become "[REDACTED]"), and the damage bound must count
+        // real volume. The pre-charged request estimate is not refunded, so
+        // the total is a deliberate over-count (fail-closed).
         let max_bytes = if self.policy.limits.egress_bytes == 0 {
             u64::MAX
         } else {
@@ -597,7 +597,9 @@ impl Supervisor {
                 rule_ids: vec!["budget:exceeded".into()],
                 token_rev_id: token.map(|t| t.rev_id.clone()).unwrap_or_default(),
                 result: "over-egress-budget(true-up)".into(),
-                bytes: safe_body.len() as u64,
+                // What was charged (resp.body), not the scrubbed view the guest
+                // sees — the audit must match the budget state.
+                bytes: resp.body.len() as u64,
                 claimed_by: "host".into(),
                 prev_hash: String::new(),
                 hash: String::new(),
@@ -626,7 +628,9 @@ impl Supervisor {
                     .map(|c| toolcage_broker::Broker::log_id(&c.name))
                     .unwrap_or_else(|| "none".into())
             ),
-            bytes: safe_body.len() as u64,
+            // What was charged (resp.body), not the scrubbed view the guest
+            // sees — the audit must match the budget state.
+            bytes: resp.body.len() as u64,
             claimed_by: "host".into(),
             prev_hash: String::new(),
             hash: String::new(),
