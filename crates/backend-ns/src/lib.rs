@@ -37,10 +37,10 @@
 
 use libc::{
     c_char, c_int, c_long, c_uint, c_ulong, c_void, getgid, getuid, prctl, sock_filter, sock_fprog,
-    syscall, BPF_ABS, BPF_A, BPF_JEQ, BPF_JMP, BPF_K, BPF_LD, BPF_RET, BPF_W, EPERM,
+    syscall, BPF_ABS, BPF_JEQ, BPF_JMP, BPF_K, BPF_LD, BPF_RET, BPF_W, EPERM,
     SECCOMP_MODE_FILTER,
-    SECCOMP_RET_ALLOW, SECCOMP_RET_DATA, SECCOMP_RET_ERRNO, SIGKILL, STDERR_FILENO, STDOUT_FILENO,
-    WEXITSTATUS, WIFEXITED, WNOHANG,
+    SECCOMP_RET_ALLOW, SECCOMP_RET_DATA, SECCOMP_RET_ERRNO, SIGKILL, STDERR_FILENO, STDIN_FILENO,
+    STDOUT_FILENO, WEXITSTATUS, WIFEXITED, WNOHANG,
 };
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -622,6 +622,15 @@ fn isolated_exec(
             close(ready_r).ok();
             close(go_w).ok();
 
+            // Open /dev/null NOW, before Landlock: the fs ruleset below grants
+            // only /workspace and the read-only system dirs, so /dev/null would
+            // be unopenable after restrict_self. Kept as a raw fd for the
+            // dup2(STDIN_FILENO) near execve — the workload's stdin must never
+            // be the caller's (in the MCP deployment that is the guest's own
+            // JSON-RPC stream).
+            let devnull =
+                unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+
             // 1. The namespace stack is already in place: clone_all_namespaces()
             // created us inside user + mount + net + ipc + pid + uts in a
             // single call. CLONE_NEWPID is what makes this process init of the
@@ -737,13 +746,24 @@ fn isolated_exec(
                     }
                 }
             }
-            // Duplicate output pipes onto stdout/stderr, close the rest.
+            // stdin -> /dev/null: never inherit the caller's stdin. In the MCP
+            // deployment fd 0 is the guest-controlled JSON-RPC stream, so a
+            // workload like `bash` (which reads commands from stdin) could be
+            // fed commands by the guest. (`devnull` was opened above, before
+            // Landlock — /dev/null is not reachable under the fs ruleset.)
+            if devnull >= 0 {
+                let _ = unsafe { libc::dup2(devnull, STDIN_FILENO) };
+            }
+            // Duplicate output pipes onto stdout/stderr.
             let _ = unsafe { libc::dup2(out_w.as_raw_fd(), STDOUT_FILENO) };
             let _ = unsafe { libc::dup2(err_w.as_raw_fd(), STDERR_FILENO) };
             close(out_w).ok();
             close(err_w).ok();
             close(ready_w).ok();
             close(go_r).ok();
+            // Close anything else the caller had open (the devnull handle and
+            // any non-CLOEXEC fd), so the workload can't read/write host fds.
+            close_all_except_stdio();
 
             // execve with resolved path and minimal environment.
             // Never returns on success; returns -1 on error.
@@ -886,6 +906,26 @@ fn read_capped_until(fd: OwnedFd, stop_at: Instant, cap: usize) -> (Vec<u8>, boo
         }
     }
     (buf, truncated)
+}
+
+/// Close every fd except stdin/stdout/stderr before execve. Belt-and-braces
+/// against non-CLOEXEC fds leaking into the workload: Landlock gates *open*,
+/// not read/write on a pre-opened fd, and the seccomp filter doesn't block
+/// read/write — so an inherited audit-log fd, socket, or stdin (in the MCP
+/// deployment the guest-controlled JSON-RPC stream) would let the workload
+/// read secrets or append forged records. Rust std sets O_CLOEXEC on the fds
+/// it opens, but the caller's stdin and any raw-libc/nix fd don't get it.
+/// Zero allocation: raw syscalls only (this runs between clone and execve).
+fn close_all_except_stdio() {
+    // close_range(3, ~0, 0): one syscall (Linux 5.9+).
+    let rc = unsafe { libc::syscall(libc::SYS_close_range, 3usize, !0usize, 0usize) };
+    if rc == 0 {
+        return;
+    }
+    // Fallback for kernels without close_range: bounded close loop.
+    for fd in 3..=1024 {
+        unsafe { libc::close(fd) };
+    }
 }
 
 /// Build the seccomp-BPF filter instructions (allocates — call before fork).
@@ -1444,7 +1484,7 @@ mod tests {
         );
         assert_ne!(
             insns[0].code,
-            (BPF_LD | BPF_W | BPF_A) as u16,
+            (BPF_LD | BPF_W | libc::BPF_A) as u16,
             "BPF_A (== BPF_B) is not a load addressing mode; the kernel rejects it"
         );
         assert_eq!(insns[0].k, 0, "loads seccomp_data.nr at offset 0");
@@ -1469,6 +1509,111 @@ mod tests {
             assert_eq!(chunk[1].code, (BPF_RET | BPF_K) as u16);
             assert_eq!(chunk[1].k, SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA));
         }
+    }
+
+    #[test]
+    fn no_host_fds_leak_into_workload() {
+        // A non-CLOEXEC fd the caller has open must not survive into the
+        // workload. Landlock gates *open*, not write on a pre-opened fd, so a
+        // leaked fd would let the workload write to host state (e.g. append to
+        // the audit log). Rust std marks its fds CLOEXEC, so open one by hand
+        // to get a genuinely-inherited fd.
+        if !isolated() {
+            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-fdleak-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("leak.txt");
+        std::fs::write(&target, b"").unwrap();
+        let cpath = std::ffi::CString::new(target.display().to_string()).unwrap();
+        let raw = unsafe {
+            libc::open(
+                cpath.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                0o644,
+            )
+        };
+        assert!(raw >= 0, "open leak.txt");
+        let id = "t-fdleak";
+        let spec = SessionSpec {
+            id: id.into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        // If `raw` leaked into the workload, this writes LEAKED into leak.txt.
+        let r = b.exec(
+            id,
+            &[
+                "/bin/sh".into(),
+                "-c".into(),
+                format!("echo LEAKED >&{raw}"),
+            ],
+            30,
+            OUTPUT_CAP,
+        );
+        unsafe { libc::close(raw) };
+        let r = r.unwrap();
+        let content = std::fs::read_to_string(&target).unwrap();
+        assert!(
+            !content.contains("LEAKED"),
+            "host fd {raw} leaked into the workload (wrote {content:?}); exit={:?}",
+            r.exit_code
+        );
+        b.destroy(id).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stdin_is_devnull_in_workload() {
+        // The workload's stdin must be /dev/null, never the caller's stdin.
+        // In the MCP deployment fd 0 is the guest-controlled JSON-RPC stream,
+        // so an inherited stdin lets a workload like `bash` be fed commands by
+        // the guest. Put known content on fd 0 and verify the workload can't
+        // read it.
+        if !isolated() {
+            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-stdin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("stdin.txt");
+        std::fs::write(&f, b"LEAKED-STDIN").unwrap();
+        let infile = std::fs::File::open(&f).unwrap();
+        // Save fd 0, point it at the content file, run cat, then restore.
+        let saved = unsafe { libc::dup(0) };
+        assert!(saved >= 0, "dup fd 0");
+        unsafe { libc::dup2(infile.as_raw_fd(), 0) };
+        drop(infile);
+        let id = "t-stdin";
+        let spec = SessionSpec {
+            id: id.into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        let r = b.exec(id, &["/bin/cat".into()], 30, OUTPUT_CAP);
+        // Restore fd 0 before any assertion can fail.
+        unsafe {
+            libc::dup2(saved, 0);
+            libc::close(saved);
+        }
+        let r = r.unwrap();
+        assert_eq!(r.exit_code, Some(0), "cat must run to completion: {r:?}");
+        let out = String::from_utf8_lossy(&r.stdout);
+        assert!(
+            !out.contains("LEAKED-STDIN"),
+            "workload inherited the caller's stdin and read {out:?}"
+        );
+        b.destroy(id).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
