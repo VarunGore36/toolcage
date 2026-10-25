@@ -130,6 +130,55 @@ fn valid_token_passes_the_gate_when_cap_key_armed() {
 }
 
 #[test]
+fn token_identity_recorded_in_audit_events() {
+    // The proxy-intent / proxy-error / allow events hardcoded
+    // token_rev_id: "root", so the audit log could not attribute an *allowed*
+    // request to the token that authorized it (the deny paths recorded it
+    // correctly). Exactly the forensics revocation needs.
+    let dir = std::env::temp_dir().join(format!(
+        "tc-tokgate-rev-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("audit.jsonl");
+    let k = key();
+    let tok = toolcage_capability::Token::root(
+        &k,
+        "root-42",
+        toolcage_capability::Rights {
+            fs_prefixes: vec![],
+            net_hosts: vec!["github".into()],
+            methods: vec!["GET".into()],
+            cred_use: vec![],
+            budget_bytes: 0,
+            expires_at: 0,
+        },
+    );
+    let mut sup = sup_at(&audit, Some(k));
+    let rl = toolcage_capability::RevocationList::default();
+    let _ = fetch(&mut sup, Some(&tok), &rl);
+    let text = std::fs::read_to_string(&audit).unwrap();
+    let events: Vec<serde_json::Value> =
+        text.lines().filter_map(|l| l.parse().ok()).collect();
+    // The proxy-intent event (written before the action) must name the token.
+    let intent = events
+        .iter()
+        .find(|v| v["result"] == "proxy-intent")
+        .expect("a proxy-intent event is written");
+    assert_eq!(
+        intent["token_rev_id"], "root-42",
+        "the intent event must attribute the request to the token"
+    );
+    // And no event may carry the old hardcoded "root" placeholder.
+    assert!(
+        !events.iter().any(|v| v["token_rev_id"] == "root"),
+        "no event may hardcode token_rev_id root: {text}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn policy_only_when_no_cap_key_armed() {
     // No capability key = no capability system to enforce; policy is the only
     // gate and tokenless calls work (back-compat).
