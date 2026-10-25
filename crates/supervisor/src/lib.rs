@@ -356,37 +356,60 @@ impl Supervisor {
         // Token check (I3): valid keyed tag, narrow rights, unexpired, not
         // revoked. Fail closed: with no host key the tag cannot be verified,
         // so a presented token is denied, never waved through.
-        if let Some(t) = token {
-            let authorized = match &self.cap_key {
-                Some(k) => {
-                    t.verify_tag(k) && t.allows(k, None, Some(alias_or_host), Some(method), None)
+        //
+        // Capability gate (I3): dual auth — policy AND a valid token must
+        // allow. When a capability key is armed the token is MANDATORY: a
+        // caller must not be able to drop it and fall back to policy-only
+        // rights, which would make attenuation purely advisory. With no key
+        // armed there is no capability system to enforce (policy is the only
+        // gate) and a presented token cannot be verified, so it is refused
+        // (fail closed). Revocation is checked for every presented token.
+        let deny_rule: Option<&str> = match token {
+            None => {
+                if self.cap_key.is_some() {
+                    Some("token:missing")
+                } else {
+                    None
                 }
-                None => false,
-            };
-            if revocation.is_revoked(t) || !authorized {
-                w.append(Event {
-                    seq: 0,
-                    ts_wall: now_wall(),
-                    session: self.session.clone(),
-                    actor: "agent".into(),
-                    action: format!("http.request {method} {alias_or_host}{path}"),
-                    request_hash: "net".into(),
-                    decision: "deny".into(),
-                    rule_ids: vec!["token:deny".into()],
-                    token_rev_id: t.rev_id.clone(),
-                    result: "token-denied".into(),
-                    bytes: 0,
-                    claimed_by: "host".into(),
-                    prev_hash: String::new(),
-                    hash: String::new(),
-                })?;
-                return Ok(FetchOutcome {
-                    allowed: false,
-                    need_approval: false,
-                    rule_ids: vec!["token:deny".into()],
-                    body: String::new(),
-                });
             }
+            Some(t) => {
+                let authorized = self
+                    .cap_key
+                    .as_ref()
+                    .map(|k| {
+                        t.verify_tag(k) && t.allows(k, None, Some(alias_or_host), Some(method), None)
+                    })
+                    .unwrap_or(false);
+                if !authorized || revocation.is_revoked(t) {
+                    Some("token:deny")
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some(rule) = deny_rule {
+            w.append(Event {
+                seq: 0,
+                ts_wall: now_wall(),
+                session: self.session.clone(),
+                actor: "agent".into(),
+                action: format!("http.request {method} {alias_or_host}{path}"),
+                request_hash: "net".into(),
+                decision: "deny".into(),
+                rule_ids: vec![rule.into()],
+                token_rev_id: token.map(|t| t.rev_id.clone()).unwrap_or_default(),
+                result: "token-denied".into(),
+                bytes: 0,
+                claimed_by: "host".into(),
+                prev_hash: String::new(),
+                hash: String::new(),
+            })?;
+            return Ok(FetchOutcome {
+                allowed: false,
+                need_approval: false,
+                rule_ids: vec![rule.into()],
+                body: String::new(),
+            });
         }
         // Approval gate: pause for out-of-band decision, timeout = deny.
         // Matched over every spelling of the destination, so a request for
