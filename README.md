@@ -6,7 +6,7 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Status: alpha](https://img.shields.io/badge/status-alpha%20%C2%B7%20not%20independently%20reviewed-orange.svg)
-![Tests: 91 passing](https://img.shields.io/badge/tests-91%20passing-brightgreen.svg)
+![Tests: 137 passing](https://img.shields.io/badge/tests-137%20passing-brightgreen.svg)
 ![Rust](https://img.shields.io/badge/built%20with-Rust-black.svg)
 
 [Quickstart](#quickstart) · [Why](#why-toolcage) · [Architecture](#architecture) · [Invariants](#the-seven-invariants) · [Policy](#policy) · [CLI](#cli-reference) · [MCP](#mcp-front-door) · [Limits](#status-and-known-limits) · [Threat model](docs/THREAT_MODEL.md)
@@ -115,7 +115,7 @@ These are the security claims toolcage makes. Each one is tied to a test suite, 
 | **I2** | No credential value appears in guest memory, files, environment, or arguments | Planted canary secrets scanned for; broker encryption and rotation tests |
 | **I3** | A token can only be narrowed on delegation, never widened — and can't be minted without the host key | 200-seed multi-hop property test; narrow / widen / revoke / tamper / forgery tests |
 | **I4** | Every decision is recorded before the action runs | Write-ahead intent logging; chaos tests that kill the supervisor mid-action |
-| **I5** | Any edit, deletion, or reordering of the log is detected by `audit verify` | Mutation tests; checkpoint truncation and old-checkpoint tests |
+| **I5** | Any edit, deletion, or reordering of the log **below the newest retained checkpoint** is detected by `audit verify` (see [Audit log](#audit-log) for the tail caveat) | Mutation tests; checkpoint truncation and old-checkpoint tests |
 | **I6** | The guest cannot loosen its own policy or reach the policy engine | `sh -c` denial, path traversal, mount checks, adversarial guest-agent validation |
 | **I7** | After teardown, no session state is reachable from another session | Cross-session canary tests |
 
@@ -183,6 +183,8 @@ Tokens carry scoped, expiring authority and are revocable. Tags are **HMAC-SHA25
 
 This is **tamper evidence, not tamper prevention.** An attacker who controls the host can rewrite and re-sign the log unless the public key and checkpoints are stored somewhere they can't reach.
 
+**Scope of detection.** The chain hash is unkeyed (SHA-256 over public fields), so anyone can recompute a self-consistent chain; what makes it tamper-*evident* is the signed checkpoints pinning `(seq, head)` to a prefix. Concretely: tampering **below the newest retained checkpoint** is detected, but edits, deletions, or reordering of the **tail after that checkpoint** are not — unless a newer checkpoint is anchored externally (a second machine, a transparency log). Delete the newer `<log>.checkpoint.*` files, rewrite the tail, and `audit verify` passes. Store checkpoints somewhere the log writer can't reach if you need tail integrity.
+
 `panic` freezes a log by appending a `deny-all` event and a `.tainted` marker.
 
 ## CLI reference
@@ -217,7 +219,7 @@ Third-party MCP servers run as **guest processes** under the same policy and aud
 
 ## Tests
 
-`cargo test --workspace` runs **91 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
+`cargo test --workspace` runs **137 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
 
 - **Escape suite** against the policy and proxy (I1, I6)
 - **Fuzzing** of the policy, guest-agent, audit, and proxy parsers
@@ -248,10 +250,11 @@ The audit figure is filesystem-dependent (tmpfs may not flush durably) and is a 
 
 | Area | State |
 |---|---|
-| Tier 0 (namespaces, Landlock) | Implemented, with live isolation tests. Landlock is **mandatory** (fail-closed): if the kernel can't provide it, session creation is denied and the child refuses to run — no silent fallback to namespaces-only. |
-| Tier 1 (gVisor), Tier 2 (Firecracker) | Drivers implemented and tested for config generation, tier selection, and fail-closed behavior when the runtime is missing. No live `runsc` or microVM execution tests in the suite. |
-| seccomp-BPF | Returns `EINVAL` on the development host's kernel, so Tier 0 there relies on namespaces + Landlock and seccomp is defense in depth. Check `doctor` on your machine. |
+| Tier 0 (namespaces, Landlock, seccomp) | Implemented, with live isolation tests. Landlock is **mandatory** (fail-closed): if the kernel can't provide it, session creation is denied and the child refuses to run — no silent fallback to namespaces-only. |
+| Tier 1 (gVisor), Tier 2 (Firecracker) | **Not functional as wired.** The drivers generate config, apply budgets, and fail closed when the runtime is missing — but nothing actually launches the sandbox: the Firecracker/jailer path is dead code (no VM is ever started, `/boot-source` is never configured), and `runsc create` is invoked with an argument shape the upstream rejects (and the OCI spec omits the required `process.args`). There are no live execution tests because the code cannot yet run a workload. |
+| seccomp-BPF | Implemented and **installs** (verified: `PR_SET_SECCOMP` succeeds and the workload runs under the filter). Note this was previously broken by an invalid BPF addressing mode — `PR_SET_SECCOMP` failed with `EINVAL` on *every* kernel, which the old note here attributed to "some kernels". Fixed; it is defense in depth alongside namespaces + Landlock. The blocklist is not exhaustive: the newer mount API (`fsopen`/`move_mount`/`fsmount`), `io_uring`, and `chroot` are not blocked. Check `doctor` on your machine. |
 | Audit throughput | fsync per append (crash-safe). Group commit is the next step if throughput is ever needed. |
+| Secret handling | `fetch --secret-value` accepts the credential as a CLI flag, so it is visible to other local users via `ps`/`/proc/*/cmdline` and usually lands in shell history — despite "stays host-side". Keys written by `token keygen` / `audit keygen` are `0600`; this path is not. Prefer a file or env var. |
 | Scope | Linux only. No GPU workloads, no multi-tenant hosting, no Windows or macOS guests. |
 
 Things the design does **not** do, by construction:
