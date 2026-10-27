@@ -518,3 +518,45 @@ fs:
     assert!(policy::load_yaml("tool: t\nversion: 0\nnet:\n  mode: alowlist\n").is_err());
     assert!(policy::load_yaml("tool: t\nversion: 0\nnet:\n  mode: allowlist\n").is_ok());
 }
+
+#[test]
+fn overlapping_mounts_cannot_shadow_read_only() {
+    // First-match-wins let a narrow rw mount listed BEFORE a read-only parent
+    // re-open writes under the parent (and the same mounts in the other order
+    // denied). Every covering mount must agree: a write needs all of them.
+    let dec = |mounts: &str, action: &str, path: &str| {
+        let p = policy::load_yaml(&format!(
+            "tool: t\nversion: 0\nfs:\n  mounts:\n{mounts}"
+        ))
+        .unwrap();
+        policy::decide(
+            &p,
+            &policy::Request {
+                action: action.into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: Some(path.into()),
+                argv: None,
+            },
+        )
+    };
+    let ro_parent = "    - path: /workspace\n      mode: ro\n";
+    let rw_child = "    - path: /workspace/in\n      mode: rw\n";
+    // Order must not matter: either way the ro parent governs writes.
+    for mounts in [
+        format!("{ro_parent}{rw_child}"),
+        format!("{rw_child}{ro_parent}"),
+    ] {
+        let d = dec(&mounts, "fs.write", "/workspace/in/x");
+        assert!(!d.allow, "ro parent must govern: {mounts:?} -> {d:?}");
+        assert_eq!(d.rule_ids, vec!["fs:deny-ro".to_string()]);
+        // Reads are fine under both.
+        assert!(dec(&mounts, "fs.read", "/workspace/in/x").allow);
+    }
+    // Without the ro parent the child is writable.
+    assert!(dec(rw_child, "fs.write", "/workspace/in/x").allow);
+    // Duplicate paths: the read-only one wins.
+    let dup = format!("{rw_child}    - path: /workspace/in\n      mode: ro\n");
+    assert!(!dec(&dup, "fs.write", "/workspace/in/x").allow);
+}

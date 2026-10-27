@@ -420,6 +420,14 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
         "fs.read" | "fs.write" => {
             let raw = req.fs_path.as_deref().unwrap_or("/");
             let canon = canonical_path(raw);
+            // Every mount covering the path has a say, not just the first one
+            // that matches: with overlapping mounts the first-match rule let a
+            // narrow `rw` listed before a `ro` parent shadow the read-only
+            // mount (and the same two mounts in the other order behaved
+            // differently). Effective permission is the MOST restrictive of
+            // the covering mounts — a write needs all of them to be writable.
+            let mut covered: Option<String> = None;
+            let mut write_denied_by: Option<String> = None;
             for m in &policy.fs.mounts {
                 let mount = canonical_path(&m.path);
                 let mount = mount.trim_end_matches('/').to_string();
@@ -429,17 +437,30 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
                     mount
                 };
                 if canon == mount || canon.starts_with(&format!("{mount}/")) {
-                    if req.action == "fs.write" && !mount_allows_write(&m.mode) {
-                        return deny("fs:deny-ro", "mount is not writable");
+                    if req.action == "fs.write"
+                        && !mount_allows_write(&m.mode)
+                        && write_denied_by.is_none()
+                    {
+                        write_denied_by = Some(mount.clone());
                     }
-                    return Decision {
-                        allow: true,
-                        rule_ids: vec![format!("fs:allow:{mount}")],
-                        reason: format!("under mount {mount}"),
-                    };
+                    if covered.is_none() {
+                        covered = Some(mount);
+                    }
                 }
             }
-            deny("fs:deny-default", "path outside mounts")
+            if req.action == "fs.write" {
+                if let Some(mount) = write_denied_by {
+                    return deny("fs:deny-ro", &format!("mount {mount} is not writable"));
+                }
+            }
+            match covered {
+                Some(mount) => Decision {
+                    allow: true,
+                    rule_ids: vec![format!("fs:allow:{mount}")],
+                    reason: format!("under mount {mount}"),
+                },
+                None => deny("fs:deny-default", "path outside mounts"),
+            }
         }
         "proc.exec" => {
             // An exec with no argv authorizes nothing — deny it outright
