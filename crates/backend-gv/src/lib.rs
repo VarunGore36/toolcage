@@ -34,6 +34,45 @@ use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
 
 const OUTPUT_CAP: usize = 1024 * 1024;
 
+/// The container's long-running init (`process.args` in the OCI spec). This is
+/// NOT the workload — `create` + repeated `exec` needs the container alive
+/// between commands, so the init is a pause loop. Operator-controlled; the
+/// rootfs must provide /bin/sh and sleep (the alpine image does).
+const INIT_ARGS: &[&str] = &["/bin/sh", "-c", "while :; do sleep 3600; done"];
+
+/// argv for `runsc create`. The bundle is a FLAG and the container id is the
+/// single positional: upstream rejects two positionals with a usage error
+/// (`if f.NArg() != 1`), so `create <id> <bundle>` never worked.
+fn runsc_create_args(id: &str, bundle: &std::path::Path) -> Vec<String> {
+    vec![
+        "create".into(),
+        "--bundle".into(),
+        bundle.display().to_string(),
+        id.into(),
+    ]
+}
+
+fn runsc_start_args(id: &str) -> Vec<String> {
+    vec!["start".into(), id.into()]
+}
+
+fn runsc_exec_args(id: &str, argv: &[String]) -> Vec<String> {
+    let mut a = vec!["exec".into(), id.into(), "--".into()];
+    a.extend(argv.iter().cloned());
+    a
+}
+
+/// Kill a container's processes with SIGKILL. runsc's default signal is
+/// SIGTERM, which a workload may trap or ignore — a timed-out workload must
+/// actually die.
+fn runsc_kill_args(id: &str) -> Vec<String> {
+    vec!["kill".into(), id.into(), "KILL".into()]
+}
+
+fn runsc_delete_args(id: &str) -> Vec<String> {
+    vec!["delete".into(), id.into()]
+}
+
 pub struct GvBackend {
     pub runsc_path: PathBuf,
     pub sessions: HashMap<String, SessionSpec>,
@@ -64,12 +103,22 @@ impl GvBackend {
 
     /// OCI bundle config.json for runsc. Read-only rootfs, workspace bind
     /// mount, full namespace set, no capabilities, noNewPrivileges.
+    ///
+    /// `process.args` is the container's long-running init, not the workload:
+    /// the session model (`create` then repeated `exec`) needs the container
+    /// alive between commands, and runsc rejects a spec with no args
+    /// ("Spec.Process.Arg must be defined"). Operator-controlled, never
+    /// guest-supplied. Requires /bin/sh and sleep in the rootfs (the alpine
+    /// image has both).
     pub fn bundle_config(session: &str, rootfs: &str, workspace: &str) -> serde_json::Value {
         serde_json::json!({
             "ociVersion": "1.0.0",
             "id": session,
             "root": { "path": rootfs, "readonly": true },
             "mounts": [
+                // /proc first: maskedPaths/readonlyPaths below reference it,
+                // and the runtime expects the mount to exist.
+                { "destination": "/proc", "type": "proc", "source": "proc" },
                 { "destination": "/workspace", "type": "bind", "source": workspace, "options": ["rw", "rbind"] },
             ],
             "linux": {
@@ -81,7 +130,9 @@ impl GvBackend {
                     { "type": "network" },
                 ],
                 "resources": {
-                    "devices": [ { "allow": false, "all": false } ]
+                    // Deny-all: the rule must set all:true to mean "no device
+                    // nodes". `all:false` matches nothing and enforces nothing.
+                    "devices": [ { "allow": false, "all": true } ]
                 },
                 "maskedPaths": [
                     "/proc/acpi", "/proc/kcore", "/proc/keys", "/proc/latency_stats",
@@ -95,6 +146,9 @@ impl GvBackend {
             },
             "process": {
                 "user": { "uid": 0, "gid": 0 },
+                "args": INIT_ARGS,
+                "cwd": "/",
+                "terminal": false,
                 "capabilities": {
                     "bounding": [],
                     "effective": [],
@@ -178,19 +232,17 @@ impl Backend for GvBackend {
         let config_json = serde_json::to_string_pretty(&config)?;
         std::fs::write(bundle_dir.join("config.json"), config_json)?;
 
-        // runsc create <id> <bundle-dir>
+        // runsc create --bundle <dir> <id> (bundle is a flag; the id is the
+        // single positional — two positionals is a usage error upstream).
         let status = Command::new(&self.runsc_path)
-            .arg("create")
-            .arg(&spec.id)
-            .arg(&bundle_dir)
+            .args(runsc_create_args(&spec.id, &bundle_dir))
             .status()
             .context("runsc create failed")?;
         anyhow::ensure!(status.success(), "runsc create exited with {status}");
 
         // runsc start <id>
         let status = Command::new(&self.runsc_path)
-            .arg("start")
-            .arg(&spec.id)
+            .args(runsc_start_args(&spec.id))
             .status()
             .context("runsc start failed")?;
         anyhow::ensure!(status.success(), "runsc start exited with {status}");
@@ -205,17 +257,32 @@ impl Backend for GvBackend {
             "runsc not installed; tier1 unavailable"
         );
 
-        // runsc kill <id> (best effort)
-        let _ = Command::new(&self.runsc_path).arg("kill").arg(id).status();
+        // SIGKILL the container's processes (runsc's default is SIGTERM, which
+        // a workload may trap), then delete once it has actually stopped:
+        // deleting a still-running container fails ("container still running")
+        // and leaks it.
+        let _ = Command::new(&self.runsc_path)
+            .args(runsc_kill_args(id))
+            .status();
 
-        // runsc delete <id>
-        let status = Command::new(&self.runsc_path)
-            .arg("delete")
-            .arg(id)
-            .status()
-            .context("runsc delete failed")?;
-        anyhow::ensure!(status.success(), "runsc delete exited with {status}");
-
+        let mut last = None;
+        for _ in 0..50 {
+            let st = Command::new(&self.runsc_path)
+                .args(runsc_delete_args(id))
+                .status()
+                .context("runsc delete failed")?;
+            if st.success() {
+                self.sessions.remove(id);
+                return Ok(());
+            }
+            last = Some(st);
+            thread::sleep(Duration::from_millis(100));
+        }
+        anyhow::ensure!(
+            last.map(|s| s.success()).unwrap_or(false),
+            "runsc delete exited with {:?}",
+            last
+        );
         self.sessions.remove(id);
         Ok(())
     }
@@ -236,10 +303,7 @@ impl Backend for GvBackend {
 
         // runsc exec <id> -- <argv...>
         let mut cmd = Command::new(&self.runsc_path);
-        cmd.arg("exec").arg(id).arg("--");
-        for arg in argv {
-            cmd.arg(arg);
-        }
+        cmd.args(runsc_exec_args(id, argv));
 
         let mut child = cmd
             .stdout(Stdio::piped())
@@ -273,12 +337,14 @@ impl Backend for GvBackend {
                 Ok(None) => {
                     if Instant::now() > deadline {
                         let _ = child.kill();
-                        // Kill the in-sandbox workload too: the runsc exec
-                        // client may outlive (or fail to signal) the workload
-                        // inside the sandbox, which would keep running after
-                        // the exec is recorded as timed out.
-                        let _ =
-                            Command::new(&self.runsc_path).arg("kill").arg(id).status();
+                        // SIGKILL the in-sandbox workload too: the runsc exec
+                        // client may outlive (or fail to signal) the workload,
+                        // which would keep running after the exec is recorded
+                        // as timed out. runsc kill's default is SIGTERM, which
+                        // a workload may trap.
+                        let _ = Command::new(&self.runsc_path)
+                            .args(runsc_kill_args(id))
+                            .status();
                         timed_out = true;
                         break None;
                     }
@@ -375,9 +441,19 @@ mod tests {
         assert_eq!(cfg["id"], "sess1");
         assert_eq!(cfg["root"]["path"], "/var/lib/toolcage/rootfs");
         assert_eq!(cfg["root"]["readonly"], true);
-        assert_eq!(cfg["mounts"][0]["destination"], "/workspace");
-        assert_eq!(cfg["mounts"][0]["source"], "/tmp/workspace");
-        let opts: Vec<&str> = cfg["mounts"][0]["options"]
+        // /proc must be mounted: maskedPaths/readonlyPaths reference it and the
+        // runtime expects the mount to exist.
+        let mounts = cfg["mounts"].as_array().unwrap();
+        assert!(
+            mounts.iter().any(|m| m["destination"] == "/proc"),
+            "a /proc mount is required"
+        );
+        let ws = mounts
+            .iter()
+            .find(|m| m["destination"] == "/workspace")
+            .expect("workspace mount");
+        assert_eq!(ws["source"], "/tmp/workspace");
+        let opts: Vec<&str> = ws["options"]
             .as_array()
             .unwrap()
             .iter()
@@ -403,6 +479,48 @@ mod tests {
             0
         );
         assert_eq!(cfg["process"]["noNewPrivileges"], true);
+        // runsc rejects a spec with no process.args ("Spec.Process.Arg must be
+        // defined") — the container's long-running init is required.
+        let args = cfg["process"]["args"].as_array().expect("process.args");
+        assert!(!args.is_empty(), "process.args must be defined for runsc");
+        assert_eq!(cfg["process"]["cwd"], "/");
+        // Deny-all devices: `all:false` matches nothing and enforces nothing.
+        assert_eq!(cfg["linux"]["resources"]["devices"][0]["all"], true);
+        assert_eq!(cfg["linux"]["resources"]["devices"][0]["allow"], false);
+    }
+
+    #[test]
+    fn runsc_command_shapes_match_upstream() {
+        // `runsc create` takes the bundle as --bundle and the id as the single
+        // positional; two positionals is a usage error upstream (`f.NArg() != 1`).
+        let bundle = std::path::Path::new("/run/toolcage/sess1");
+        assert_eq!(
+            runsc_create_args("sess1", bundle),
+            vec![
+                "create".to_string(),
+                "--bundle".to_string(),
+                "/run/toolcage/sess1".to_string(),
+                "sess1".to_string()
+            ]
+        );
+        assert_eq!(runsc_start_args("sess1"), vec!["start".to_string(), "sess1".to_string()]);
+        assert_eq!(
+            runsc_exec_args("sess1", &["/bin/echo".into(), "hi".into()]),
+            vec![
+                "exec".to_string(),
+                "sess1".to_string(),
+                "--".to_string(),
+                "/bin/echo".to_string(),
+                "hi".to_string()
+            ]
+        );
+        // Kill must be SIGKILL: runsc's default is SIGTERM, which a workload
+        // can trap, so a timed-out workload would survive.
+        assert_eq!(
+            runsc_kill_args("sess1"),
+            vec!["kill".to_string(), "sess1".to_string(), "KILL".to_string()]
+        );
+        assert_eq!(runsc_delete_args("sess1"), vec!["delete".to_string(), "sess1".to_string()]);
     }
 
     #[test]
