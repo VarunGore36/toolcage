@@ -170,6 +170,52 @@ impl GvBackend {
     }
 }
 
+/// Session ids become runsc command arguments and path components of the
+/// bundle dir, so anything outside `[A-Za-z0-9._-]` is rejected: a `../` id
+/// would let create() write config.json outside /run/toolcage, and spaces or
+/// `--` would confuse the runsc argv.
+fn validate_id(id: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(!id.is_empty() && id.len() <= 64, "invalid session id");
+    anyhow::ensure!(
+        id.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
+        "invalid session id {id:?}: use [A-Za-z0-9._-] only"
+    );
+    // A leading '-' would make the id parse as a runsc flag, not a container
+    // id (argv injection into the runsc command line).
+    anyhow::ensure!(!id.starts_with('-'), "invalid session id {id:?}");
+    anyhow::ensure!(id != "." && id != "..", "invalid session id {id:?}");
+    Ok(())
+}
+
+/// Read `r` to EOF, keeping at most `cap` bytes and reporting truncation.
+/// Drains past the cap on purpose: the old `take(cap + 1)` dropped the reader
+/// as soon as the cap was reached, which closed the pipe and SIGPIPEd the
+/// runsc exec client still writing to it — corrupting its exit code (a normal
+/// over-cap run came back as exit_code: None). Keep reading so the writer
+/// never sees a closed pipe; just stop keeping bytes.
+fn read_capped(mut r: impl Read, cap: usize) -> (Vec<u8>, bool) {
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 4096];
+    let mut truncated = false;
+    loop {
+        match r.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => {
+                if buf.len() < cap {
+                    let take = (cap - buf.len()).min(n);
+                    buf.extend_from_slice(&tmp[..take]);
+                    truncated |= take < n;
+                } else {
+                    truncated = true;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    (buf, truncated)
+}
+
 fn find_runsc() -> PathBuf {
     for p in [
         "/usr/bin/runsc",
@@ -219,6 +265,7 @@ impl Backend for GvBackend {
             self.runsc_present(),
             "runsc not installed; tier1 unavailable"
         );
+        validate_id(&spec.id)?;
 
         let bundle_dir = Self::bundle_dir(&spec.id);
         let rootfs = Self::rootfs_dir();
@@ -240,12 +287,19 @@ impl Backend for GvBackend {
             .context("runsc create failed")?;
         anyhow::ensure!(status.success(), "runsc create exited with {status}");
 
-        // runsc start <id>
+        // runsc start <id>. If it fails, delete the container just created:
+        // a leaked container blocks re-creating the same id and keeps the
+        // sandbox alive.
         let status = Command::new(&self.runsc_path)
             .args(runsc_start_args(&spec.id))
             .status()
             .context("runsc start failed")?;
-        anyhow::ensure!(status.success(), "runsc start exited with {status}");
+        if !status.success() {
+            let _ = Command::new(&self.runsc_path)
+                .args(runsc_delete_args(&spec.id))
+                .status();
+            anyhow::bail!("runsc start exited with {status}");
+        }
 
         self.sessions.insert(spec.id.clone(), spec.clone());
         Ok(())
@@ -256,6 +310,7 @@ impl Backend for GvBackend {
             self.runsc_present(),
             "runsc not installed; tier1 unavailable"
         );
+        validate_id(id)?;
 
         // SIGKILL the container's processes (runsc's default is SIGTERM, which
         // a workload may trap), then delete once it has actually stopped:
@@ -298,6 +353,7 @@ impl Backend for GvBackend {
             self.runsc_present(),
             "runsc not installed; tier1 unavailable"
         );
+        validate_id(id)?;
         anyhow::ensure!(self.sessions.contains_key(id), "session {id} not created");
         anyhow::ensure!(!argv.is_empty(), "empty argv");
 
@@ -319,14 +375,10 @@ impl Backend for GvBackend {
         let (tx_err, rx_err) = channel();
 
         thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = stdout.take((cap + 1) as u64).read_to_end(&mut buf);
-            let _ = tx_out.send(buf);
+            let _ = tx_out.send(read_capped(stdout, cap));
         });
         thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = stderr.take((cap + 1) as u64).read_to_end(&mut buf);
-            let _ = tx_err.send(buf);
+            let _ = tx_err.send(read_capped(stderr, cap));
         });
 
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);
@@ -361,21 +413,13 @@ impl Backend for GvBackend {
         let _ = child.wait();
 
         let mut truncated = timed_out;
-        let mut stdout_buf = rx_out
+        let (stdout_buf, out_t) = rx_out
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or_default();
-        let mut stderr_buf = rx_err
+        let (stderr_buf, err_t) = rx_err
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or_default();
-
-        if stdout_buf.len() > cap {
-            stdout_buf.truncate(cap);
-            truncated = true;
-        }
-        if stderr_buf.len() > cap {
-            stderr_buf.truncate(cap);
-            truncated = true;
-        }
+        truncated |= out_t | err_t;
 
         Ok(CommandResult {
             exit_code: if timed_out { None } else { exit_code },
@@ -521,6 +565,46 @@ mod tests {
             vec!["kill".to_string(), "sess1".to_string(), "KILL".to_string()]
         );
         assert_eq!(runsc_delete_args("sess1"), vec!["delete".to_string(), "sess1".to_string()]);
+    }
+
+    #[test]
+    fn validate_id_rejects_traversal_and_confusing_ids() {
+        // Ids become runsc argv and path components of the bundle dir; a `../`
+        // id would let create() write outside /run/toolcage, and spaces/`--`
+        // would confuse the runsc command line.
+        let bad = [
+            "",
+            ".",
+            "..",
+            "../etc",
+            "a/b",
+            "a\\b",
+            "a b",
+            "--bundle",
+            "x\0y",
+            "sess\n1",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ];
+        for id in bad {
+            assert!(validate_id(id).is_err(), "{id:?} must be rejected");
+        }
+        for id in ["sess1", "a-b_c.1", "A1", "x"] {
+            assert!(validate_id(id).is_ok(), "{id:?} must be accepted");
+        }
+    }
+
+    #[test]
+    fn read_capped_caps_reports_truncation_and_drains() {
+        // Under the cap: full buffer, not truncated.
+        let (buf, t) = read_capped(std::io::Cursor::new(vec![7u8; 50]), 100);
+        assert_eq!(buf.len(), 50);
+        assert!(!t);
+        // Over the cap: capped at cap and truncated. The reader still consumes
+        // the whole input — dropping it early would close the pipe and SIGPIPE
+        // the runsc exec client, corrupting its exit code.
+        let (buf, t) = read_capped(std::io::Cursor::new(vec![7u8; 5000]), 100);
+        assert_eq!(buf.len(), 100);
+        assert!(t);
     }
 
     #[test]
