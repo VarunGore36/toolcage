@@ -155,13 +155,23 @@ impl WarmPool {
 
     /// Claim a paused VM and apply per-session uniqueness steps:
     /// attach workspace, reseed RNG (VMGenID), reset wall clock,
-    /// re-establish vsock, bind session CID. Never re-pool a dirty session.
+    /// re-establish vsock, bind session CID. Never re-pool a dirty session:
+    /// a VM that fails uniqueness is torn down here (its firecracker process
+    /// stopped), not pushed back and not left running.
     pub fn claim(&mut self, session: &str, workspace: &str) -> anyhow::Result<PausedVm> {
         let mut paused = self
             .free
             .pop_front()
             .ok_or_else(|| anyhow::anyhow!("warm pool empty"))?;
-        paused.apply_uniqueness(session, workspace)?;
+        if let Err(e) = paused.apply_uniqueness(session, workspace) {
+            // The VM failed its per-session steps (drive attach / resume).
+            // Discard it and stop its firecracker process — nothing else owns
+            // the child, and dropping std::process::Child leaves it running.
+            let _ = paused.child.kill();
+            let _ = paused.child.wait();
+            let _ = std::fs::remove_file(&paused.socket_path);
+            return Err(e.context("warm-pool VM failed per-session uniqueness"));
+        }
         Ok(paused)
     }
 
@@ -635,6 +645,30 @@ pub struct FcVm {
     pub child: std::process::Child,
 }
 
+/// Claim a session VM from the warm pool, or boot a fresh one when the pool
+/// is empty (or no golden image was loaded).
+///
+/// A pool VM that fails its per-session uniqueness steps is an ERROR, not a
+/// silent fallback to a fresh boot: `if let Ok(..)` here used to swallow every
+/// warm-pool failure — a permanently broken resume looked like an empty pool
+/// and stayed invisible, while the popped firecracker process leaked.
+fn claim_or_boot(pool: &mut WarmPool, spec: &SessionSpec) -> anyhow::Result<FcVm> {
+    if !pool.is_empty() {
+        let paused = pool.claim(&spec.id, &spec.workspace)?;
+        return Ok(FcVm {
+            id: paused.id,
+            socket_path: PathBuf::from(paused.socket_path),
+            vsock_uds: PathBuf::from(paused.vsock_uds),
+            vsock_cid: paused.vsock_cid,
+            mem_mib: spec.mem_mb,
+            child: paused.child,
+        });
+    }
+    // Pool empty or warm pool not configured: boot a fresh VM.
+    let cfg = FcConfig::for_session(&spec.id, spec.mem_mb);
+    FcVm::boot(&spec.id, &cfg, &spec.workspace)
+}
+
 /// Configure a launched firecracker VM over its REST API and start it.
 /// Order matters: /boot-source must be set before InstanceStart, or the start
 /// is rejected and no VM ever runs. Split out from boot() so the sequence is
@@ -889,22 +923,9 @@ impl Backend for FcBackend {
 
         // Claim from warm pool: snapshot-resumed, uniqueness applied,
         // workspace attached, VM running. Never re-pools a dirty session.
-        if let Ok(paused) = self.pool.claim(&spec.id, &spec.workspace) {
-            let vm = FcVm {
-                id: paused.id,
-                socket_path: PathBuf::from(paused.socket_path),
-                vsock_uds: PathBuf::from(paused.vsock_uds),
-                vsock_cid: paused.vsock_cid,
-                mem_mib: spec.mem_mb,
-                child: paused.child,
-            };
-            self.vms.insert(spec.id.clone(), vm);
-            return Ok(());
-        }
-
-        // Pool empty or warm pool not configured: boot a fresh VM.
-        let cfg = FcConfig::for_session(&spec.id, spec.mem_mb);
-        let vm = FcVm::boot(&spec.id, &cfg, &spec.workspace)?;
+        // Only an *empty* pool falls back to a fresh boot; a pool VM that
+        // fails is an error, not a silent fallback.
+        let vm = claim_or_boot(&mut self.pool, spec)?;
         self.vms.insert(spec.id.clone(), vm);
         Ok(())
     }
@@ -1237,10 +1258,6 @@ mod order_tests {
         (sock_path, seen, handle)
     }
 
-    fn paths(seen: &std::sync::Arc<std::sync::Mutex<Vec<Recorded>>>) -> Vec<String> {
-        seen.lock().unwrap().iter().map(|r| r.path.clone()).collect()
-    }
-
     /// Firecracker rejects `InstanceStart` unless `/boot-source` was configured
     /// first — and the driver used to configure none at all (and never even
     /// launched a VM). Lock the order against a mock API socket: boot-source
@@ -1331,5 +1348,51 @@ mod order_tests {
         assert_eq!(seen2[0].path, "/vm");
         assert!(seen2[0].body.contains("\"Resumed\""), "{}", seen2[0].body);
         let _ = std::fs::remove_dir_all(std::path::Path::new(&sock_path2).parent().unwrap());
+    }
+
+    /// A pool VM that fails its per-session uniqueness must surface the error
+    /// and have its firecracker process stopped. It used to be swallowed
+    /// (`if let Ok(claim)` fell through to a fresh boot) and the popped VM
+    /// leaked: a permanently broken resume looked like an empty pool.
+    #[test]
+    fn broken_pool_vm_surfaces_error_and_does_not_leak_process() {
+        let child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let mut pool = WarmPool::new(1);
+        // Hand-built pool VM whose API socket does not exist: the per-session
+        // uniqueness step (drive attach over the REST socket) fails.
+        pool.free.push_back(PausedVm {
+            id: "pool-0".into(),
+            socket_path: "/tmp/tc-fc-no-such-socket.sock".into(),
+            vsock_uds: "/run/toolcage/pool-0.vsock".into(),
+            vsock_cid: 3,
+            started: false,
+            child,
+        });
+        let spec = SessionSpec {
+            id: "sess-broken".into(),
+            tier: Tier::Tier2,
+            mem_mb: 128,
+            workspace_mb: 16,
+            workspace: "/tmp/ws".into(),
+        };
+        let res = claim_or_boot(&mut pool, &spec);
+        let err = match res {
+            Err(e) => format!("{:#}", e),
+            Ok(_) => panic!("claim_or_boot must not boot past a broken pool VM"),
+        };
+        assert!(
+            err.contains("warm-pool VM failed per-session uniqueness"),
+            "the pool failure must surface, not degrade into a fresh boot: {err}"
+        );
+        assert!(
+            !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+            "the popped VM's firecracker process must be stopped, not leaked"
+        );
+        // The failed VM is gone from the pool (never re-pooled dirty).
+        assert!(pool.is_empty(), "failed VM must not return to the pool");
     }
 }
