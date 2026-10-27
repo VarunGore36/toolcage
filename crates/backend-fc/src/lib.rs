@@ -55,6 +55,11 @@ pub struct FcConfig {
     /// vsock-only: no NIC. Guest gets vsock CID + control channel.
     pub vsock_cid: u32,
     pub jailer_uid: u32,
+    /// Kernel command line for /boot-source. Firecracker requires a boot
+    /// source before InstanceStart; without it the start is rejected. This
+    /// default suits a serial-console, rootfs-backed guest and may need
+    /// tuning (e.g. `root=/dev/vda`) for a specific image.
+    pub boot_args: String,
 }
 
 impl FcConfig {
@@ -68,6 +73,7 @@ impl FcConfig {
             vcpu: 1,
             vsock_cid: cid,
             jailer_uid: 65532,
+            boot_args: "console=ttyS0 noapic reboot=k panic=1 pci=off".into(),
         }
     }
 
@@ -179,6 +185,8 @@ pub struct PausedVm {
     pub vsock_cid: u32,
     /// True once InstanceStart has been sent (VM running).
     pub started: bool,
+    /// The firecracker/jailer process backing this VM.
+    pub child: std::process::Child,
 }
 
 impl PausedVm {
@@ -196,9 +204,13 @@ impl PausedVm {
         {
             bail!("firecracker binary not installed; tier2 unavailable");
         }
-        let socket_path = format!("/run/toolcage/{id}.sock");
-        let vsock_uds = format!("/run/toolcage/{id}.vsock");
-        let vsock_cid = 3 + (id.bytes().fold(0u32, |a, b| a.wrapping_add(b as u32)) % 10000);
+        let cfg = FcConfig::for_session(id, gi.manifest.mem_size_mib);
+        let socket_path = cfg.socket.clone();
+        let vsock_uds = cfg.vsock_uds_path();
+        let vsock_cid = cfg.vsock_cid;
+        // Launch the VM before configuring it: the REST calls below talk to a
+        // process that must already be listening on the API socket.
+        let child = spawn_firecracker(&cfg, id)?;
 
         // Load the golden snapshot (VM stays paused: resume_vm=false).
         let load = SnapshotLoad {
@@ -253,6 +265,7 @@ impl PausedVm {
             vsock_uds,
             vsock_cid,
             started: false,
+            child,
         })
     }
 
@@ -314,6 +327,41 @@ impl PausedVm {
         self.started = true;
         Ok(())
     }
+}
+
+/// Boot source request: PUT /boot-source. Firecracker requires this before
+/// InstanceStart — without it the start is rejected and no VM ever runs.
+#[derive(Debug, Serialize)]
+struct BootSource {
+    kernel_image_path: String,
+    boot_args: String,
+}
+
+/// Actually start the firecracker VM: launch it through the jailer (dropped
+/// privileges, own netns, seccomp + cgroup) and wait for its API socket.
+/// Nothing did this before — the REST configuration assumed a firecracker
+/// process was already listening on `socket`, so every boot failed at the
+/// first request with "No such file or directory".
+fn spawn_firecracker(cfg: &FcConfig, id: &str) -> anyhow::Result<std::process::Child> {
+    let argv = cfg.jailer_argv(id);
+    let mut cmd = std::process::Command::new(&argv[0]);
+    cmd.args(&argv[1..])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let child = cmd.spawn().with_context(|| format!("spawn {}", argv[0]))?;
+    // The REST API only exists once the process is listening on the socket.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if std::path::Path::new(&cfg.socket).exists() {
+            return Ok(child);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    bail!(
+        "firecracker API socket never appeared at {} (is firecracker + jailer installed?)",
+        cfg.socket
+    )
 }
 
 /// Snapshot save request: PUT /snapshot/create
@@ -558,11 +606,31 @@ pub struct FcVm {
     pub vsock_uds: PathBuf,
     pub vsock_cid: u32,
     pub mem_mib: u64,
+    /// The firecracker/jailer process. Owned so destroy() can stop it —
+    /// nothing ever launched a VM before, and so nothing ever stopped one.
+    pub child: std::process::Child,
 }
 
-impl FcVm {
-    /// Boot the VM: configure machine, drives, vsock, then start.
-    fn boot(id: &str, cfg: &FcConfig, workspace_host_path: &str) -> anyhow::Result<Self> {
+/// Configure a launched firecracker VM over its REST API and start it.
+/// Order matters: /boot-source must be set before InstanceStart, or the start
+/// is rejected and no VM ever runs. Split out from boot() so the sequence is
+/// testable against a mock socket without spawning a real VM.
+fn configure_and_start(socket: &str, cfg: &FcConfig, workspace_host_path: &str) -> anyhow::Result<()> {
+        // 0b. Boot source (kernel + command line). Firecracker requires this
+        // before InstanceStart; without it the start is rejected and no VM
+        // ever runs.
+        let boot = BootSource {
+            kernel_image_path: cfg.kernel.clone(),
+            boot_args: cfg.boot_args.clone(),
+        };
+        let body = serde_json::to_vec(&boot)?;
+        let resp = http_put(socket, "/boot-source", &body)?;
+        let status = http_status(&resp)?;
+        anyhow::ensure!(
+            status == 200 || status == 204,
+            "boot-source failed: HTTP {status}"
+        );
+
         // 1. Machine config (vCPU + memory)
         let mc = MachineConfig {
             vcpu_count: cfg.vcpu,
@@ -570,7 +638,7 @@ impl FcVm {
             ht_enabled: false,
         };
         let body = serde_json::to_vec(&mc)?;
-        let resp = http_put(&cfg.socket, "/machine-config", &body)?;
+        let resp = http_put(socket, "/machine-config", &body)?;
         let status = http_status(&resp)?;
         anyhow::ensure!(
             status == 200 || status == 204,
@@ -585,7 +653,7 @@ impl FcVm {
             is_read_only: true,
         };
         let body = serde_json::to_vec(&root_drive)?;
-        let resp = http_put(&cfg.socket, "/drive/rootfs", &body)?;
+        let resp = http_put(socket, "/drive/rootfs", &body)?;
         let status = http_status(&resp)?;
         anyhow::ensure!(
             status == 200 || status == 204,
@@ -600,7 +668,7 @@ impl FcVm {
             is_read_only: false,
         };
         let body = serde_json::to_vec(&ws_drive)?;
-        let resp = http_put(&cfg.socket, "/drive/workspace", &body)?;
+        let resp = http_put(socket, "/drive/workspace", &body)?;
         let status = http_status(&resp)?;
         anyhow::ensure!(
             status == 200 || status == 204,
@@ -614,7 +682,7 @@ impl FcVm {
             uds_path: cfg.vsock_uds_path(),
         };
         let body = serde_json::to_vec(&vsock)?;
-        let resp = http_put(&cfg.socket, "/vsock/vsock0", &body)?;
+        let resp = http_put(socket, "/vsock/vsock0", &body)?;
         let status = http_status(&resp)?;
         anyhow::ensure!(
             status == 200 || status == 204,
@@ -626,23 +694,36 @@ impl FcVm {
             action_type: "InstanceStart".into(),
         };
         let body = serde_json::to_vec(&start)?;
-        let resp = http_put(&cfg.socket, "/actions", &body)?;
+        let resp = http_put(socket, "/actions", &body)?;
         let status = http_status(&resp)?;
         anyhow::ensure!(
             status == 200 || status == 204,
             "start VM failed: HTTP {status}"
         );
 
+    Ok(())
+}
+
+
+    /// Check VM state via REST API.
+
+impl FcVm {
+    /// Boot the VM: launch firecracker, configure boot source, machine,
+    /// drives, vsock, then start.
+    fn boot(id: &str, cfg: &FcConfig, workspace_host_path: &str) -> anyhow::Result<Self> {
+        // 0. Launch the VM, then configure and start it over the API.
+        let child = spawn_firecracker(cfg, id)?;
+        configure_and_start(&cfg.socket, cfg, workspace_host_path)?;
         Ok(FcVm {
             id: id.to_string(),
             socket_path: PathBuf::from(&cfg.socket),
             vsock_uds: PathBuf::from(cfg.vsock_uds_path()),
             vsock_cid: cfg.vsock_cid,
             mem_mib: cfg.mem_mb,
+            child,
         })
     }
 
-    /// Check VM state via REST API.
     fn state(&self) -> anyhow::Result<String> {
         let resp = http_get(&self.socket_path.to_string_lossy(), "/vm")?;
         let status = http_status(&resp)?;
@@ -791,6 +872,7 @@ impl Backend for FcBackend {
                 vsock_uds: PathBuf::from(paused.vsock_uds),
                 vsock_cid: paused.vsock_cid,
                 mem_mib: spec.mem_mb,
+                child: paused.child,
             };
             self.vms.insert(spec.id.clone(), vm);
             return Ok(());
@@ -804,11 +886,18 @@ impl Backend for FcBackend {
     }
 
     fn destroy(&mut self, id: &str) -> anyhow::Result<()> {
-        if let Some(vm) = self.vms.remove(id) {
-            // Send InstanceStop via REST API (best effort).
+        if let Some(mut vm) = self.vms.remove(id) {
+            // Ask the guest to stop (best effort) ...
             let stop = serde_json::json!({ "action_type": "InstanceStop" });
             let body = serde_json::to_vec(&stop)?;
             let _ = http_put(vm.socket_path.to_string_lossy().as_ref(), "/actions", &body);
+            // ... then actually stop the firecracker/jailer process. It was
+            // never owned by the backend before, so a "destroyed" session
+            // kept consuming a vCPU/RAM forever.
+            let _ = vm.child.kill();
+            let _ = vm.child.wait();
+            // Drop the host-side API socket for this VM.
+            let _ = std::fs::remove_file(&vm.socket_path);
         }
         // Return VM to pool or discard (never re-pool dirty sessions per plan).
         Ok(())
@@ -1016,6 +1105,117 @@ mod tests {
         let wrong_pk = hex_encode(&[9u8; 32]);
         assert!(GoldenImage::load(dir.to_str().unwrap(), &wrong_pk).is_err());
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+    use std::io::{Read as _R, Write as _W};
+    use std::os::unix::net::UnixListener;
+
+    /// Firecracker rejects `InstanceStart` unless `/boot-source` was configured
+    /// first — and the driver used to configure none at all (and never even
+    /// launched a VM). Lock the order against a mock API socket: boot-source
+    /// first, the start action last.
+    #[test]
+    fn boot_source_is_configured_before_instance_start() {
+        let dir = std::env::temp_dir().join(format!(
+            "tc-fc-order-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("api.sock");
+        let sock_path = sock.display().to_string();
+        let listener = UnixListener::bind(&sock).unwrap();
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen2 = seen.clone();
+        // Mock firecracker API: record each request's path, answer 204.
+        let mock = std::thread::spawn(move || {
+            // Accept until the client goes quiet (idle deadline) rather than
+            // for a fixed request count: if a request is missing, a fixed
+            // count blocks join() forever instead of failing the assertion.
+            listener.set_nonblocking(true).unwrap();
+            let mut idle_deadline = std::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(s) => s,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= idle_deadline {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                    Err(_) => break,
+                };
+                idle_deadline = std::time::Instant::now() + Duration::from_secs(2);
+                let mut head = Vec::new();
+                let mut buf = [0u8; 1024];
+                loop {
+                    match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            head.extend_from_slice(&buf[..n]);
+                            if head.windows(4).any(|w| w == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                    }
+                }
+                // Drain the request body (Content-Length) before responding,
+                // the way a real firecracker does — otherwise the client's
+                // body write races our close and hits ECONNRESET.
+                let text = String::from_utf8_lossy(&head).to_string();
+                let clen: usize = text
+                    .lines()
+                    .find_map(|l| {
+                        l.strip_prefix("Content-Length:")
+                            .or_else(|| l.strip_prefix("content-length:"))
+                            .map(|v| v.trim().parse().unwrap_or(0))
+                    })
+                    .unwrap_or(0);
+                let mut got = head
+                    .windows(4)
+                    .position(|w| w == b"\r\n\r\n")
+                    .map(|i| head.len() - (i + 4))
+                    .unwrap_or(0);
+                let mut body_buf = [0u8; 1024];
+                while got < clen {
+                    match stream.read(&mut body_buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => got += n,
+                    }
+                }
+                let path = text.split_whitespace().nth(1).unwrap_or("").to_string();
+                seen2.lock().unwrap().push(path);
+                let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
+            }
+        });
+
+        let mut cfg = FcConfig::for_session("sess-order", 128);
+        cfg.socket = sock_path.clone();
+        let res = configure_and_start(&sock_path, &cfg, "/tmp/ws");
+        assert!(res.is_ok(), "configure_and_start failed: {res:?}");
+        let _ = mock.join();
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(
+            seen.first().map(String::as_str),
+            Some("/boot-source"),
+            "boot-source must be configured first: {seen:?}"
+        );
+        assert_eq!(
+            seen.last().map(String::as_str),
+            Some("/actions"),
+            "InstanceStart must come last: {seen:?}"
+        );
+        assert!(
+            seen.contains(&"/vsock/vsock0".to_string()),
+            "vsock must be configured: {seen:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
