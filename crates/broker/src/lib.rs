@@ -329,8 +329,17 @@ fn base64_decode(s: &str) -> anyhow::Result<Vec<u8>> {
 }
 
 fn hex_decode(s: &str) -> anyhow::Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(s.len() / 2);
     anyhow::ensure!(s.len().is_multiple_of(2), "odd hex length");
+    // Strict hex digits only. This guards two sharp edges at once: every byte
+    // being a hex digit implies ASCII, so the byte slicing below cannot hit a
+    // multi-byte char boundary and panic (a crafted non-ASCII string used to
+    // abort the process); and it rejects sign-prefixed "digits" like "+a",
+    // which from_str_radix would accept.
+    anyhow::ensure!(
+        s.bytes().all(|b| b.is_ascii_hexdigit()),
+        "invalid hex digit"
+    );
+    let mut out = Vec::with_capacity(s.len() / 2);
     for i in (0..s.len()).step_by(2) {
         out.push(u8::from_str_radix(&s[i..i + 2], 16)?);
     }
@@ -485,5 +494,19 @@ mod tests {
         assert!(!guest_output.contains(&canary));
         let echoed = format!("echo {canary}");
         assert!(!b.scrub(&echoed).contains(&canary));
+    }
+
+    #[test]
+    fn hex_decode_rejects_hostile_input_without_panicking() {
+        // A crafted non-ASCII string must error, not abort the process:
+        // byte-slicing `s[i..i+2]` used to land inside a multi-byte char and
+        // panic ("aéb" has an even byte length and passes the length check).
+        assert!(hex_decode("a\u{e9}b").is_err());
+        assert!(hex_decode("\u{e9}\u{e9}").is_err());
+        // Sign-prefixed "digits" are not hex — from_str_radix accepted "+a".
+        assert!(hex_decode("+abc").is_err());
+        assert!(hex_decode("-abc").is_err());
+        // Well-formed hex still decodes.
+        assert_eq!(hex_decode("00ff").unwrap(), vec![0x00, 0xff]);
     }
 }
