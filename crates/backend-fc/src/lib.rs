@@ -876,13 +876,19 @@ impl FcVm {
 }
 
 fn truncate(buf: Vec<u8>, cap: usize) -> Vec<u8> {
-    if buf.len() > cap {
-        let mut t = buf[..cap].to_vec();
-        t.extend_from_slice(b"[truncated]");
-        t
-    } else {
-        buf
+    if buf.len() <= cap {
+        return buf;
     }
+    // The cap is a hard bound on each output stream (Backend::exec): the
+    // truncation marker lives INSIDE it. Appending the marker after `cap`
+    // bytes of data returned cap + 11 bytes and broke the bound.
+    const MARK: &[u8] = b"[truncated]";
+    if cap < MARK.len() {
+        return buf[..cap].to_vec();
+    }
+    let mut t = buf[..cap - MARK.len()].to_vec();
+    t.extend_from_slice(MARK);
+    t
 }
 
 // ---------------------------------------------------------------------------
@@ -1073,8 +1079,12 @@ mod tests {
     fn truncate_caps_output() {
         let long = b"x".repeat(2000);
         let t = truncate(long.to_vec(), 1024);
-        assert!(t.len() <= 1024 + 11); // cap + "[truncated]"
+        // The cap is a hard bound: the marker lives inside it, not past it.
+        assert_eq!(t.len(), 1024);
         assert!(t.ends_with(b"[truncated]"));
+        // Tiny caps stay bounded too (no room for the marker: plain prefix).
+        let tiny = truncate(b"x".repeat(2000).to_vec(), 4);
+        assert_eq!(tiny.len(), 4);
     }
 
     #[test]
