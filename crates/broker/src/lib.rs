@@ -327,13 +327,57 @@ impl Broker {
     }
 
     /// Scrub upstream responses: strip any known secret before guest sees it.
+    /// Replace every known credential value with `[REDACTED]` before anything
+    /// guest-visible.
+    ///
+    /// Redaction covers the UNION of every secret occurrence, merged into
+    /// spans. The old per-credential `body.replace(value, ...)` ran in HashMap
+    /// order: when one value contained or overlapped another (rotated tokens,
+    /// canary variants), whichever ran first SPLIT the other secret and left
+    /// its tail — or its head — in the guest-visible output. Finding every
+    /// occurrence up front and redacting merged spans leaves no byte of any
+    /// secret occurrence in the result, whatever the overlap pattern or map
+    /// order.
     pub fn scrub(&self, body: &str) -> String {
-        let mut out = body.to_string();
-        for c in self.creds.values() {
-            if !c.value.is_empty() {
-                out = out.replace(&c.value, "[REDACTED]");
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+        for v in self
+            .creds
+            .values()
+            .map(|c| c.value.as_str())
+            .filter(|v| !v.is_empty())
+        {
+            // Every occurrence, including self-overlapping ones ("aaaa" in
+            // "aaaaa"): step one char after each hit instead of skipping past
+            // the match.
+            let mut start = 0;
+            while start < body.len() {
+                let Some(off) = body[start..].find(v) else {
+                    break;
+                };
+                let s = start + off;
+                spans.push((s, s + v.len()));
+                start = s + body[s..].chars().next().unwrap().len_utf8();
             }
         }
+        if spans.is_empty() {
+            return body.to_string();
+        }
+        spans.sort_unstable();
+        let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
+        for (s, e) in spans {
+            match merged.last_mut() {
+                Some(last) if s <= last.1 => last.1 = last.1.max(e),
+                _ => merged.push((s, e)),
+            }
+        }
+        let mut out = String::with_capacity(body.len());
+        let mut pos = 0;
+        for (s, e) in merged {
+            out.push_str(&body[pos..s]);
+            out.push_str("[REDACTED]");
+            pos = e;
+        }
+        out.push_str(&body[pos..]);
         out
     }
 
@@ -583,5 +627,56 @@ mod tests {
         assert!(hex_decode("-abc").is_err());
         // Well-formed hex still decodes.
         assert_eq!(hex_decode("00ff").unwrap(), vec![0x00, 0xff]);
+    }
+}
+
+#[cfg(test)]
+mod scrub_tests {
+    use super::*;
+
+    fn broker_with(values: &[&str]) -> Broker {
+        let mut b = Broker::new();
+        for (i, v) in values.iter().enumerate() {
+            b.insert(Credential {
+                name: format!("c{i}"),
+                value: (*v).into(),
+                use_with: "github".into(),
+                methods: vec![],
+                paths: vec![],
+                expires_at: None,
+                encrypted_value: None,
+            });
+        }
+        b
+    }
+
+    /// scrub() must leave no byte of any secret occurrence in the output.
+    /// The old per-credential `replace` ran in HashMap order, so when secrets
+    /// overlapped the first redaction split the second one and left its tail
+    /// (or head) in guest-visible output.
+    #[test]
+    fn scrub_leaves_no_fragment_of_overlapping_secrets() {
+        // Crossing secrets: whichever one the old loop replaced first, a
+        // fragment of the other survived — this case is flip-red in BOTH map
+        // orders.
+        let a = "aaaaaaaaaa1111";
+        let b = "1111bbbbbbbbbb";
+        let body = format!("{a}{b}");
+        assert_eq!(broker_with(&[a, b]).scrub(&body), "[REDACTED]");
+
+        // Containment (rotated token: the old value is a prefix of the new):
+        // replacing the short one first used to leave the long one's tail.
+        let b2 = broker_with(&["tok-1234", "tok-12345678"]);
+        assert_eq!(b2.scrub("echo tok-12345678 end"), "echo [REDACTED] end");
+        assert_eq!(b2.scrub("tok-12345678"), "[REDACTED]");
+        assert_eq!(b2.scrub("tok-1234"), "[REDACTED]");
+
+        // Self-overlapping occurrences of one value merge into one span.
+        assert_eq!(broker_with(&["aaaa"]).scrub("aaaaa"), "[REDACTED]");
+
+        // Clean output passes through untouched; unrelated text survives.
+        let b3 = broker_with(&["tok-1234"]);
+        assert_eq!(b3.scrub("nothing here"), "nothing here");
+        assert_eq!(b3.scrub("token=tok-1234 ok"), "token=[REDACTED] ok");
     }
 }
