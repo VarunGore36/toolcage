@@ -546,7 +546,10 @@ fn isolated_exec(
             })();
             if let Err(e) = setup {
                 kill_and_reap(child_raw);
-                return Err(e);
+                // Name the child in the error: callers (and tests) can verify
+                // THIS child is gone, without a process-wide zombie scan that
+                // races other execs of the same process.
+                return Err(e.context(format!("child {child_raw} killed and reaped")));
             }
 
             // Child may now become root (inside its own user namespace only).
@@ -556,7 +559,9 @@ fn isolated_exec(
             if n != 1 {
                 // Without the go signal the workload must not start at all.
                 kill_and_reap(child_raw);
-                anyhow::bail!("failed to release child (go signal)");
+                anyhow::bail!(
+                    "failed to release child (go signal); child {child_raw} killed and reaped"
+                );
             }
 
             let deadline = Instant::now() + Duration::from_secs(timeout_secs);
@@ -1775,25 +1780,33 @@ mod tests {
             30,
             OUTPUT_CAP,
         );
-        assert!(
-            r.is_err(),
-            "injected setup failure must surface as an error, got {r:?}"
+        let err = format!(
+            "{:#}",
+            r.expect_err("injected setup failure must surface as an error")
         );
         assert!(
             !marker.exists(),
             "workload must not run when the parent's setup fails"
         );
-        // The child must be killed AND reaped before the error returns.
-        for _ in 0..20 {
-            if zombie_children().is_empty() {
+        // The child must be killed AND reaped before the error returns. The
+        // error names that child (see the fail-closed path), so the check is
+        // about THIS pid: a process-wide "no zombie children" scan raced the
+        // sibling tests in this binary and flaked on their children.
+        let pid: i32 = err
+            .split("child ")
+            .nth(1)
+            .and_then(|s| s.split_whitespace().next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| panic!("error must name the reaped child pid: {err}"));
+        for _ in 0..40 {
+            if !zombie_children().contains(&pid) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         assert!(
-            zombie_children().is_empty(),
-            "failed setup left zombie children: {:?}",
-            zombie_children()
+            !zombie_children().contains(&pid),
+            "child {pid} must be killed and reaped before the error returns (left zombie)"
         );
         b.destroy(&spec.id).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
