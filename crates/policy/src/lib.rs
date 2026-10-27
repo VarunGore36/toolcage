@@ -38,6 +38,24 @@ pub struct Policy {
     pub approval: ApprovalPolicy,
     #[serde(default)]
     pub limits: Limits,
+    #[serde(default)]
+    pub exec: ExecPolicy,
+}
+
+/// Exec authorization for `proc.exec`.
+///
+/// The v0 denylist (below) blocks shells/interpreters fed inline code, but a
+/// denylist is inherently incomplete — wrappers (`env python3 -c`), renamed
+/// binaries and new flag spellings keep finding holes. An explicit allowlist
+/// closes the class: when `allowlist` is non-empty, ONLY those binaries may
+/// run, whatever else argv looks like.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ExecPolicy {
+    /// Binaries permitted to run, matched on the argv[0] basename with version
+    /// tolerance (`python3.12` matches `python3`). Empty = no allowlist
+    /// configured, so the denylist below is the only gate (back-compat).
+    #[serde(default)]
+    pub allowlist: Vec<String>,
 }
 
 /// Resource bounds (M2 damage bound). Zero means "no bound set" for that axis
@@ -367,15 +385,36 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
             deny("fs:deny-default", "path outside mounts")
         }
         "proc.exec" => {
+            // An exec with no argv authorizes nothing — deny it outright
+            // rather than wave it through (an empty or missing argv used to
+            // skip every check below).
+            let argv = match &req.argv {
+                Some(a) if !a.is_empty() => a.as_slice(),
+                _ => return deny("deny:exec-no-argv", "proc.exec requires argv"),
+            };
+            // Explicit allowlist: when the policy names the binaries that may
+            // run, ONLY those run — whatever else argv looks like. This is the
+            // fix for the denylist being inherently incomplete (wrappers,
+            // renamed binaries, new flag spellings). Matched on argv[0] with
+            // version tolerance, and the denylist below still applies on top:
+            // an allowlisted interpreter still cannot take inline code.
+            if !policy.exec.allowlist.is_empty() {
+                let bin = argv[0].rsplit('/').next().unwrap_or(&argv[0]);
+                if !policy.exec.allowlist.iter().any(|a| bin_matches(bin, a)) {
+                    return deny(
+                        "deny:exec-not-allowlisted",
+                        "binary not in the policy exec allowlist",
+                    );
+                }
+            }
             // argv smuggling: `sh -c` / `bash -c` is its own gated capability.
             // Deny shells and interpreters given an inline command string
             // fail-closed, since the guest could otherwise run arbitrary code
             // outside argv-array scrutiny. v0 has no shell policy, so deny here;
             // prefer an explicit exec allowlist in a later milestone.
-            if let Some(argv) = &req.argv {
-                if !argv.is_empty() {
-                    let bin = argv[0].rsplit('/').next().unwrap_or(&argv[0]);
-                    let rest = &argv[1..];
+            {
+                let bin = argv[0].rsplit('/').next().unwrap_or(&argv[0]);
+                let rest = &argv[1..];
                     // A shell binary anywhere in argv (argv[0] itself, or reached
                     // indirectly via `env sh -c`) running an inline-code string
                     // executes arbitrary command text outside argv-array
@@ -419,7 +458,6 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
                         }
                     }
                 }
-            }
             Decision {
                 allow: true,
                 rule_ids: vec!["proc:allow".into()],

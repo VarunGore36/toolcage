@@ -19,6 +19,7 @@ fn policy_never_panics_on_garbage() {
             credentials: vec![],
             approval: Default::default(),
             limits: Default::default(),
+            exec: Default::default(),
         };
         let _ = toolcage_policy::decide(
             &p,

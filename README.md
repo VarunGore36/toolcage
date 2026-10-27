@@ -142,12 +142,19 @@ net:
 credentials:
   - name: github_token
     use_with: github
+exec:
+  # Optional: explicit allowlist of binaries that may run (argv[0] basenames,
+  # version-tolerant). When set, ONLY these run — this is the fix for the
+  # shell/interpreter denylist being inherently incomplete. Omit for the v0
+  # denylist-only behaviour.
+  allowlist: [dependency-updater, git]
 approval:
   require_for:
     - http.request: { methods: [POST], hosts: [github] }
 ```
 
 - `sh -c` and `bash -c` are denied. Commands are argv arrays.
+- **`exec.allowlist`** (optional) names the binaries that may run — anything else is denied, closing the wrapper/rename/flag-spelling holes a denylist leaves. The denylist still applies on top: an allowlisted interpreter cannot take inline code (`-c`, `-e`, `-p`, `-r`, …) or a shell script file.
 - Hosts and methods match case-insensitively. Mount paths are canonicalized (`/workspace/a/../b` becomes `/workspace/b`) and `..` escapes are denied.
 - Cloud metadata endpoints (`169.254.169.254`, `metadata*`, `instance-data`) are never reachable.
 - Credentials are bound to destinations with `use_with`. They are not attached to requests for any other host.

@@ -306,3 +306,92 @@ fn clean_request_target_still_allowed() {
     // POST is allowed by the rule (approval is enforced above policy).
     assert!(policy::decide(&p, &at("github", "POST", "/repos/acme/app/x")).allow);
 }
+
+fn exec_dec(p: &policy::Policy, argv: Option<Vec<&str>>) -> policy::Decision {
+    policy::decide(
+        p,
+        &policy::Request {
+            action: "proc.exec".into(),
+            host: None,
+            method: None,
+            path: None,
+            fs_path: None,
+            argv: argv.map(|v| v.into_iter().map(|s| s.to_string()).collect()),
+        },
+    )
+}
+
+#[test]
+fn exec_allowlist_blocks_everything_not_listed() {
+    // The denylist is inherently incomplete (wrappers, renamed binaries, new
+    // flag spellings). An explicit allowlist closes the class: when configured,
+    // ONLY the listed binaries run.
+    let p = policy::load_yaml(
+        r#"
+tool: t
+version: 0
+exec:
+  allowlist:
+    - ls
+    - cat
+"#,
+    )
+    .unwrap();
+    // Listed binaries run (matched on argv[0] basename, with a path prefix).
+    assert!(exec_dec(&p, Some(vec!["ls", "-la"])).allow);
+    assert!(exec_dec(&p, Some(vec!["/bin/cat", "file"])).allow);
+    assert!(exec_dec(&p, Some(vec!["ls3.2"])).allow, "version tolerance");
+    // Everything else is denied, including the shapes the denylist misses.
+    for argv in [
+        vec!["git", "status"],
+        vec!["bash"],
+        vec!["env", "python3", "-c", "code"],
+        vec!["python3", "script.py"],
+        vec!["python3.12", "script.py"],
+        vec!["sh", "-c", "id"],
+    ] {
+        let d = exec_dec(&p, Some(argv.clone()));
+        assert!(!d.allow, "{argv:?} must not be in the allowlist");
+        assert_eq!(d.rule_ids, vec!["deny:exec-not-allowlisted".to_string()]);
+    }
+}
+
+#[test]
+fn exec_allowlist_still_enforces_the_denylist() {
+    // Allowing a binary does not allow arbitrary code through it: the denylist
+    // still blocks inline code and shell script files.
+    let p = policy::load_yaml(
+        r#"
+tool: t
+version: 0
+exec:
+  allowlist:
+    - python3
+    - sh
+    - perl
+"#,
+    )
+    .unwrap();
+    assert!(exec_dec(&p, Some(vec!["python3", "script.py"])).allow);
+    for argv in [
+        vec!["python3", "-c", "code"],
+        vec!["python3", "-cprint(1)"],
+        vec!["sh", "-c", "id"],
+        vec!["sh", "evil.sh"],
+        vec!["perl", "-E", "system 1"],
+    ] {
+        let d = exec_dec(&p, Some(argv.clone()));
+        assert!(!d.allow, "allowlisted but dangerous form must be denied: {argv:?}");
+    }
+}
+
+#[test]
+fn proc_exec_without_argv_is_denied() {
+    // An exec with no argv authorizes nothing; it used to skip every check.
+    let p = policy::load_yaml("tool: t\nversion: 0\n").unwrap();
+    for argv in [None, Some(vec![])] {
+        let d = exec_dec(&p, argv.clone());
+        assert!(!d.allow, "{argv:?} must be denied");
+        assert_eq!(d.rule_ids, vec!["deny:exec-no-argv".to_string()]);
+    }
+}

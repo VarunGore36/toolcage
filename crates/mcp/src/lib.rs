@@ -228,6 +228,7 @@ pub fn check_server_cmd(argv: &[String]) -> anyhow::Result<()> {
             credentials: vec![],
             approval: Default::default(),
             limits: Default::default(),
+            exec: Default::default(),
         },
         &toolcage_policy::Request {
             action: "proc.exec".into(),
