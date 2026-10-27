@@ -90,6 +90,19 @@ fn request_size_estimate(method: &str, path: &str, headers: &[(String, String)])
     (n + 256) as u64 // safety margin
 }
 
+/// SIGKILL a workload's whole process group and reap the direct child.
+///
+/// The unconfined spawn is process_group(0)'d, so the child leads a group
+/// that every process it forks shares: killing the group is what makes the
+/// timeout a bound on the WORKLOAD, not just on the direct child (a forked
+/// grandchild used to outlive the timeout and keep running on the host).
+fn kill_process_group(child: &mut std::process::Child) {
+    let pid = child.id() as i32;
+    unsafe { libc::killpg(pid, libc::SIGKILL) };
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 impl Supervisor {
     pub fn check(&self, req: &Request) -> Decision {
         toolcage_policy::decide(&self.policy, req)
@@ -227,6 +240,7 @@ impl Supervisor {
         // Streaming cap: read at most cap+1 bytes per stream so a fork-bomb
         // writer cannot OOM the supervisor; overrun sets truncated=true.
         use std::io::Read;
+        use std::os::unix::process::CommandExt;
         use std::process::Stdio;
         use std::sync::mpsc::channel;
         use std::time::Duration;
@@ -236,6 +250,9 @@ impl Supervisor {
             .env("PATH", "/usr/bin:/bin")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            // Its own process group: the timeout kill below must reach
+            // everything the workload forks, not just the direct child.
+            .process_group(0)
             .spawn()?;
         let (tx_out, rx_out) = channel();
         let (tx_err, rx_err) = channel();
@@ -255,7 +272,9 @@ impl Supervisor {
             }
             let _ = tx_err.send(buf);
         });
-        // Wall-clock timeout: poll, kill whole child on expiry (fail-closed).
+        // Wall-clock timeout: poll, kill the whole process group on expiry
+        // (fail-closed). `child.kill()` alone SIGKILLs only the direct child —
+        // everything it forked kept running on the host past the timeout.
         let mut timed_out = false;
         let code = {
             let mut waited = Duration::from_secs(0);
@@ -277,8 +296,7 @@ impl Supervisor {
                 Some(c) => c,
                 None => {
                     timed_out = true;
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_process_group(&mut child);
                     None
                 }
             }
