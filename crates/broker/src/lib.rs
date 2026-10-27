@@ -30,7 +30,7 @@ use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use zeroize::Zeroize;
 
 const MASTER_KEY_LEN: usize = 32; // bytes
@@ -204,11 +204,61 @@ impl Broker {
         Ok(())
     }
 
-    /// Rotate master key: re-encrypt all credentials with new key.
-    pub fn rotate(&mut self, new_key_hex: &str) -> anyhow::Result<()> {
+    /// Rotate master key: re-encrypt every credential IN THE STORE with the
+    /// new key, atomically replace the file, then swap the in-memory key.
+    ///
+    /// This used to be a no-op on the store: it swapped the in-memory key and
+    /// cleared the ciphertext caches, leaving the file encrypted under the OLD
+    /// key. The old key kept decrypting the store forever, and an operator who
+    /// retired the old key after "rotating" destroyed access to it.
+    ///
+    /// Rotation applies to an existing store; it never creates one (materializing
+    /// plaintext secrets to a new file is not a rotation decision).
+    pub fn rotate(&mut self, path: &Path, new_key_hex: &str) -> anyhow::Result<()> {
         let new_key = MasterKey::from_hex(new_key_hex)?;
-        // Since values are plaintext in memory, we just replace the key.
-        // Cached ciphertext is cleared so next save uses new key.
+        anyhow::ensure!(path.exists(), "no broker store at {}", path.display());
+        let old = self
+            .master_key
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no master key set"))?;
+        let old_cipher = XChaCha20Poly1305::new_from_slice(old.as_bytes())
+            .map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
+        let new_cipher = XChaCha20Poly1305::new_from_slice(new_key.as_bytes())
+            .map_err(|e| anyhow::anyhow!("encrypt: {e}"))?;
+        let data = fs::read(path).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+        let entries: Vec<EncryptedCredential> =
+            serde_json::from_slice(&data).map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
+        let mut rotated = Vec::new();
+        for mut ec in entries {
+            let combined =
+                base64_decode(&ec.encrypted_value).map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
+            anyhow::ensure!(combined.len() >= 24, "decrypt: combined too short");
+            let (nonce_bytes, ct) = combined.split_at(24);
+            let nonce: GenericArray<u8, <XChaCha20Poly1305 as AeadCore>::NonceSize> =
+                *GenericArray::from_slice(nonce_bytes);
+            // Every entry must actually decrypt under the current key: a
+            // rotation that cannot read the store must not rewrite it.
+            let pt = old_cipher
+                .decrypt(&nonce, ct)
+                .map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
+            let mut rng = OsRng;
+            let nonce = XChaCha20Poly1305::generate_nonce(&mut rng);
+            let ct = new_cipher
+                .encrypt(&nonce, pt.as_ref())
+                .map_err(|e| anyhow::anyhow!("encrypt: {e}"))?;
+            let mut combined = nonce.to_vec();
+            combined.extend_from_slice(&ct);
+            ec.encrypted_value = base64_encode(&combined);
+            rotated.push(ec);
+        }
+        let data =
+            serde_json::to_vec_pretty(&rotated).map_err(|e| anyhow::anyhow!("encrypt: {e}"))?;
+        // Atomic replace: a crash mid-rotation must not leave a torn store.
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
+        fs::write(&tmp, data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+        fs::rename(&tmp, path).map_err(|e| anyhow::anyhow!("io: {e}"))?;
         self.master_key = Some(new_key);
         for c in self.creds.values_mut() {
             c.encrypted_value = None;
@@ -467,9 +517,10 @@ mod tests {
 
     #[test]
     fn rotate_reencrypts() {
+        let key_a = "1111111111111111111111111111111111111111111111111111111111111111";
+        let key_b = "2222222222222222222222222222222222222222222222222222222222222222";
         let mut b = Broker::new();
-        b.set_master_key("1111111111111111111111111111111111111111111111111111111111111111")
-            .unwrap();
+        b.set_master_key(key_a).unwrap();
         b.insert(Credential {
             name: "gh".into(),
             value: "v1".into(),
@@ -480,10 +531,34 @@ mod tests {
             encrypted_value: None,
         });
         assert_eq!(b.inject("gh", "github", "GET", "/"), Some("v1"));
-        // Rotate to new key.
-        b.rotate("2222222222222222222222222222222222222222222222222222222222222222")
-            .unwrap();
+        let dir = std::env::temp_dir().join(format!("tc-broker-rot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("broker.json");
+        b.save(&path).unwrap();
+
+        // Rotate to the new key: the STORE must be re-encrypted, not just the
+        // in-memory key swapped (the old code left the file under key A).
+        b.rotate(&path, key_b).unwrap();
         assert_eq!(b.inject("gh", "github", "GET", "/"), Some("v1"));
+
+        // Inspect the store's actual ciphertext with raw AEAD — no env vars,
+        // no load() indirection: key B must decrypt, key A must not.
+        let data = std::fs::read(&path).unwrap();
+        let entries: Vec<EncryptedCredential> = serde_json::from_slice(&data).unwrap();
+        assert_eq!(entries.len(), 1);
+        let combined = base64_decode(&entries[0].encrypted_value).unwrap();
+        let (nonce_bytes, ct) = combined.split_at(24);
+        let nonce: GenericArray<u8, <XChaCha20Poly1305 as AeadCore>::NonceSize> =
+            *GenericArray::from_slice(nonce_bytes);
+        let cipher_b = XChaCha20Poly1305::new_from_slice(&hex_decode(key_b).unwrap()).unwrap();
+        let pt = cipher_b.decrypt(&nonce, ct).unwrap();
+        assert_eq!(pt, b"v1".to_vec(), "new key must read the rotated store");
+        let cipher_a = XChaCha20Poly1305::new_from_slice(&hex_decode(key_a).unwrap()).unwrap();
+        assert!(
+            cipher_a.decrypt(&nonce, ct).is_err(),
+            "the old key must no longer decrypt the store"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
