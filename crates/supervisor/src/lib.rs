@@ -546,8 +546,39 @@ impl Supervisor {
             }
         }
         // Real dial: proxy resolves DNS, connects (TLS if https), sends request.
-        let resp = match proxy.fetch(&upstream, method, path, &headers) {
+        // The response is read under the REMAINING egress budget: the damage
+        // bound must bite during the transfer, not be charged after it (the
+        // old flow buffered the whole response and only then discovered it was
+        // over budget).
+        let resp_cap = max_bytes.saturating_sub(budgets.used_bytes(&dest));
+        let resp = match proxy.fetch(&upstream, method, path, &headers, resp_cap) {
             Ok(r) => r,
+            Err(toolcage_proxy::ProxyError::Budget(e)) => {
+                // The read stopped at the cap: no more than resp_cap bytes
+                // were ever buffered, and nothing extra is charged.
+                w.append(Event {
+                    seq: 0,
+                    ts_wall: now_wall(),
+                    session: self.session.clone(),
+                    actor: "proxy".into(),
+                    action: format!("http.request {method} {alias_or_host}{path}"),
+                    request_hash: "net".into(),
+                    decision: "deny".into(),
+                    rule_ids: vec!["budget:exceeded".into()],
+                    token_rev_id: token.map(|t| t.rev_id.clone()).unwrap_or_default(),
+                    result: format!("over-egress-budget(response): {e}"),
+                    bytes: budgets.used_bytes(&dest),
+                    claimed_by: "host".into(),
+                    prev_hash: String::new(),
+                    hash: String::new(),
+                })?;
+                return Ok(FetchOutcome {
+                    allowed: false,
+                    need_approval: false,
+                    rule_ids: vec!["budget:exceeded".into()],
+                    body: String::new(),
+                });
+            }
             Err(e) => {
                 w.append(Event {
                     seq: 0,

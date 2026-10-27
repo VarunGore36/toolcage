@@ -26,6 +26,39 @@ use toolcage_policy::{Policy, Request};
 
 // Trait object workaround: Rust doesn't allow Box<dyn Read + Write>
 // (two non-auto traits). Define a single supertrait instead.
+/// Hard cap on one buffered response, in bytes. The egress budget bounds
+/// policy damage; this bounds supervisor MEMORY when the budget is unset or
+/// huge — the read loop used to buffer until connection close, so one hostile
+/// upstream could OOM the supervisor before any budget saw the bytes.
+pub const MAX_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Read a response (head + body) until connection close, bounded by `cap`.
+///
+/// The bound bites DURING the transfer: charging the egress budget after the
+/// fact left an unbounded check-then-act window (the whole response was
+/// buffered before `charge_bytes` could reject it), so `egress_bytes` never
+/// bounded anything. Over the cap is a budget failure — fail closed, nothing
+/// buffered past the bound.
+fn read_capped(stream: &mut dyn IoStream, cap: usize) -> Result<Vec<u8>, ProxyError> {
+    let mut buf = Vec::new();
+    loop {
+        let mut chunk = [0u8; 4096];
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                if buf.len() + n > cap {
+                    return Err(ProxyError::Budget(format!(
+                        "response exceeds {cap} byte cap"
+                    )));
+                }
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            Err(e) => return Err(ProxyError::Io(e.to_string())),
+        }
+    }
+    Ok(buf)
+}
+
 trait IoStream: Read + Write + std::fmt::Debug {}
 impl<T: Read + Write + std::fmt::Debug> IoStream for T {}
 
@@ -334,6 +367,7 @@ impl Proxy {
         method: &str,
         path: &str,
         headers: &[(String, String)],
+        max_response: u64,
     ) -> Result<ProxyResponse, ProxyError> {
         // Defense in depth at the wire. The request head below is assembled by
         // string formatting, so a method, path or header carrying CR/LF/NUL/
@@ -396,16 +430,12 @@ impl Proxy {
             .map_err(|e| ProxyError::Io(e.to_string()))?;
         stream.flush().map_err(|e| ProxyError::Io(e.to_string()))?;
 
-        // Read response until connection close.
-        let mut buf = Vec::new();
-        loop {
-            let mut chunk = [0u8; 4096];
-            match stream.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => buf.extend_from_slice(&chunk[..n]),
-                Err(e) => return Err(ProxyError::Io(e.to_string())),
-            }
-        }
+        // Read response until connection close — bounded: the caller's
+        // remaining egress budget (so the damage bound bites during the
+        // transfer instead of being charged after it) and MAX_RESPONSE_BYTES
+        // as the supervisor's memory guard.
+        let cap = max_response.min(MAX_RESPONSE_BYTES) as usize;
+        let buf = read_capped(stream.as_mut(), cap)?;
 
         // Split headers from body.
         let body_start = find_body_start(&buf);
@@ -576,6 +606,11 @@ impl Budgets {
         Ok(())
     }
 
+    /// Bytes charged to `dest` so far (pre-charges included).
+    pub fn used_bytes(&self, dest: &str) -> u64 {
+        self.bytes.get(dest).copied().unwrap_or(0)
+    }
+
     /// Charge `bytes` + 1 request to `dest`. Returns Ok(false) when over budget.
     /// Persist errors fail closed: the call returns Err and nothing is spent.
     pub fn check(
@@ -587,7 +622,10 @@ impl Budgets {
     ) -> anyhow::Result<bool> {
         let b = self.bytes.entry(dest.to_string()).or_insert(0);
         let r = self.requests.entry(dest.to_string()).or_insert(0);
-        if *r >= max_req || *b + bytes > max_bytes {
+        // saturating_add: the counters come from a JSON budget file and can
+        // carry arbitrary values — plain `*b + bytes` wraps past u64::MAX and
+        // slid UNDER the limit, waving the charge through.
+        if *r >= max_req || b.saturating_add(bytes) > max_bytes {
             return Ok(false);
         }
         *b += bytes;
@@ -602,7 +640,7 @@ impl Budgets {
     /// an already-authorized transaction). Fail-closed on persist error.
     pub fn charge_bytes(&mut self, dest: &str, bytes: u64, max_bytes: u64) -> anyhow::Result<bool> {
         let b = self.bytes.entry(dest.to_string()).or_insert(0);
-        if *b + bytes > max_bytes {
+        if b.saturating_add(bytes) > max_bytes {
             return Ok(false);
         }
         *b += bytes;
@@ -671,19 +709,19 @@ mod tests {
             "/a/../../etc/passwd",
             "/a/%2e%2e/evil",
         ] {
-            match p.fetch("api.github.com", "GET", path, &[]) {
+            match p.fetch("api.github.com", "GET", path, &[], u64::MAX) {
                 Err(ProxyError::Policy(_)) => {}
                 other => panic!("target {path:?} must be rejected before dialing: {other:?}"),
             }
         }
         for method in ["GET / HTTP/1.1\r\nX: 1", "GET\r\nX: 1", "GET POST", "GE\0T", ""] {
-            match p.fetch("api.github.com", method, "/x", &[]) {
+            match p.fetch("api.github.com", method, "/x", &[], u64::MAX) {
                 Err(ProxyError::Policy(_)) => {}
                 other => panic!("method {method:?} must be rejected before dialing: {other:?}"),
             }
         }
         let hdrs = vec![("X-A".to_string(), "v\r\nX-Injected: 1".to_string())];
-        match p.fetch("api.github.com", "GET", "/x", &hdrs) {
+        match p.fetch("api.github.com", "GET", "/x", &hdrs, u64::MAX) {
             Err(ProxyError::Policy(_)) => {}
             other => panic!("injected header must be rejected before dialing: {other:?}"),
         }
@@ -885,5 +923,52 @@ mod tests {
             !names.iter().any(|n| n == "api.github.com"),
             "look-alike must not expand to the real upstream: {names:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    /// The egress budget must bite DURING the response, not after it: the old
+    /// read loop buffered until connection close and only then let
+    /// charge_bytes discover the overrun — unbounded memory and an unbounded
+    /// damage window.
+    #[test]
+    fn read_capped_stops_at_the_cap() {
+        // Under the cap: the whole response arrives.
+        let mut s = std::io::Cursor::new(vec![0u8; 100_000]);
+        assert_eq!(read_capped(&mut s, 200_000).unwrap().len(), 100_000);
+
+        // Over the cap: denied, and the stream is NOT drained — the bound
+        // bites during the transfer.
+        let mut s = std::io::Cursor::new(vec![0u8; 100_000]);
+        let err = read_capped(&mut s, 10_000).unwrap_err();
+        assert!(matches!(err, ProxyError::Budget(_)), "{err:?}");
+        assert!(
+            s.position() <= 10_000 + 4096,
+            "read must stop at the cap, read {} bytes",
+            s.position()
+        );
+    }
+
+    /// Budget counters come from a JSON budget file and can carry arbitrary
+    /// values: `*b + bytes` wraps past u64::MAX and slides UNDER the limit,
+    /// waving the charge through. Saturating math denies instead.
+    #[test]
+    fn budget_charge_cannot_wrap_around() {
+        let d = "github";
+        let mut b = Budgets {
+            bytes: [(d.to_string(), u64::MAX - 5)].into(),
+            requests: [(d.to_string(), 0)].into(),
+            persist_path: None,
+        };
+        assert!(!b.check(d, 10, 1000, 100).unwrap());
+        assert!(!b.charge_bytes(d, 10, 1000).unwrap());
+        // Normal charges still work.
+        let mut b = Budgets::default();
+        assert!(b.check(d, 10, 1000, 100).unwrap());
+        assert!(b.charge_bytes(d, 10, 1000).unwrap());
+        assert_eq!(b.used_bytes(d), 20);
     }
 }
