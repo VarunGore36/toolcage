@@ -116,6 +116,10 @@ pub struct WarmPool {
     free: VecDeque<PausedVm>,
     /// Golden image used to create/restore pool VMs.
     golden: Option<GoldenImage>,
+    /// Monotonic pool-id counter. Ids must never be re-minted: `free.len()`
+    /// shrinks as VMs are claimed, and deriving ids from it collides with
+    /// live VMs (same id = same API socket path).
+    next_id: usize,
 }
 
 impl WarmPool {
@@ -124,7 +128,17 @@ impl WarmPool {
             max,
             free: VecDeque::new(),
             golden: None,
+            next_id: 0,
         }
+    }
+
+    /// Mint the next pool id. Never derived from `free.len()`: claims shrink
+    /// the pool, and re-minted ids collide with live VMs (two VMs would share
+    /// the same `/run/toolcage/{id}.sock`).
+    pub fn alloc_id(&mut self) -> String {
+        let id = format!("pool-{}", self.next_id);
+        self.next_id += 1;
+        id
     }
 
     /// Load + verify a golden image from a directory containing
@@ -139,13 +153,20 @@ impl WarmPool {
     /// Each VM is snapshot-loaded and paused (not started), so it carries no
     /// per-session state. Uniqueness is applied on claim().
     pub fn refill(&mut self) -> anyhow::Result<usize> {
-        let gi = self
-            .golden
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("no golden image loaded; call load_golden first"))?;
+        if self.golden.is_none() {
+            return Err(anyhow::anyhow!(
+                "no golden image loaded; call load_golden first"
+            ));
+        }
+        // Mint the ids for the missing slots up front: the counter lives on
+        // self while `gi` below borrows self.golden.
+        let mut ids = Vec::new();
+        while self.free.len() + ids.len() < self.max {
+            ids.push(self.alloc_id());
+        }
+        let gi = self.golden.as_ref().unwrap();
         let mut restored = 0usize;
-        while self.free.len() < self.max {
-            let id = format!("pool-{}", self.free.len());
+        for id in ids {
             let paused = PausedVm::from_snapshot(gi, &id)?;
             self.free.push_back(paused);
             restored += 1;
@@ -1394,5 +1415,51 @@ mod order_tests {
         );
         // The failed VM is gone from the pool (never re-pooled dirty).
         assert!(pool.is_empty(), "failed VM must not return to the pool");
+    }
+
+    /// Pool ids must stay unique across refills after claims. `refill()`
+    /// mints one id per restored VM via `alloc_id()`; ids derived from
+    /// `free.len()` collide once a claim shrinks the pool — two live VMs
+    /// would then share the same API socket path.
+    #[test]
+    fn pool_ids_stay_unique_after_claims() {
+        let mut pool = WarmPool::new(3);
+        let mut minted: Vec<String> = Vec::new();
+        let dummy = |id: &str| PausedVm {
+            id: id.into(),
+            socket_path: format!("/run/toolcage/{id}.sock"),
+            vsock_uds: format!("/run/toolcage/{id}.vsock"),
+            vsock_cid: 3,
+            started: false,
+            child: std::process::Command::new("sleep").arg("60").spawn().unwrap(),
+        };
+        // First refill fills the pool (same id flow as refill()).
+        while pool.free.len() < pool.max {
+            let id = pool.alloc_id();
+            minted.push(id.clone());
+            pool.free.push_back(dummy(&id));
+        }
+        // A session claims a VM — the pool shrinks ...
+        let mut claimed = pool.free.pop_front().unwrap();
+        // ... and a refill tops the pool back up.
+        while pool.free.len() < pool.max {
+            let id = pool.alloc_id();
+            minted.push(id.clone());
+            pool.free.push_back(dummy(&id));
+        }
+        let mut unique = minted.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            minted.len(),
+            "pool ids must never collide: {minted:?}"
+        );
+        let _ = claimed.child.kill();
+        let _ = claimed.child.wait();
+        for mut vm in pool.free.drain(..) {
+            let _ = vm.child.kill();
+            let _ = vm.child.wait();
+        }
     }
 }
