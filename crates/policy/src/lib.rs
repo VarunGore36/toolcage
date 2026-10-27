@@ -90,12 +90,24 @@ pub struct Mount {
     pub source: String,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NetPolicy {
     #[serde(default = "default_mode")]
     pub mode: String,
     #[serde(default)]
     pub hosts: Vec<HostRule>,
+}
+
+/// Derived Default would give `mode: ""`, bypassing `default_mode()` — a
+/// policy with no `net:` section and one with `net:` but no `mode:` must not
+/// disagree ("" vs "deny").
+impl Default for NetPolicy {
+    fn default() -> Self {
+        Self {
+            mode: default_mode(),
+            hosts: Vec::new(),
+        }
+    }
 }
 
 fn default_mode() -> String {
@@ -151,8 +163,35 @@ pub struct Decision {
     pub reason: String,
 }
 
+/// Whether a mount mode permits writes. ONLY an explicit `rw` does.
+///
+/// The old check was `mode == "ro"` on the deny side, so every unrecognized
+/// spelling — `readonly`, `read-only`, `r0`, empty — silently became WRITABLE.
+/// A typo in a read-only mount is exactly the case that must not open a
+/// write path: anything that is not explicitly rw denies writes.
+fn mount_allows_write(mode: &str) -> bool {
+    mode.eq_ignore_ascii_case("rw")
+}
+
 pub fn load_yaml(s: &str) -> anyhow::Result<Policy> {
-    Ok(serde_yaml::from_str(s)?)
+    let p: Policy = serde_yaml::from_str(s)?;
+    // Unknown `mode` spellings must fail closed at load, not degrade into
+    // whatever the runtime happens to do with the string (a writable "readonly"
+    // mount, a silently ignored net mode).
+    for m in &p.fs.mounts {
+        anyhow::ensure!(
+            m.mode.eq_ignore_ascii_case("ro") || m.mode.eq_ignore_ascii_case("rw"),
+            "unknown fs mount mode {:?} on {} (want ro or rw)",
+            m.mode,
+            m.path
+        );
+    }
+    anyhow::ensure!(
+        p.net.mode.eq_ignore_ascii_case("allowlist") || p.net.mode.eq_ignore_ascii_case("deny"),
+        "unknown net mode {:?} (want allowlist or deny)",
+        p.net.mode
+    );
+    Ok(p)
 }
 
 impl Policy {
@@ -390,8 +429,8 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
                     mount
                 };
                 if canon == mount || canon.starts_with(&format!("{mount}/")) {
-                    if req.action == "fs.write" && m.mode == "ro" {
-                        return deny("fs:deny-ro", "mount is read-only");
+                    if req.action == "fs.write" && !mount_allows_write(&m.mode) {
+                        return deny("fs:deny-ro", "mount is not writable");
                     }
                     return Decision {
                         allow: true,

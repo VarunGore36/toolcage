@@ -446,3 +446,75 @@ approval:
     // An unknown host is unknown too, not a non-match.
     assert!(p.needs_approval("http.request", Some("GET"), None));
 }
+
+#[test]
+fn mount_mode_typo_cannot_open_writes() {
+    // The deny check was `mode == "ro"` — every unrecognized spelling
+    // ("readonly", "read-only", "r0", "") silently became WRITABLE. A typo on
+    // a read-only mount is exactly the case that must not open a write path:
+    // only an explicit rw may permit writes.
+    let pol = |mode: &str| {
+        policy::load_yaml(&format!(
+            r#"
+tool: t
+version: 0
+fs:
+  mounts:
+    - path: /workspace
+      mode: {mode}
+"#
+        ))
+    };
+    let fs = |p: &policy::Policy, action: &str| {
+        policy::decide(
+            p,
+            &policy::Request {
+                action: action.into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: Some("/workspace/file".into()),
+                argv: None,
+            },
+        )
+    };
+    // Unrecognized spellings must not open writes (and must not at load).
+    for mode in ["readonly", "read-only", "r0", "READ-ONLY"] {
+        assert!(
+            pol(mode).is_err(),
+            "unknown mount mode {mode:?} must fail at load"
+        );
+    }
+    // A structurally-built policy (bypassing load) must fail closed too.
+    let typo = policy::Policy {
+        tool: "t".into(),
+        min_isolation: "tier0".into(),
+        fs: policy::FsPolicy {
+            mounts: vec![policy::Mount {
+                path: "/workspace".into(),
+                mode: "readonly".into(),
+                source: String::new(),
+            }],
+        },
+        net: Default::default(),
+        credentials: vec![],
+        approval: Default::default(),
+        limits: Default::default(),
+        exec: Default::default(),
+    };
+    assert!(!fs(&typo, "fs.write").allow, "typo'd mode must not allow writes");
+    assert!(fs(&typo, "fs.read").allow, "reads under the mount stay allowed");
+    // Explicit rw allows writes (any case); ro denies them.
+    for mode in ["rw", "RW"] {
+        let p = pol(mode).unwrap();
+        assert!(fs(&p, "fs.write").allow, "{mode} must allow writes");
+    }
+    for mode in ["ro", "RO"] {
+        let p = pol(mode).unwrap();
+        assert!(!fs(&p, "fs.write").allow, "{mode} must deny writes");
+        assert!(fs(&p, "fs.read").allow);
+    }
+    // Unknown net mode spellings fail at load as well.
+    assert!(policy::load_yaml("tool: t\nversion: 0\nnet:\n  mode: alowlist\n").is_err());
+    assert!(policy::load_yaml("tool: t\nversion: 0\nnet:\n  mode: allowlist\n").is_ok());
+}
