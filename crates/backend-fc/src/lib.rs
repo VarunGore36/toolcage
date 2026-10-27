@@ -271,7 +271,7 @@ impl PausedVm {
 
     /// Apply per-session uniqueness steps after claim:
     /// 1. Attach the session's workspace drive (replaces golden workspace).
-    /// 2. Resume the VM (InstanceStart) — VMGenID reseeds guest RNG
+    /// 2. Resume the VM (PATCH /vm state=Resumed) — VMGenID reseeds guest RNG
     ///    (kernel >= 5.18).
     /// 3. Reset wall clock (snapshot froze it).
     /// 4. Re-establish vsock control channel (closed on restore).
@@ -292,15 +292,17 @@ impl PausedVm {
         );
 
         // 2. Resume VM — VMGenID reseeds guest RNG on restore (kernel>=5.18).
-        let start = InstanceStart {
-            action_type: "InstanceStart".into(),
-        };
-        let body = serde_json::to_vec(&start)?;
-        let resp = http_put(&self.socket_path, "/actions", &body)?;
+        //    A snapshot-restored VM is resumed with PATCH /vm {"state":"Resumed"};
+        //    the /actions InstanceStart action is for a fresh boot only and is
+        //    rejected on a restored VM.
+        let body = serde_json::to_vec(&VmState {
+            state: "Resumed".into(),
+        })?;
+        let resp = http_patch(&self.socket_path, "/vm", &body)?;
         let status = http_status(&resp)?;
         anyhow::ensure!(
             status == 200 || status == 204,
-            "VM start failed: HTTP {status}"
+            "VM resume failed: HTTP {status}"
         );
         self.started = true;
 
@@ -312,17 +314,18 @@ impl PausedVm {
 
     /// Resume a paused VM (start it) without attaching a new workspace.
     /// Used when re-using a pool VM for a new session after uniqueness.
+    /// Restored VMs resume via PATCH /vm {"state":"Resumed"} — /actions
+    /// InstanceStart is for a fresh boot only.
     pub fn start(&mut self) -> anyhow::Result<()> {
         anyhow::ensure!(!self.started, "VM already started");
-        let start = InstanceStart {
-            action_type: "InstanceStart".into(),
-        };
-        let body = serde_json::to_vec(&start)?;
-        let resp = http_put(&self.socket_path, "/actions", &body)?;
+        let body = serde_json::to_vec(&VmState {
+            state: "Resumed".into(),
+        })?;
+        let resp = http_patch(&self.socket_path, "/vm", &body)?;
         let status = http_status(&resp)?;
         anyhow::ensure!(
             status == 200 || status == 204,
-            "VM start failed: HTTP {status}"
+            "VM resume failed: HTTP {status}"
         );
         self.started = true;
         Ok(())
@@ -525,6 +528,13 @@ struct InstanceStart {
     action_type: String, // "InstanceStart"
 }
 
+/// VM state change request: PATCH /vm. This is how a snapshot-restored
+/// (paused) VM is resumed. `InstanceStart` is only for a fresh boot.
+#[derive(Debug, Serialize)]
+struct VmState {
+    state: String, // "Resumed"
+}
+
 #[derive(Debug, Deserialize)]
 struct VmInfo {
     state: String,
@@ -535,13 +545,27 @@ struct VmInfo {
 // ---------------------------------------------------------------------------
 
 fn http_put(socket_path: &str, path: &str, body: &[u8]) -> anyhow::Result<Vec<u8>> {
+    http_request(socket_path, "PUT", path, body)
+}
+
+fn http_patch(socket_path: &str, path: &str, body: &[u8]) -> anyhow::Result<Vec<u8>> {
+    http_request(socket_path, "PATCH", path, body)
+}
+
+fn http_request(
+    socket_path: &str,
+    method: &str,
+    path: &str,
+    body: &[u8],
+) -> anyhow::Result<Vec<u8>> {
     let mut stream = UnixStream::connect(socket_path)
         .context(format!("connect to firecracker socket {socket_path}"))?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
 
     let req = format!(
-        "PUT {} HTTP/1.1\r\nHost: firecracker\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "{} {} HTTP/1.1\r\nHost: firecracker\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        method,
         path,
         body.len()
     );
@@ -1115,14 +1139,26 @@ mod order_tests {
     use std::io::{Read as _R, Write as _W};
     use std::os::unix::net::UnixListener;
 
-    /// Firecracker rejects `InstanceStart` unless `/boot-source` was configured
-    /// first — and the driver used to configure none at all (and never even
-    /// launched a VM). Lock the order against a mock API socket: boot-source
-    /// first, the start action last.
-    #[test]
-    fn boot_source_is_configured_before_instance_start() {
+    #[derive(Debug, Clone)]
+    struct Recorded {
+        method: String,
+        path: String,
+        body: String,
+    }
+
+    /// Mock firecracker API socket: records each request (method, path, body)
+    /// and answers 204. Accepts until the client goes quiet (idle deadline)
+    /// rather than for a fixed request count — a missing request then fails
+    /// the assertions instead of blocking join() forever.
+    fn mock_api(
+        tag: &str,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<Recorded>>>,
+        std::thread::JoinHandle<()>,
+    ) {
         let dir = std::env::temp_dir().join(format!(
-            "tc-fc-order-{}-{:?}",
+            "tc-fc-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
@@ -1133,11 +1169,7 @@ mod order_tests {
 
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen2 = seen.clone();
-        // Mock firecracker API: record each request's path, answer 204.
-        let mock = std::thread::spawn(move || {
-            // Accept until the client goes quiet (idle deadline) rather than
-            // for a fixed request count: if a request is missing, a fixed
-            // count blocks join() forever instead of failing the assertion.
+        let handle = std::thread::spawn(move || {
             listener.set_nonblocking(true).unwrap();
             let mut idle_deadline = std::time::Instant::now() + Duration::from_secs(2);
             loop {
@@ -1178,44 +1210,126 @@ mod order_tests {
                             .map(|v| v.trim().parse().unwrap_or(0))
                     })
                     .unwrap_or(0);
-                let mut got = head
+                let head_end = head
                     .windows(4)
                     .position(|w| w == b"\r\n\r\n")
-                    .map(|i| head.len() - (i + 4))
-                    .unwrap_or(0);
+                    .map(|i| i + 4)
+                    .unwrap_or(head.len());
+                let mut body = head[head_end..].to_vec();
                 let mut body_buf = [0u8; 1024];
-                while got < clen {
+                while body.len() < clen {
                     match stream.read(&mut body_buf) {
                         Ok(0) | Err(_) => break,
-                        Ok(n) => got += n,
+                        Ok(n) => body.extend_from_slice(&body_buf[..n]),
                     }
                 }
-                let path = text.split_whitespace().nth(1).unwrap_or("").to_string();
-                seen2.lock().unwrap().push(path);
+                let mut parts = text.split_whitespace();
+                let method = parts.next().unwrap_or("").to_string();
+                let path = parts.next().unwrap_or("").to_string();
+                seen2.lock().unwrap().push(Recorded {
+                    method,
+                    path,
+                    body: String::from_utf8_lossy(&body).to_string(),
+                });
                 let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
             }
         });
+        (sock_path, seen, handle)
+    }
 
+    fn paths(seen: &std::sync::Arc<std::sync::Mutex<Vec<Recorded>>>) -> Vec<String> {
+        seen.lock().unwrap().iter().map(|r| r.path.clone()).collect()
+    }
+
+    /// Firecracker rejects `InstanceStart` unless `/boot-source` was configured
+    /// first — and the driver used to configure none at all (and never even
+    /// launched a VM). Lock the order against a mock API socket: boot-source
+    /// first, the start action last.
+    #[test]
+    fn boot_source_is_configured_before_instance_start() {
+        let (sock_path, seen, mock) = mock_api("order");
         let mut cfg = FcConfig::for_session("sess-order", 128);
         cfg.socket = sock_path.clone();
         let res = configure_and_start(&sock_path, &cfg, "/tmp/ws");
         assert!(res.is_ok(), "configure_and_start failed: {res:?}");
         let _ = mock.join();
         let seen = seen.lock().unwrap().clone();
+        let paths: Vec<String> = seen.iter().map(|r| r.path.clone()).collect();
         assert_eq!(
-            seen.first().map(String::as_str),
+            paths.first().map(String::as_str),
             Some("/boot-source"),
-            "boot-source must be configured first: {seen:?}"
+            "boot-source must be configured first: {paths:?}"
         );
         assert_eq!(
-            seen.last().map(String::as_str),
+            paths.last().map(String::as_str),
             Some("/actions"),
-            "InstanceStart must come last: {seen:?}"
+            "InstanceStart must come last: {paths:?}"
         );
         assert!(
-            seen.contains(&"/vsock/vsock0".to_string()),
-            "vsock must be configured: {seen:?}"
+            paths.contains(&"/vsock/vsock0".to_string()),
+            "vsock must be configured: {paths:?}"
         );
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&sock_path).parent().unwrap());
+    }
+
+    /// A snapshot-restored VM is resumed with PATCH /vm {"state":"Resumed"}.
+    /// The /actions InstanceStart action is for a fresh boot only: sent to a
+    /// restored VM it is rejected, so pool VMs never actually resumed.
+    #[test]
+    fn snapshot_vms_resume_via_patch_vm_not_instance_start() {
+        let child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+
+        // The pool-claim path: apply_uniqueness resumes the VM.
+        let (sock_path, seen, mock) = mock_api("resume1");
+        let mut vm = PausedVm {
+            id: "sess-resume".into(),
+            socket_path: sock_path.clone(),
+            vsock_uds: "/run/toolcage/sess-resume.vsock".into(),
+            vsock_cid: 7,
+            started: false,
+            child,
+        };
+        let res = vm.apply_uniqueness("sess-resume", "/tmp/ws");
+        assert!(res.is_ok(), "apply_uniqueness failed: {res:?}");
+        assert!(vm.started);
+        let _ = mock.join();
+        let seen = seen.lock().unwrap().clone();
+        let paths: Vec<String> = seen.iter().map(|r| r.path.clone()).collect();
+        assert_eq!(
+            paths,
+            vec!["/drive/workspace".to_string(), "/vm".to_string()],
+            "apply_uniqueness must PATCH /vm to resume a restored VM: {seen:?}"
+        );
+        let resume = &seen[1];
+        assert_eq!(resume.method, "PATCH");
+        assert!(
+            resume.body.contains("\"Resumed\""),
+            "PATCH /vm must carry state Resumed: {}",
+            resume.body
+        );
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&sock_path).parent().unwrap());
+
+        // The reuse path: start() resumes the same way.
+        let (sock_path2, seen2, mock2) = mock_api("resume2");
+        let mut vm2 = PausedVm {
+            id: "sess-resume2".into(),
+            socket_path: sock_path2.clone(),
+            vsock_uds: "/run/toolcage/sess-resume2.vsock".into(),
+            vsock_cid: 8,
+            started: false,
+            child: std::process::Command::new("sleep").arg("60").spawn().unwrap(),
+        };
+        let res = vm2.start();
+        assert!(res.is_ok(), "start failed: {res:?}");
+        let _ = mock2.join();
+        let seen2 = seen2.lock().unwrap().clone();
+        assert_eq!(seen2.len(), 1, "start() must send exactly one request: {seen2:?}");
+        assert_eq!(seen2[0].method, "PATCH");
+        assert_eq!(seen2[0].path, "/vm");
+        assert!(seen2[0].body.contains("\"Resumed\""), "{}", seen2[0].body);
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&sock_path2).parent().unwrap());
     }
 }
