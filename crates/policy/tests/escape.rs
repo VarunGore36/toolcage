@@ -395,3 +395,54 @@ fn proc_exec_without_argv_is_denied() {
         assert_eq!(d.rule_ids, vec!["deny:exec-no-argv".to_string()]);
     }
 }
+
+#[test]
+fn absent_method_cannot_escape_a_get_gate() {
+    // decide() used to default a missing method to GET — the request acquired
+    // every `methods: [GET]` rule's privileges — while needs_approval saw ""
+    // and skipped gates written for GET. Both sides must agree: an absent
+    // method is unknown, and unknown can neither inherit privileges nor dodge
+    // obligations.
+    let p = policy::load_yaml(
+        r#"
+tool: t
+version: 0
+net:
+  mode: allowlist
+  hosts:
+    - host: github
+      methods: [GET]
+approval:
+  require_for:
+    - http.request: { methods: [GET], hosts: [github] }
+"#,
+    )
+    .unwrap();
+    // Explicit method: consistent — GET is allowed and gated, POST is denied.
+    assert!(policy::decide(&p, &at("github", "GET", "/")).allow);
+    assert!(p.needs_approval("http.request", Some("GET"), Some("github")));
+    assert!(!policy::decide(&p, &at("github", "POST", "/")).allow);
+    assert!(!p.needs_approval("http.request", Some("DELETE"), Some("github")));
+
+    // Absent method: must not inherit GET's allow ...
+    let d = policy::decide(
+        &p,
+        &policy::Request {
+            action: "http.request".into(),
+            host: Some("github".into()),
+            method: None,
+            path: Some("/".into()),
+            fs_path: None,
+            argv: None,
+        },
+    );
+    assert!(!d.allow, "absent method must not inherit GET privileges: {d:?}");
+    assert_eq!(d.rule_ids, vec!["deny:method-missing".to_string()]);
+    // ... and must not escape GET's approval gate.
+    assert!(
+        p.needs_approval("http.request", None, Some("github")),
+        "absent method must not dodge a GET approval gate"
+    );
+    // An unknown host is unknown too, not a non-match.
+    assert!(p.needs_approval("http.request", Some("GET"), None));
+}

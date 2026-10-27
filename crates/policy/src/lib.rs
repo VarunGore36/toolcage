@@ -157,6 +157,12 @@ pub fn load_yaml(s: &str) -> anyhow::Result<Policy> {
 
 impl Policy {
     /// Approval gate from policy file: require_for entries (timeout = deny).
+    ///
+    /// Fail closed on unknown: an absent/empty method or host is UNKNOWN, not
+    /// "matches nothing". decide() used to default a missing method to GET
+    /// while this gate saw "" and passed — a method-less request sailed past
+    /// every gate written for GET. Unknown values must not escape a
+    /// method/host-constrained gate.
     pub fn needs_approval(&self, action: &str, method: Option<&str>, host: Option<&str>) -> bool {
         for entry in &self.approval.require_for {
             for (act, spec) in entry {
@@ -165,13 +171,13 @@ impl Policy {
                 }
                 if !spec.methods.is_empty() {
                     let m = method.unwrap_or("");
-                    if !spec.methods.iter().any(|x| x.eq_ignore_ascii_case(m)) {
+                    if !m.is_empty() && !spec.methods.iter().any(|x| x.eq_ignore_ascii_case(m)) {
                         continue;
                     }
                 }
                 if !spec.hosts.is_empty() {
                     let h = host.unwrap_or("");
-                    if !spec.hosts.iter().any(|x| x.eq_ignore_ascii_case(h)) {
+                    if !h.is_empty() && !spec.hosts.iter().any(|x| x.eq_ignore_ascii_case(h)) {
                         continue;
                     }
                 }
@@ -320,14 +326,26 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
     }
     match req.action.as_str() {
         "net.connect" | "http.request" => {
+            // An HTTP request with no method authorizes nothing. The old code
+            // defaulted an absent method to "GET" here, so a method-less
+            // request acquired every `methods: [GET]` rule's privileges while
+            // needs_approval (which saw "") skipped gates written for GET.
+            if req.action == "http.request" && req.method.is_none() {
+                return deny("deny:method-missing", "http.request requires a method");
+            }
+            // net.connect carries no method (absent/empty is fine there); any
+            // method that IS present must be a clean token. Note an empty
+            // method string is a malformed method, not a missing one.
+            let method = req.method.as_deref().unwrap_or("").to_ascii_uppercase();
             let host = req.host.as_deref().unwrap_or("").to_ascii_lowercase();
-            let method = req.method.as_deref().unwrap_or("GET").to_ascii_uppercase();
             let path = req.path.as_deref().unwrap_or("/");
             // Request-line hygiene before any rule matching: the method and
             // path are forwarded verbatim upstream, so a guest must not be able
             // to smuggle a different resource or extra headers past the rule
             // that was checked (see request_target_is_clean).
-            if !method_is_token(&method) || !request_target_is_clean(path) {
+            if (req.method.is_some() && !method_is_token(&method))
+                || !request_target_is_clean(path)
+            {
                 return deny(
                     "deny:request-target",
                     "malformed or ambiguous request target",
