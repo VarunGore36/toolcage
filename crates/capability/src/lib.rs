@@ -329,18 +329,28 @@ impl RevocationList {
         self.revoked.insert(rev_id.to_string());
     }
     pub fn is_revoked(&self, t: &Token) -> bool {
-        let mut cur = Some(t.rev_id.clone());
-        // Walk up: child revoked with parent.
-        let mut child = t.rev_id.clone();
-        let _ = &mut cur;
-        if self.revoked.contains(&child) {
+        if self.revoked.contains(&t.rev_id) {
             return true;
         }
-        while let Some(p) = self.parent_of.get(&child) {
-            if self.revoked.contains(p) {
+        // Walk up the ancestor chain: the token's OWN parent link first (so a
+        // descendant that was never track()ed is still revoked with its
+        // ancestor), then tracked links for the rest of the chain. Revoking
+        // any ancestor revokes the whole subtree.
+        //
+        // A seen set terminates the walk: track() records links from
+        // UNVERIFIED input (it never checks the tag), so a hostile pair
+        // a→b, b→a could make the walk spin forever.
+        let mut seen: HashSet<String> = HashSet::new();
+        seen.insert(t.rev_id.clone());
+        let mut next = t.parent.clone();
+        while let Some(p) = next {
+            if !seen.insert(p.clone()) {
+                break; // cycle: stop, don't loop forever
+            }
+            if self.revoked.contains(&p) {
                 return true;
             }
-            child = p.clone();
+            next = self.parent_of.get(&p).cloned();
         }
         false
     }
@@ -525,6 +535,84 @@ mod tests {
         rl.revoke("r0");
         assert!(rl.is_revoked(&c));
     }
+    #[test]
+    fn revoke_parent_kills_untracked_children() {
+        // The subtree must hold even for a descendant that was never track()ed:
+        // the old walk used only parent_of (tracked links), so revoking a
+        // parent missed any child presented without a tracked link — the
+        // attacker's move is simply to not track.
+        let r = root();
+        let c = r
+            .attenuate(
+                &key(),
+                "r1",
+                Rights {
+                    fs_prefixes: vec![],
+                    net_hosts: vec![],
+                    methods: vec![],
+                    cred_use: vec![],
+                    budget_bytes: 1,
+                    expires_at: 1,
+                },
+            )
+            .unwrap();
+        let mut rl = RevocationList::default();
+        // NOTE: no rl.track(&c) — the child is presented cold.
+        assert!(!rl.is_revoked(&c));
+        rl.revoke("r0");
+        assert!(
+            rl.is_revoked(&c),
+            "revoking the parent must revoke an untracked child"
+        );
+    }
+
+    #[test]
+    fn revoke_walk_terminates_on_a_cycle() {
+        // track() records links from UNVERIFIED input (it never checks the
+        // tag), so a hostile pair a→b, b→a can be planted. is_revoked must
+        // terminate, not spin forever on the cycle.
+        let mk = |rev_id: &str, parent: &str| Token {
+            rev_id: rev_id.into(),
+            parent: Some(parent.into()),
+            rights: Rights {
+                fs_prefixes: vec![],
+                net_hosts: vec![],
+                methods: vec![],
+                cred_use: vec![],
+                budget_bytes: 0,
+                expires_at: 0,
+            },
+            tag: String::new(),
+        };
+        let mut rl = RevocationList::default();
+        rl.track(&mk("a", "b"));
+        rl.track(&mk("b", "a"));
+        rl.revoke("x"); // nothing on the cycle is revoked
+        let t = mk("c", "a");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(rl.is_revoked(&t));
+        });
+        let res = rx.recv_timeout(std::time::Duration::from_secs(2));
+        assert!(res.is_ok(), "is_revoked must terminate on a parent cycle");
+        assert!(!res.unwrap(), "an unrevoked cycle is not revoked");
+
+        // Same walk, with a cycle member revoked: still terminates, and the
+        // revocation is seen.
+        let mut rl = RevocationList::default();
+        rl.track(&mk("a", "b"));
+        rl.track(&mk("b", "a"));
+        rl.revoke("b");
+        let t = mk("c", "a");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(rl.is_revoked(&t));
+        });
+        let res = rx.recv_timeout(std::time::Duration::from_secs(2));
+        assert!(res.is_ok(), "is_revoked must terminate on a revoked cycle");
+        assert!(res.unwrap(), "a revoked ancestor revokes through a cycle");
+    }
+
     #[test]
     fn tampered_tag_rejected() {
         let mut r = root();
