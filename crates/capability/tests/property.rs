@@ -5,7 +5,7 @@
 //! Note on the v0 test: its root token had `expires_at: 100` (1970), so every
 //! `allows()` call returned false and the implication was vacuously true.
 //! Roots here are far-future so `child.allows => parent.allows` is a real test.
-use toolcage_capability::{Key, Rights, Token};
+use toolcage_capability::{Key, RevocationList, Rights, Token};
 
 fn key() -> Key {
     Key::from_bytes([3u8; 32])
@@ -150,5 +150,62 @@ fn tokens_minted_under_another_key_are_dead() {
                 .is_err(),
             "seed {seed}: forged parent delegated under host key"
         );
+    }
+}
+
+/// Revocation is I3's other half: a revoked ancestor kills the whole subtree
+/// — including descendants that were never track()ed — while revoking a child
+/// never kills its parent. Chains here are real (keyed, attenuated), and the
+/// walk must terminate even on hostile link shapes.
+#[test]
+fn revocation_subtree_holds_over_200_seeds() {
+    let k = key();
+    let root = Token::root(
+        &k,
+        "r0",
+        Rights {
+            fs_prefixes: vec!["/workspace".into(), "/tmp".into()],
+            net_hosts: vec!["github".into(), "registry.npmjs.org".into()],
+            methods: vec!["GET".into(), "POST".into()],
+            cred_use: vec!["github_token".into()],
+            budget_bytes: 500,
+            expires_at: 9_999_999_999,
+        },
+    );
+    for seed in 0..200u64 {
+        // root -> c0 -> c1 -> c2
+        let mut chain = vec![root.clone()];
+        for hop in 0..3u64 {
+            let parent = chain.last().unwrap();
+            let child = parent
+                .attenuate(
+                    &k,
+                    &format!("c{seed}-{hop}"),
+                    narrow_of(&parent.rights, seed + hop),
+                )
+                .unwrap();
+            chain.push(child);
+        }
+        // Revoke the node at a level chosen by the seed: 0=root .. 3=c2.
+        let level = (seed % 4) as usize;
+        let mut rl = RevocationList::default();
+        // Track every token — the documented contract: the walk uses each
+        // token's own parent link plus tracked links for the rest of the
+        // chain, so an untracked INTERMEDIATE cuts the chain (a token carries
+        // only its immediate parent). The untracked-immediate-child case is
+        // covered separately in revoke_parent_kills_untracked_children.
+        for t in &chain {
+            rl.track(t);
+        }
+        rl.revoke(&chain[level].rev_id);
+        for (i, t) in chain.iter().enumerate() {
+            let expect = i >= level;
+            assert_eq!(
+                rl.is_revoked(t),
+                expect,
+                "seed {seed} level {level}: chain[{i}] revoked={} (want {expect})",
+                rl.is_revoked(t)
+            );
+        }
     }
 }
