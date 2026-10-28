@@ -226,7 +226,7 @@ Third-party MCP servers run as **guest processes** under the same policy and aud
 
 ## Tests
 
-`cargo test --workspace` runs **174 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
+`cargo test --workspace` runs **175 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
 
 - **Escape suite** against the policy and proxy (I1, I6)
 - **Fuzzing** of the policy, guest-agent, audit, and proxy parsers
@@ -257,7 +257,7 @@ The audit figure is filesystem-dependent (tmpfs may not flush durably) and is a 
 
 | Area | State |
 |---|---|
-| Tier 0 (namespaces, Landlock, seccomp) | Implemented, with live isolation tests. Landlock is **mandatory** (fail-closed): if the kernel can't provide it, session creation is denied and the child refuses to run — no silent fallback to namespaces-only. |
+| Tier 0 (namespaces, Landlock, seccomp) | Implemented, with live isolation tests. Landlock is **mandatory** (fail-closed): if the kernel can't provide it, session creation is denied and the child refuses to run — no silent fallback to namespaces-only. The handled rights follow the running kernel's ABI: on Landlock ABI 1 (Linux 5.13–6.1), `refer` (ABI 2+) and `truncate` (ABI 5+) are **unrestricted** there — the kernel cannot bound a right it does not know. `doctor` reports the detected ABI. |
 | Tier 1 (gVisor) | Functional as wired: `runsc create --bundle` with the upstream argument shape, a complete OCI spec (`process.args`, `cwd`, `/proc`, devices), SIGKILL + polled `delete` cleanup, and id/path validation. Not live-tested end-to-end on the build host (no `runsc` installed there); covered by arg-shape and spec-shape tests. |
 | Tier 2 (Firecracker) | Functional as wired: the jailer actually launches the VM (nothing launched one before), `/boot-source` is configured before `InstanceStart` (Firecracker rejects a start without it), then machine-config → drives → vsock → start over the API; snapshot-restored VMs resume with `PATCH /vm {"state":"Resumed"}` (the `InstanceStart` action is for fresh boots only); warm-pool failures surface as errors (only an empty pool falls back to a fresh boot) and a failed pool VM is torn down, not leaked; and `destroy()` kills the firecracker process. REST ordering, the resume verb, pool failure handling, and the Tier 2 escape suite (vsock-only with no network device ever configured, jailer confinement of the VMM process, and a control-channel escape matrix) are tested against a mock API socket; warm-claim start latency is benchmarked in `scripts/bench.sh`. Known remaining items are low-severity (e.g. a create-time TOCTOU around the API socket path) and tracked in the bug backlog. Not live-tested on the build host (no `firecracker`/`/dev/kvm` there). |
 | seccomp-BPF | Implemented and **installs** (verified: `PR_SET_SECCOMP` succeeds and the workload runs under the filter). Note this was previously broken by an invalid BPF addressing mode — `PR_SET_SECCOMP` failed with `EINVAL` on *every* kernel, which the old note here attributed to "some kernels". Fixed; it is defense in depth alongside namespaces + Landlock. The blocklist is not exhaustive: the newer mount API (`fsopen`/`move_mount`/`fsmount`), `io_uring`, and `chroot` are not blocked. Check `doctor` on your machine. |

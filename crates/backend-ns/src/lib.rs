@@ -311,18 +311,15 @@ fn seccomp_works() -> bool {
 fn landlock_abi() -> i32 {
     #[cfg(target_arch = "x86_64")]
     {
-        let size = std::mem::size_of::<LandlockRulesetAttr>() as c_long;
-        // 1) version probe
-        let mut attr = LandlockRulesetAttr {
-            handled_access_fs: 0,
-            handled_access_net: 0,
-            scoped: 0,
-        };
+        // 1) version probe. Per the API this MUST pass attr=NULL and size=0 —
+        // handing it a real attr (as this used to) is rejected by kernels that
+        // check it, so the probe failed and the fallback below reported ABI 1
+        // on every host: the doctor lied and any ABI gating was wrong.
         let r = unsafe {
             syscall(
                 SYS_LANDLOCK_CREATE_RULESET,
-                &attr,
-                size,
+                std::ptr::null::<libc::c_void>(),
+                0usize,
                 LANDLOCK_CREATE_RULESET_VERSION as c_ulong,
             )
         };
@@ -330,8 +327,19 @@ fn landlock_abi() -> i32 {
             return r as i32;
         }
         // 2) fall back: a real ruleset proves the syscall exists on this host
-        attr.handled_access_fs = LANDLOCK_FS_READ_FILE;
-        let fd = unsafe { syscall(SYS_LANDLOCK_CREATE_RULESET, &attr, size, 0) };
+        let attr = LandlockRulesetAttr {
+            handled_access_fs: LANDLOCK_FS_READ_FILE,
+            handled_access_net: 0,
+            scoped: 0,
+        };
+        let fd = unsafe {
+            syscall(
+                SYS_LANDLOCK_CREATE_RULESET,
+                &attr,
+                std::mem::size_of::<LandlockRulesetAttr>() as c_long,
+                0,
+            )
+        };
         if fd >= 0 {
             let _ = unsafe { libc::close(fd as c_int) };
             return 1;
@@ -342,6 +350,45 @@ fn landlock_abi() -> i32 {
     {
         -1
     }
+}
+
+/// fs access rights the running Landlock ABI can be asked to handle.
+///
+/// Refer arrived in ABI 2 and truncate in ABI 5. A kernel that does not know
+/// a right REJECTS a ruleset claiming it (E2BIG), so a fixed ABI-6 mask on an
+/// ABI-2 kernel failed create_ruleset outright and Tier 0 refused to run at
+/// all — on a host whose Landlock is real, just older. The handled mask now
+/// matches the running ABI, and the rules grant only handled rights.
+///
+/// Rights ABOVE the running ABI are not restrictable there (Landlock bounds
+/// only what it is asked to bound): on ABI 1, refer/truncate are
+/// unrestricted. That is the kernel's own limit and is listed in the README
+/// known-limits alongside the seccomp blocklist gaps. Landlock being ABSENT
+/// (abi < 1) is different and still refuses to run.
+fn handled_fs_rights(abi: i32) -> u64 {
+    if abi < 1 {
+        return 0;
+    }
+    let mut r = LANDLOCK_FS_EXECUTE
+        | LANDLOCK_FS_WRITE_FILE
+        | LANDLOCK_FS_READ_FILE
+        | LANDLOCK_FS_READ_DIR
+        | LANDLOCK_FS_REMOVE_DIR
+        | LANDLOCK_FS_REMOVE_FILE
+        | LANDLOCK_FS_MAKE_CHAR
+        | LANDLOCK_FS_MAKE_DIR
+        | LANDLOCK_FS_MAKE_REG
+        | LANDLOCK_FS_MAKE_SOCK
+        | LANDLOCK_FS_MAKE_FIFO
+        | LANDLOCK_FS_MAKE_BLOCK
+        | LANDLOCK_FS_MAKE_SYM;
+    if abi >= 2 {
+        r |= LANDLOCK_FS_REFER;
+    }
+    if abi >= 5 {
+        r |= LANDLOCK_FS_TRUNCATE;
+    }
+    r
 }
 
 pub struct NsBackend {
@@ -1040,8 +1087,23 @@ fn apply_landlock(workspace: &str) {
     }
     #[cfg(target_arch = "x86_64")]
     {
-        // Ruleset must declare every right any of its rules will use.
-        let ws_rights = LANDLOCK_FS_READ_FILE
+        // Landlock must be PRESENT — that is the fail-closed line. The
+        // restriction SET is whatever this kernel's ABI can handle: claiming a
+        // right the kernel does not know makes create_ruleset fail outright,
+        // which used to refuse Tier 0 on every host older than ABI 6 even
+        // though its Landlock is real.
+        let abi = landlock_abi();
+        if abi < 1 {
+            child_die(
+                124,
+                b"toolcage: landlock unavailable; refusing to run without the fs boundary",
+            );
+        }
+        let handled = handled_fs_rights(abi);
+
+        // Ruleset must declare every right any of its rules will use — and no
+        // right the kernel does not know.
+        let ws_rights = (LANDLOCK_FS_READ_FILE
             | LANDLOCK_FS_WRITE_FILE
             | LANDLOCK_FS_READ_DIR
             | LANDLOCK_FS_MAKE_DIR
@@ -1052,11 +1114,13 @@ fn apply_landlock(workspace: &str) {
             | LANDLOCK_FS_REMOVE_FILE
             | LANDLOCK_FS_TRUNCATE
             | LANDLOCK_FS_EXECUTE
-            | LANDLOCK_FS_REFER;
-        let sys_rights = LANDLOCK_FS_READ_FILE | LANDLOCK_FS_READ_DIR | LANDLOCK_FS_EXECUTE;
+            | LANDLOCK_FS_REFER)
+            & handled;
+        let sys_rights =
+            (LANDLOCK_FS_READ_FILE | LANDLOCK_FS_READ_DIR | LANDLOCK_FS_EXECUTE) & handled;
         let all_rights = ws_rights | sys_rights;
 
-        // Probe/create ruleset with the ABI this host's headers use.
+        // Create the ruleset with the rights this ABI handles.
         let attr = LandlockRulesetAttr {
             handled_access_fs: all_rights,
             handled_access_net: 0,
@@ -1740,6 +1804,35 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn landlock_rights_follow_the_running_abi() {
+        // A kernel that does not know a right REJECTS a ruleset claiming it,
+        // so the handled mask must track the running ABI or Tier 0 refuses to
+        // run on any host older than the build machine's headers.
+        let base = handled_fs_rights(1);
+        assert_eq!(base & LANDLOCK_FS_REFER, 0, "refer is ABI 2+");
+        assert_eq!(base & LANDLOCK_FS_TRUNCATE, 0, "truncate is ABI 5+");
+        assert_ne!(base & LANDLOCK_FS_READ_FILE, 0);
+        assert_ne!(base & LANDLOCK_FS_WRITE_FILE, 0);
+
+        let abi2 = handled_fs_rights(2);
+        assert_ne!(abi2 & LANDLOCK_FS_REFER, 0, "ABI 2 handles refer");
+        assert_eq!(abi2 & LANDLOCK_FS_TRUNCATE, 0, "truncate is still ABI 5+");
+
+        let abi5 = handled_fs_rights(5);
+        assert_ne!(abi5 & LANDLOCK_FS_REFER, 0);
+        assert_ne!(abi5 & LANDLOCK_FS_TRUNCATE, 0, "ABI 5 handles truncate");
+
+        // Newer ABIs keep every right.
+        assert_eq!(handled_fs_rights(10), abi5);
+
+        // No Landlock at all: nothing is handled (and the caller must refuse
+        // to run — handled_fs_rights(0) must never produce a mask that
+        // create_ruleset would accept as "restrict nothing").
+        assert_eq!(handled_fs_rights(0), 0);
+        assert_eq!(handled_fs_rights(-1), 0);
     }
 
     #[test]
