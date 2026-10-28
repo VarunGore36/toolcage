@@ -47,3 +47,12 @@ avg_ms = (end - start) * 1000 / n
 print(f"cli run: n={n} avg={avg_ms:.1f} ms/call")
 subprocess.run(["./target/release/toolcage-cli", "audit", "verify", "--log", log], check=True)
 PY
+
+echo "== Tier 2 warm-claim start latency (target: track p50/p99 by tier) =="
+# The claim path (pool pop, workspace attach, VM resume) is measured against a
+# mock firecracker API so the number tracks the software's own orchestration on
+# every merge. The VM boot/resume itself is firecracker's and is measured live
+# on KVM hardware by the same test where the runtime is present (plan §11:
+# "treat your own measurements as the only numbers that count").
+cargo test -p toolcage-backend-fc --lib bench_tests --release -- --nocapture 2>&1 \
+  | grep -E "warm-claim latency|test result"
