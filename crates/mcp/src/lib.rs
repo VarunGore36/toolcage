@@ -25,16 +25,38 @@ use std::collections::BTreeSet;
 #[derive(Debug, Deserialize)]
 pub struct RpcReq {
     pub jsonrpc: String,
-    pub id: serde_json::Value,
+    /// `None` is a JSON-RPC notification (no `id` member): the server MUST
+    /// NOT reply. `Some` is a request and must be answered with the same id.
+    #[serde(default)]
+    pub id: Option<serde_json::Value>,
     pub method: String,
+    #[serde(default)]
     pub params: serde_json::Value,
 }
+
+/// Largest request `id` echoed back. The id is reflected in the response, so
+/// an unbounded one is a memory amplifier for anyone who can write a line.
+pub const MAX_ID_BYTES: usize = 256;
+
+/// JSON-RPC 2.0 standard error codes (the deny path intentionally uses the
+/// server-error range instead: a policy denial is not a protocol error).
+pub const PARSE_ERROR: i32 = -32700;
+pub const INVALID_REQUEST: i32 = -32600;
+pub const METHOD_NOT_FOUND: i32 = -32601;
+pub const INVALID_PARAMS: i32 = -32602;
+pub const INTERNAL_ERROR: i32 = -32603;
 
 #[derive(Debug, Serialize)]
 pub struct RpcResp {
     pub jsonrpc: String,
     pub id: serde_json::Value,
+    /// Exactly ONE of result/error is present. The spec says the error member
+    /// MUST NOT exist when there is no error (and vice versa), so both are
+    /// skipped when absent — a response with `"error": null` on success is
+    /// non-conforming.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<RpcErr>,
 }
 
@@ -64,6 +86,55 @@ impl RpcResp {
                 message: format!("denied ({})", rules.join(",")),
             }),
         }
+    }
+    /// A protocol error with a JSON-RPC 2.0 standard code.
+    pub fn error(id: serde_json::Value, code: i32, message: impl Into<String>) -> Self {
+        Self {
+            jsonrpc: "2.0".into(),
+            id,
+            result: None,
+            error: Some(RpcErr {
+                code,
+                message: message.into(),
+            }),
+        }
+    }
+}
+
+impl RpcReq {
+    /// Validate request shape per JSON-RPC 2.0. Returns the standard error
+    /// code and message for a malformed request, or Ok when well-formed.
+    pub fn validate(&self) -> Result<(), (i32, String)> {
+        if self.jsonrpc != "2.0" {
+            return Err((
+                INVALID_REQUEST,
+                format!("unsupported jsonrpc version: {}", self.jsonrpc),
+            ));
+        }
+        // The id is reflected in the response, so it must be a legal JSON-RPC
+        // id (string, number or null) and small — an object/array id is not
+        // valid and an unbounded one is a memory amplifier.
+        match &self.id {
+            None => Ok(()), // notification: no id to bound
+            Some(serde_json::Value::String(s)) => {
+                if s.len() > MAX_ID_BYTES {
+                    Err((INVALID_REQUEST, "id too large".into()))
+                } else {
+                    Ok(())
+                }
+            }
+            Some(serde_json::Value::Number(_)) | Some(serde_json::Value::Null) => Ok(()),
+            Some(_) => Err((
+                INVALID_REQUEST,
+                "id must be a string, number, or null".into(),
+            )),
+        }
+    }
+
+    /// True for a JSON-RPC notification (no `id` member): the server MUST
+    /// process it but MUST NOT reply.
+    pub fn is_notification(&self) -> bool {
+        self.id.is_none()
     }
 }
 
@@ -494,6 +565,85 @@ mod tests {
         let p = l.propose();
         assert!(p.to_string().contains("new.example.com"));
     }
+    #[test]
+    fn rpc_response_omits_absent_members() {
+        // JSON-RPC 2.0: the error member MUST NOT exist on success (and
+        // result must not exist on error). The old struct serialized both as
+        // `null`, which is non-conforming and confuses strict clients.
+        let ok = RpcResp::ok(serde_json::json!(1), serde_json::json!({"x": 1}));
+        let s = serde_json::to_string(&ok).unwrap();
+        assert!(!s.contains("\"error\""), "success must omit error: {s}");
+        assert!(s.contains("\"result\""), "success must carry result: {s}");
+
+        let err = RpcResp::error(serde_json::json!(1), INVALID_REQUEST, "bad");
+        let s = serde_json::to_string(&err).unwrap();
+        assert!(!s.contains("\"result\""), "error must omit result: {s}");
+        assert!(s.contains("\"error\""), "error must carry error: {s}");
+
+        let deny = RpcResp::deny(serde_json::json!(1), &["r".into()]);
+        let s = serde_json::to_string(&deny).unwrap();
+        assert!(!s.contains("\"result\""), "deny must omit result: {s}");
+    }
+
+    #[test]
+    fn validate_rejects_bad_version_and_id() {
+        let mk = |jsonrpc: &str, id: serde_json::Value| RpcReq {
+            jsonrpc: jsonrpc.into(),
+            id: Some(id),
+            method: "tools/list".into(),
+            params: serde_json::Value::Null,
+        };
+        // Version must be exactly "2.0".
+        assert!(mk("2.0", serde_json::json!(1)).validate().is_ok());
+        let (code, _) = mk("1.0", serde_json::json!(1)).validate().unwrap_err();
+        assert_eq!(code, INVALID_REQUEST);
+        let (code, _) = mk("", serde_json::json!(1)).validate().unwrap_err();
+        assert_eq!(code, INVALID_REQUEST);
+
+        // Id must be a string, number or null — not an object or array.
+        assert!(mk("2.0", serde_json::Value::Null).validate().is_ok());
+        assert!(mk("2.0", serde_json::json!("abc")).validate().is_ok());
+        let (code, _) = mk("2.0", serde_json::json!({"a": 1})).validate().unwrap_err();
+        assert_eq!(code, INVALID_REQUEST);
+        let (code, _) = mk("2.0", serde_json::json!([1, 2])).validate().unwrap_err();
+        assert_eq!(code, INVALID_REQUEST);
+
+        // Id size is bounded: it is reflected in the response.
+        let big = "x".repeat(MAX_ID_BYTES + 1);
+        let (code, _) = mk("2.0", serde_json::json!(big)).validate().unwrap_err();
+        assert_eq!(code, INVALID_REQUEST);
+        let ok = "x".repeat(MAX_ID_BYTES);
+        assert!(mk("2.0", serde_json::json!(ok)).validate().is_ok());
+    }
+
+    #[test]
+    fn notifications_are_flagged_and_unversioned_ids_rejected() {
+        // No id member = a notification: process but never reply.
+        let n = RpcReq {
+            jsonrpc: "2.0".into(),
+            id: None,
+            method: "tools/call".into(),
+            params: serde_json::Value::Null,
+        };
+        assert!(n.is_notification());
+        assert!(n.validate().is_ok());
+
+        let r = RpcReq {
+            jsonrpc: "2.0".into(),
+            id: Some(serde_json::json!(7)),
+            method: "tools/call".into(),
+            params: serde_json::Value::Null,
+        };
+        assert!(!r.is_notification());
+
+        // Standard error codes are the spec's values.
+        assert_eq!(PARSE_ERROR, -32700);
+        assert_eq!(INVALID_REQUEST, -32600);
+        assert_eq!(METHOD_NOT_FOUND, -32601);
+        assert_eq!(INVALID_PARAMS, -32602);
+        assert_eq!(INTERNAL_ERROR, -32603);
+    }
+
     #[test]
     fn server_cmd_shell_rejected() {
         assert!(check_server_cmd(&["sh".to_string(), "-c".to_string(), "x".to_string()]).is_err());

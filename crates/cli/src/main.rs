@@ -704,17 +704,43 @@ fn main() -> anyhow::Result<()> {
                     if line.trim().is_empty() {
                         continue;
                     }
+                    // Bound the frame: the id is reflected and the line is
+                    // parsed whole, so an unbounded line is a memory amp.
+                    if line.len() > 64 * 1024 {
+                        let r = toolcage_mcp::RpcResp::error(
+                            serde_json::Value::Null,
+                            toolcage_mcp::PARSE_ERROR,
+                            "frame too large",
+                        );
+                        println!("{}", serde_json::to_string(&r)?);
+                        continue;
+                    }
                     let req: toolcage_mcp::RpcReq = match serde_json::from_str(&line) {
                         Ok(r) => r,
                         Err(e) => {
-                            let r = toolcage_mcp::RpcResp::deny(
+                            // Parse error: the id is unknowable, so it is null.
+                            let r = toolcage_mcp::RpcResp::error(
                                 serde_json::Value::Null,
-                                &[format!("bad-request:{e}")],
+                                toolcage_mcp::PARSE_ERROR,
+                                format!("parse error: {e}"),
                             );
                             println!("{}", serde_json::to_string(&r)?);
                             continue;
                         }
                     };
+                    // JSON-RPC 2.0 request shape: version, id type and size.
+                    if let Err((code, msg)) = req.validate() {
+                        let r = toolcage_mcp::RpcResp::error(
+                            req.id.clone().unwrap_or(serde_json::Value::Null),
+                            code,
+                            msg,
+                        );
+                        println!("{}", serde_json::to_string(&r)?);
+                        continue;
+                    }
+                    // A notification is processed but MUST NOT be answered.
+                    let respond = !req.is_notification();
+                    let id = req.id.clone().unwrap_or(serde_json::Value::Null);
                     let resp = if req.method == "tools/call" {
                         match serde_json::from_value::<toolcage_mcp::CallParams>(req.params) {
                             Ok(cp) => match toolcage_mcp::route(
@@ -727,22 +753,30 @@ fn main() -> anyhow::Result<()> {
                                 &cp.name,
                                 &cp.arguments,
                             ) {
-                                Ok(v) => toolcage_mcp::RpcResp::ok(req.id, v),
-                                Err(e) => toolcage_mcp::RpcResp::deny(req.id, &[e.to_string()]),
+                                Ok(v) => toolcage_mcp::RpcResp::ok(id, v),
+                                Err(e) => toolcage_mcp::RpcResp::deny(id, &[e.to_string()]),
                             },
-                            Err(e) => {
-                                toolcage_mcp::RpcResp::deny(req.id, &[format!("bad-params:{e}")])
-                            }
+                            Err(e) => toolcage_mcp::RpcResp::error(
+                                id,
+                                toolcage_mcp::INVALID_PARAMS,
+                                format!("invalid params: {e}"),
+                            ),
                         }
                     } else if req.method == "tools/list" {
                         toolcage_mcp::RpcResp::ok(
-                            req.id,
+                            id,
                             serde_json::json!({"tools": ["run_command","read_file","write_file","http_fetch"]}),
                         )
                     } else {
-                        toolcage_mcp::RpcResp::deny(req.id, &["unknown-method".into()])
+                        toolcage_mcp::RpcResp::error(
+                            id,
+                            toolcage_mcp::METHOD_NOT_FOUND,
+                            "method not found",
+                        )
                     };
-                    println!("{}", serde_json::to_string(&resp)?);
+                    if respond {
+                        println!("{}", serde_json::to_string(&resp)?);
+                    }
                 }
             }
             McpOp::Call {
