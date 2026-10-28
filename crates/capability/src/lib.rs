@@ -125,7 +125,17 @@ fn mac_for(key: &Key, rev_id: &str, parent: &Option<String>, rights: &Rights) ->
     let mut mac =
         <Hmac<Sha256> as Mac>::new_from_slice(&key.0).expect("hmac accepts keys of any length");
     feed(&mut mac, rev_id.as_bytes());
-    feed(&mut mac, parent.clone().unwrap_or_default().as_bytes());
+    // Distinguish None from Some(...). They used to feed identically — both
+    // empty via unwrap_or_default — so a root (parent: None) and a
+    // hand-crafted Some("") token shared a tag: the chain SHAPE was forgeable
+    // without the key. The discriminant byte makes the two distinct.
+    match parent {
+        None => feed(&mut mac, &[0u8]),
+        Some(p) => {
+            feed(&mut mac, &[1u8]);
+            feed(&mut mac, p.as_bytes());
+        }
+    }
     feed(
         &mut mac,
         &serde_json::to_vec(rights).expect("rights serialize"),
@@ -611,6 +621,54 @@ mod tests {
         let res = rx.recv_timeout(std::time::Duration::from_secs(2));
         assert!(res.is_ok(), "is_revoked must terminate on a revoked cycle");
         assert!(res.unwrap(), "a revoked ancestor revokes through a cycle");
+    }
+
+    #[test]
+    fn none_parent_and_empty_some_parent_do_not_collide() {
+        // mac_for fed parent.unwrap_or_default(), so parent=None and
+        // parent=Some("") produced the SAME tag. The chain shape was therefore
+        // forgeable without the key: take a valid root, relabel it as a child
+        // of "" (or the reverse), and the tag still verifies.
+        let r = root();
+        assert!(r.verify_tag(&key()));
+        let relabeled = Token {
+            rev_id: r.rev_id.clone(),
+            parent: Some(String::new()),
+            rights: r.rights.clone(),
+            tag: r.tag.clone(),
+        };
+        assert!(
+            !relabeled.verify_tag(&key()),
+            "parent=None and parent=Some(\"\") must not share a tag"
+        );
+        // And the other direction: a token minted with Some("") must not pass
+        // as a root.
+        let child_of_empty = {
+            let t = Token {
+                rev_id: "r9".into(),
+                parent: Some(String::new()),
+                rights: r.rights.clone(),
+                tag: String::new(),
+            };
+            // Mint its real tag under the key (simulate what a signer would do).
+            let tag = hex_lower(
+                &mac_for(&key(), &t.rev_id, &t.parent, &t.rights)
+                    .finalize()
+                    .into_bytes(),
+            );
+            Token { tag, ..t }
+        };
+        assert!(child_of_empty.verify_tag(&key()));
+        let as_root = Token {
+            rev_id: child_of_empty.rev_id.clone(),
+            parent: None,
+            rights: child_of_empty.rights.clone(),
+            tag: child_of_empty.tag.clone(),
+        };
+        assert!(
+            !as_root.verify_tag(&key()),
+            "a child of the empty parent must not pass as a root"
+        );
     }
 
     #[test]
