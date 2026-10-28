@@ -893,6 +893,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "toolcage-backend",
+ "toolcage-guest-agent",
 ]
 
 [[package]]
