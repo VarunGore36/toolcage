@@ -643,6 +643,18 @@ fn isolated_exec(
                             None
                         };
                     }
+                    // EINTR: a signal interrupted the wait and the child's
+                    // state is unchanged. Abandoning it here (the old `_`
+                    // arm) reported no exit code and left the workload
+                    // running — keep polling instead.
+                    n if n < 0 => {
+                        if std::io::Error::last_os_error().kind()
+                            == std::io::ErrorKind::Interrupted
+                        {
+                            continue;
+                        }
+                        break None;
+                    }
                     _ => break None,
                 }
             };
@@ -876,7 +888,21 @@ fn kill_and_reap(pid: i32) {
     unsafe {
         libc::kill(pid, SIGKILL);
         let mut status: c_int = 0;
-        let _ = libc::waitpid(pid, &mut status, 0);
+        // Retry EINTR: a single interrupted wait used to be ignored (`let _ =`),
+        // which returned with the child unreaped — the exact zombie this
+        // function exists to prevent.
+        loop {
+            let r = libc::waitpid(pid, &mut status, 0);
+            if r == pid {
+                break;
+            }
+            if r < 0
+                && std::io::Error::last_os_error().kind()
+                    != std::io::ErrorKind::Interrupted
+            {
+                break; // ECHILD etc: nothing left to reap
+            }
+        }
     }
 }
 
@@ -1806,6 +1832,96 @@ mod tests {
             }
         }
         out
+    }
+
+    extern "C" fn noop_sigalrm(_sig: libc::c_int) {}
+
+    #[test]
+    fn kill_and_reap_reaps_even_when_waitpid_is_interrupted() {
+        // waitpid returns EINTR when a signal lands mid-wait. The old `let _ =`
+        // ignored it and returned with the child unreaped — a zombie, the
+        // exact thing kill_and_reap exists to prevent. A signal storm makes
+        // the race near-certain: the helper process is hammered with SIGALRM
+        // every 50 µs while it runs kill_and_reap 200 times, so every waitpid
+        // window gets hit. The helper is a SEPARATE process so the storm
+        // cannot disturb the other tests in this binary, and it does no
+        // allocation after fork (fork-safety). Probabilistic in principle,
+        // near-certain in practice.
+        // sigaction WITHOUT SA_RESTART: glibc's signal() sets SA_RESTART,
+        // which restarts waitpid after the handler and hides EINTR entirely.
+        unsafe {
+            let mut act: libc::sigaction = std::mem::zeroed();
+            act.sa_sigaction = noop_sigalrm as libc::sighandler_t;
+            act.sa_flags = 0;
+            libc::sigemptyset(&mut act.sa_mask);
+            libc::sigaction(libc::SIGALRM, &act, std::ptr::null_mut());
+        }
+        let helper = unsafe { libc::fork() };
+        if helper == 0 {
+            // Helper: kill_and_reap under signal bombardment. No allocation.
+            // Pin to ONE CPU: the grandchild then cannot die while we run, so
+            // waitpid really blocks (on a multi-core host the SIGKILLed child
+            // dies in parallel and waitpid returns before any signal lands —
+            // the EINTR path would never be exercised).
+            unsafe {
+                let sz = std::mem::size_of::<libc::cpu_set_t>();
+                let mut cur: libc::cpu_set_t = std::mem::zeroed();
+                libc::sched_getaffinity(0, sz, &mut cur as *mut libc::cpu_set_t);
+                // Pin to the first CPU this process may actually use: a fixed
+                // CPU 0 can be outside the cgroup cpuset and the call then
+                // fails silently, leaving the grandchildren free to die in
+                // parallel (no blocking wait, no EINTR).
+                let first = (0..libc::CPU_SETSIZE as usize)
+                    .find(|c| libc::CPU_ISSET(*c, &cur))
+                    .unwrap_or(0);
+                let mut one: libc::cpu_set_t = std::mem::zeroed();
+                libc::CPU_ZERO(&mut one);
+                libc::CPU_SET(first, &mut one);
+                libc::sched_setaffinity(0, sz, &one as *const libc::cpu_set_t);
+            }
+            let mut bad: libc::c_int = 0;
+            let mut forks: libc::c_int = 0;
+            for _ in 0..200 {
+                let g = unsafe { libc::fork() };
+                if g == 0 {
+                    // grandchild: live until SIGKILLed
+                    loop {
+                        unsafe { libc::pause() };
+                    }
+                }
+                if g > 0 {
+                    kill_and_reap(g);
+                    // A follow-up wait must find NOTHING: ECHILD (-1) means
+                    // kill_and_reap already reaped. Anything else (0 = alive,
+                    // g = reaped here instead) means it returned with its
+                    // child unreaped.
+                    let mut st: libc::c_int = 0;
+                    let r = unsafe { libc::waitpid(g, &mut st, WNOHANG) };
+                    if r != -1 {
+                        bad += 1;
+                    }
+                    forks += 1;
+                }
+            }
+            unsafe { libc::_exit(if forks == 200 { bad } else { 100 }) };
+        }
+        // Parent: hammer the helper with SIGALRM while it works.
+        let hammer = std::thread::spawn(move || {
+            // Tight loop: a sleeping interval would be rounded up to the
+            // timer granularity and leave the wait windows unhit.
+            let end = Instant::now() + Duration::from_millis(500);
+            while Instant::now() < end {
+                unsafe { libc::kill(helper, libc::SIGALRM) };
+            }
+        });
+        let mut st: libc::c_int = 0;
+        unsafe { libc::waitpid(helper, &mut st, 0) };
+        let _ = hammer.join();
+        unsafe { libc::signal(libc::SIGALRM, libc::SIG_DFL) };
+        assert!(
+            WIFEXITED(st) && WEXITSTATUS(st) == 0,
+            "kill_and_reap left a child unreaped under signal interruption"
+        );
     }
 
     #[test]
