@@ -45,7 +45,17 @@ pub struct HostReply {
 
 /// Validate inbound message (fuzz target): tiny, no shell, bounded sizes.
 pub fn validate(msg: &GuestMsg) -> anyhow::Result<()> {
-    anyhow::ensure!(msg.id.len() <= 64, "id too long");
+    // The id is echoed back in HostReply and lands in logs and terminal
+    // output: length alone is not enough. A newline, NUL, or ANSI escape in
+    // it is log/terminal injection from the guest. Portable identifier
+    // charset only — the same rule the env-ref names follow.
+    anyhow::ensure!(!msg.id.is_empty() && msg.id.len() <= 64, "id bounds");
+    anyhow::ensure!(
+        msg.id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-'),
+        "bad id charset"
+    );
     match &msg.op {
         GuestOp::Exec { argv, env_refs } => {
             anyhow::ensure!(!argv.is_empty() && argv.len() <= 64, "argv bounds");
@@ -131,6 +141,39 @@ fn normalize_path(p: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn id_charset_is_bounded_not_just_length() {
+        // The id is echoed in HostReply and logged: a newline, NUL or ANSI
+        // escape in it is injection from the guest. Length alone is not enough.
+        let with_id = |id: String| GuestMsg {
+            id,
+            op: GuestOp::Heartbeat,
+        };
+        // Valid identifier chars pass (this is the portable charset the env
+        // ref names already use).
+        for id in ["1".to_string(), "abc-123_4.5".to_string(), "A".repeat(64)] {
+            assert!(validate(&with_id(id.clone())).is_ok(), "id {id:?}");
+        }
+        // Control characters, spaces and non-ASCII are refused.
+        for id in [
+            String::new(),
+            "a\nb".to_string(),
+            "a\r\nb".to_string(),
+            "a\0b".to_string(),
+            "a\u{1b}[31m".to_string(),
+            "a b".to_string(),
+            "a/b".to_string(),
+            "a:b".to_string(),
+            "\u{e9}".to_string(),
+            "A".repeat(65),
+        ] {
+            assert!(
+                validate(&with_id(id.clone())).is_err(),
+                "id {id:?} must be refused"
+            );
+        }
+    }
+
     #[test]
     fn rejects_nul_and_abs_path_escape() {
         let m = GuestMsg {
