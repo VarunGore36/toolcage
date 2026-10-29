@@ -72,7 +72,7 @@ fn hash_argv(argv: &[String]) -> String {
         // wrapping mod 256 (the old as u8 did). The trailing NUL still
         // disambiguates for NUL-free args, and the prefix is the only
         // discriminator when args contain NUL.
-        h.update(&(a.len() as u64).to_be_bytes());
+        h.update((a.len() as u64).to_be_bytes());
         h.update(a.as_bytes());
         h.update([0u8]);
     }

@@ -54,6 +54,9 @@ use nix::sys::stat::Mode;
 use nix::unistd::{close, fork, pipe2, ForkResult};
 use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
 
+// Test fixture value: exec() takes `cap` from the caller now, so the 1 MiB
+// default lives in the tests that exercise the cap.
+#[cfg(test)]
 const OUTPUT_CAP: usize = 1024 * 1024;
 /// How long an output reader waits past the kill deadline for the last bytes.
 /// Bounds the case where a grandchild inherits the pipe write end and keeps it
@@ -906,7 +909,7 @@ fn kill_and_reap(pid: i32) {
     }
 }
 
-/// Read one output pipe to EOF, capped at OUTPUT_CAP. Runs on its own thread
+/// Read one output pipe to EOF, capped at `cap`. Runs on its own thread
 /// in the parent so a chatty workload cannot fill the pipe and deadlock
 /// against the waitpid loop. Past the cap the excess is discarded but draining
 /// continues, so a large-output workload still reaches its real exit code and
@@ -1851,7 +1854,7 @@ mod tests {
         // which restarts waitpid after the handler and hides EINTR entirely.
         unsafe {
             let mut act: libc::sigaction = std::mem::zeroed();
-            act.sa_sigaction = noop_sigalrm as libc::sighandler_t;
+            act.sa_sigaction = noop_sigalrm as *const () as libc::sighandler_t;
             act.sa_flags = 0;
             libc::sigemptyset(&mut act.sa_mask);
             libc::sigaction(libc::SIGALRM, &act, std::ptr::null_mut());

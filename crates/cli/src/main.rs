@@ -578,7 +578,7 @@ fn main() -> anyhow::Result<()> {
                 // would both collapse to out/a.key.hex and clobber each other.
                 let key_name = format!("{}.key.hex", out_prefix.display());
                 let dest = std::path::Path::new(&key_name);
-                write_secret(&dest, k.to_hex().as_bytes())?;
+                write_secret(dest, k.to_hex().as_bytes())?;
                 println!("wrote {}", dest.display());
             }
             TokenOp::Mint { rev, out, key_hex } => {
@@ -890,7 +890,7 @@ fn main() -> anyhow::Result<()> {
                 let dest = std::path::Path::new(&checkpoint_name);
                 // REVIEW: key file stays host-side; checkpoint (sig+pubkey) is
                 // public. Never commit *-secret.hex.
-                std::fs::write(&dest, serde_json::to_string_pretty(&cp)?)?;
+                std::fs::write(dest, serde_json::to_string_pretty(&cp)?)?;
                 println!("checkpoint seq={n} -> {}", dest.display());
             }
             Audit::Keygen { out_prefix } => {

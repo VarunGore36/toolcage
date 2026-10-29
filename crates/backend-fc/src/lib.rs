@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
 
-const OUTPUT_CAP: usize = 1024 * 1024;
+
 
 // ---------------------------------------------------------------------------
 // Firecracker session configuration
@@ -792,9 +792,6 @@ fn configure_and_start(socket: &str, cfg: &FcConfig, workspace_host_path: &str) 
     Ok(())
 }
 
-
-    /// Check VM state via REST API.
-
 impl FcVm {
     /// Boot the VM: launch firecracker, configure boot source, machine,
     /// drives, vsock, then start.
@@ -1145,7 +1142,7 @@ mod tests {
         let mem = write("mem", b"guest-ram-data");
         let kernel = write("kernel", b"vmlinux-data");
         let rootfs = write("rootfs", b"rootfs-data");
-        let hash = |p: &std::path::Path| hex_encode(&sha2::Sha256::digest(&std::fs::read(p).unwrap()));
+        let hash = |p: &std::path::Path| hex_encode(&sha2::Sha256::digest(std::fs::read(p).unwrap()));
 
         // All correct hashes pass.
         assert!(verify_snapshot_hash(snap.to_str().unwrap(), &hash(&snap)).is_ok());

@@ -32,6 +32,9 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
 
+// Test fixture value: exec() takes `cap` from the caller now, so the 1 MiB
+// default lives in the tests that exercise the cap.
+#[cfg(test)]
 const OUTPUT_CAP: usize = 1024 * 1024;
 
 /// The container's long-running init (`process.args` in the OCI spec). This is

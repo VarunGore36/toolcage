@@ -167,7 +167,7 @@ fn checkpoint_msg(seq: u64, head: &str, time: &str) -> Vec<u8> {
 
 fn hex_decode(s: &str) -> anyhow::Result<Vec<u8>> {
     let b = s.as_bytes();
-    anyhow::ensure!(b.len() % 2 == 0, "odd hex");
+    anyhow::ensure!(b.len().is_multiple_of(2), "odd hex");
     let mut out = Vec::with_capacity(b.len() / 2);
     for i in (0..b.len()).step_by(2) {
         out.push((hex_val(b[i])? << 4) | hex_val(b[i + 1])?);

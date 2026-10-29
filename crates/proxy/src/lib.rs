@@ -518,9 +518,7 @@ fn decode_chunked(body: &[u8]) -> Option<Vec<u8>> {
             return Some(out);
         }
         // Skip the CRLF after the chunk data.
-        if find_crlf(body, pos).is_none() {
-            return None;
-        }
+        find_crlf(body, pos)?;
         pos += 2;
     }
 }

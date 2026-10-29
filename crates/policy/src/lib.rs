@@ -271,6 +271,7 @@ pub fn method_is_token(m: &str) -> bool {
 ///     past a `/**` prefix, since the upstream decodes and normalizes those
 ///     itself (`/repos/acme/app/../../../evil` matches the prefix as a string
 ///     but resolves to `/evil` upstream).
+///
 /// A clean target is already canonical, so prefix matching on it is sound.
 pub fn request_target_is_clean(p: &str) -> bool {
     if !p.starts_with('/') {
