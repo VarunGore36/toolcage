@@ -766,37 +766,13 @@ fn isolated_exec(
             apply_landlock(&spec.workspace);
             // 5. seccomp-BPF: block sockets, namespace/mount/ptrace/module ops.
             apply_seccomp(&seccomp_insns);
-            // env_clear: replace environ with minimal PATH (no secrets leak).
+            // env_clear: zero every inherited environ entry (no secrets leak).
             // Raw pointer manipulation — no allocation.
             unsafe {
                 extern "C" {
                     static mut environ: *mut *mut c_char;
                 }
-                if !environ.is_null() {
-                    let mut i = 0usize;
-                    while !(*environ.add(i)).is_null() {
-                        let entry = *environ.add(i);
-                        let mut eq = 0usize;
-                        while entry.add(eq).read() != b'=' as c_char && entry.add(eq).read() != 0 {
-                            eq += 1;
-                        }
-                        let is_path = eq == 4
-                            && entry.add(0).read() == b'P' as c_char
-                            && entry.add(1).read() == b'A' as c_char
-                            && entry.add(2).read() == b'T' as c_char
-                            && entry.add(3).read() == b'H' as c_char;
-                        if is_path {
-                            let new_val = b"PATH=/usr/bin:/bin\0";
-                            for (j, &byte) in new_val.iter().enumerate() {
-                                entry.add(j).write(byte as c_char);
-                            }
-                            entry.add(new_val.len()).write(0);
-                        } else {
-                            entry.write(0);
-                        }
-                        i += 1;
-                    }
-                }
+                scrub_environ(environ);
             }
             // stdin -> /dev/null: never inherit the caller's stdin. In the MCP
             // deployment fd 0 is the guest-controlled JSON-RPC stream, so a
@@ -1027,6 +1003,32 @@ fn build_seccomp_insns() -> Vec<sock_filter> {
         k: SECCOMP_RET_ALLOW,
     });
     insns
+}
+
+/// Zero every entry of an environ array in place. No allocation — this runs
+/// between clone and execve (see the zero-allocation rule).
+///
+/// The inherited environment may carry host secrets (I2), so the child scrubs
+/// it before the workload starts and keeps it scrubbed if execve fails. Each
+/// entry is zeroed over its own length, terminator included: the previous
+/// version rewrote PATH in place with a fixed 20-byte value — a heap write
+/// past any shorter entry's allocation — and NUL-prefixed every other entry,
+/// which left the secret bytes sitting right behind the NUL.
+unsafe fn scrub_environ(envp: *mut *mut c_char) {
+    if envp.is_null() {
+        return;
+    }
+    let mut i = 0usize;
+    while !(*envp.add(i)).is_null() {
+        let entry = *envp.add(i);
+        let mut len = 0usize;
+        while entry.add(len).read() != 0 {
+            entry.add(len).write(0);
+            len += 1;
+        }
+        entry.add(len).write(0); // the terminator too
+        i += 1;
+    }
 }
 
 /// Install the seccomp-BPF program. No allocation (runs in the forked child):
@@ -1804,6 +1806,52 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn environ_scrub_zeroes_entries_without_overflowing() {
+        // Each entry is its C-string followed by sentinel bytes that must NOT
+        // be touched. The old scrub rewrote PATH in place with a fixed
+        // 20-byte value — a heap write past any shorter entry — and
+        // NUL-prefixed every other entry, leaving the secret bytes behind the
+        // NUL. The contract: zero the whole entry, terminator included, and
+        // write nothing past it.
+        let mut path_entry = b"PATH=/bin\0".to_vec();
+        path_entry.extend_from_slice(&[0xAA; 32]);
+        let mut secret_entry = b"SECRET=hunter2\0".to_vec();
+        secret_entry.extend_from_slice(&[0xAA; 32]);
+        let mut home_entry = b"HOME=/root\0".to_vec();
+        home_entry.extend_from_slice(&[0xAA; 32]);
+        let nul_path = b"PATH=/bin\0".len();
+        let nul_secret = b"SECRET=hunter2\0".len();
+        let nul_home = b"HOME=/root\0".len();
+
+        let mut ptrs: Vec<*mut c_char> = vec![
+            path_entry.as_mut_ptr() as *mut c_char,
+            secret_entry.as_mut_ptr() as *mut c_char,
+            home_entry.as_mut_ptr() as *mut c_char,
+            std::ptr::null_mut(),
+        ];
+        unsafe { scrub_environ(ptrs.as_mut_ptr()) };
+
+        // Every entry is zeroed through its original terminator: no secret
+        // bytes survive behind a leading NUL.
+        for (name, e, n) in [
+            ("PATH", &path_entry, nul_path),
+            ("SECRET", &secret_entry, nul_secret),
+            ("HOME", &home_entry, nul_home),
+        ] {
+            assert!(
+                e[..n].iter().all(|&b| b == 0),
+                "{name} entry must be fully zeroed: {:?}",
+                &e[..n]
+            );
+            assert!(
+                e[n..].iter().all(|&b| b == 0xAA),
+                "{name} scrub must not write past the entry's terminator: {:?}",
+                &e[n..]
+            );
+        }
     }
 
     #[test]
