@@ -210,6 +210,11 @@ fn read_capped(mut r: impl Read, cap: usize) -> (Vec<u8>, bool) {
                     truncated = true;
                 }
             }
+            // A read error must not END the drain: returning here drops the
+            // reader, which closes the pipe and SIGPIPEs the writer
+            // mid-stream (the same corruption the early `take` used to
+            // cause). Retry EINTR; only a hard error may stop us.
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
     }
@@ -604,6 +609,48 @@ mod tests {
         // the runsc exec client, corrupting its exit code.
         let (buf, t) = read_capped(std::io::Cursor::new(vec![7u8; 5000]), 100);
         assert_eq!(buf.len(), 100);
+        assert!(t);
+    }
+
+    /// A reader that returns EINTR once, then data.
+    struct FlakyRead {
+        data: Vec<u8>,
+        pos: usize,
+        failed: bool,
+    }
+    impl Read for FlakyRead {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.failed {
+                self.failed = true;
+                return Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+            }
+            if self.pos >= self.data.len() {
+                return Ok(0);
+            }
+            let n = (self.data.len() - self.pos).min(buf.len());
+            buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn read_capped_survives_eintr_without_closing_the_pipe() {
+        // A read error must not END the drain: returning drops the reader,
+        // which closes the pipe and SIGPIPEs the runsc exec client still
+        // writing to it (its exit code comes back corrupted). EINTR — a
+        // signal during the read — is the common case and must be retried.
+        let r = FlakyRead {
+            data: vec![7u8; 500],
+            pos: 0,
+            failed: false,
+        };
+        let (buf, t) = read_capped(r, 100);
+        assert_eq!(
+            buf.len(),
+            100,
+            "the stream must be drained through the EINTR (kept capped)"
+        );
         assert!(t);
     }
 

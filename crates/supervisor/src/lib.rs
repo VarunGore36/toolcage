@@ -90,6 +90,35 @@ fn request_size_estimate(method: &str, path: &str, headers: &[(String, String)])
     (n + 256) as u64 // safety margin
 }
 
+/// Read `r` to EOF, keeping at most `cap` bytes and reporting truncation.
+/// Drains past the cap on purpose: dropping the reader early closes the pipe
+/// and SIGPIPEs the workload still writing to it (its exit code comes back
+/// corrupted). Memory stays bounded — bytes past the cap are discarded, so a
+/// fork-bomb writer cannot OOM the supervisor. Read errors retry (EINTR);
+/// only EOF or a hard error ends the drain.
+fn read_capped_drain(mut r: impl std::io::Read, cap: usize) -> (Vec<u8>, bool) {
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 4096];
+    let mut truncated = false;
+    loop {
+        match r.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => {
+                if buf.len() < cap {
+                    let take = (cap - buf.len()).min(n);
+                    buf.extend_from_slice(&tmp[..take]);
+                    truncated |= take < n;
+                } else {
+                    truncated = true;
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    (buf, truncated)
+}
+
 /// SIGKILL a workload's whole process group and reap the direct child.
 ///
 /// The unconfined spawn is process_group(0)'d, so the child leads a group
@@ -237,9 +266,9 @@ impl Supervisor {
         let mut rule_ids = d.rule_ids.clone();
         rule_ids.push("isolation:unisolated".to_string());
         // env_clear: child never inherits host secrets (I2). Keep only minimal PATH.
-        // Streaming cap: read at most cap+1 bytes per stream so a fork-bomb
-        // writer cannot OOM the supervisor; overrun sets truncated=true.
-        use std::io::Read;
+        // Streaming cap: keep at most `cap` bytes per stream but DRAIN to EOF,
+        // so a fork-bomb writer cannot OOM the supervisor AND never sees a
+        // closed pipe (an early close SIGPIPEs it and corrupts its exit code).
         use std::os::unix::process::CommandExt;
         use std::process::Stdio;
         use std::sync::mpsc::channel;
@@ -259,18 +288,18 @@ impl Supervisor {
         let mut co = child.stdout.take();
         let mut ce = child.stderr.take();
         std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(f) = co.take() {
-                let _ = f.take((cap + 1) as u64).read_to_end(&mut buf);
-            }
-            let _ = tx_out.send(buf);
+            let out = match co.take() {
+                Some(f) => read_capped_drain(f, cap),
+                None => (Vec::new(), false),
+            };
+            let _ = tx_out.send(out);
         });
         std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(f) = ce.take() {
-                let _ = f.take((cap + 1) as u64).read_to_end(&mut buf);
-            }
-            let _ = tx_err.send(buf);
+            let out = match ce.take() {
+                Some(f) => read_capped_drain(f, cap),
+                None => (Vec::new(), false),
+            };
+            let _ = tx_err.send(out);
         });
         // Wall-clock timeout: poll, kill the whole process group on expiry
         // (fail-closed). `child.kill()` alone SIGKILLs only the direct child —
@@ -301,21 +330,13 @@ impl Supervisor {
                 }
             }
         };
-        let mut stdout = rx_out
+        let (stdout, out_trunc) = rx_out
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or_default();
-        let mut stderr = rx_err
+        let (stderr, err_trunc) = rx_err
             .recv_timeout(Duration::from_secs(5))
             .unwrap_or_default();
-        let mut truncated = timed_out;
-        if stdout.len() > cap {
-            stdout.truncate(cap);
-            truncated = true;
-        }
-        if stderr.len() > cap {
-            stderr.truncate(cap);
-            truncated = true;
-        }
+        let truncated = timed_out || out_trunc || err_trunc;
         w.append(Event {
             seq: 0,
             ts_wall: now_wall(),

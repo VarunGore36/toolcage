@@ -226,7 +226,7 @@ Third-party MCP servers run as **guest processes** under the same policy and aud
 
 ## Tests
 
-`cargo test --workspace` runs **178 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
+`cargo test --workspace` runs **180 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
 
 - **Escape suite** against the policy and proxy (I1, I6)
 - **Fuzzing** of the policy, guest-agent, audit, and proxy parsers
