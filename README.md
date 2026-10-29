@@ -171,6 +171,8 @@ $TC token attenuate --parent root.tok --rev child-1 --out child.tok \
 
 Tokens carry scoped, expiring authority and are revocable. Tags are **HMAC-SHA256 keyed with the host secret**, so a guest that reads a token can neither mint a sibling nor widen anything: forged and hand-edited tokens fail verification and are denied. Expiry is enforced, paths are traversal-normalized, and an empty rights list grants nothing on that axis. `fetch` requires a policy allow **and** a token that verifies against `--key-hex` — without a key, a presented token is denied, never waved through.
 
+Revocation covers the **whole subtree**: revoking a `rev_id` kills every token delegated from it, including ones that were never tracked explicitly, while revoking a child never affects its parent. The ancestor walk terminates even on hostile link shapes.
+
 ## Secrets
 
 ![Credential flow](assets/secrets.svg)
@@ -213,7 +215,7 @@ Clients: [`clients/python/toolcage.py`](clients/python/toolcage.py), [`clients/t
 
 ## MCP front door
 
-`mcp serve` exposes four tools over stdio JSON-RPC. Each is a policy-checked action:
+`mcp serve` exposes four tools over stdio JSON-RPC. The wire protocol is **JSON-RPC 2.0** (version-checked requests, standard error codes, responses carry exactly one of `result`/`error`, notifications get no reply, bounded frames and ids). Each tool is a policy-checked action:
 
 | Tool | Action | Notes |
 |---|---|---|
@@ -228,9 +230,10 @@ Third-party MCP servers run as **guest processes** under the same policy and aud
 
 `cargo test --workspace` runs **180 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
 
-- **Escape suite** against the policy and proxy (I1, I6)
+- **Escape suite** against the policy and proxy (I1, I6), and a Tier 2 escape suite asserting the design closes each exit — vsock-only with no network device ever configured, jailer confinement of the VMM process, and a control-channel escape matrix
 - **Fuzzing** of the policy, guest-agent, audit, and proxy parsers
 - **Chaos tests** that fail the audit disk, proxy, and broker, revoke tokens mid-run, and exceed budgets, asserting every case fails closed
+- **Property tests** over capability chains (200 seeds): a delegation never widens, and revoking an ancestor kills the whole subtree
 - **Mutation tests** on the audit log (flip, delete, reorder, truncate)
 - **Tier 0 live isolation tests**: command executes, network namespace blocks egress, Landlock blocks file access, environment is cleared
 
@@ -247,6 +250,7 @@ Measured on the development host, October 2026. Re-run `scripts/bench.sh` on you
 | Policy decision p99, in-process | < 5 ms | **404 ns** (p50 340 ns, max 6.0 µs, n = 10k) |
 | Audit append, fsync per event | ≥ 10,000 eps | **~270,000 eps** (n = 5k) |
 | `run` end-to-end, Tier 0 | n/a | 53 ms/call (n = 200, measured before isolation was enabled) |
+| Tier 2 warm-claim start latency | track p50/p99 by tier | p50 19.9 ms, p99 20.2 ms (n = 20; includes the mock API's ~10 ms accept poll — real firecracker is sub-ms, so read it as the orchestration ceiling and its trend) |
 | Supervisor idle memory | < 100 MB | not yet measured |
 
 The audit figure is filesystem-dependent (tmpfs may not flush durably) and is a baseline, not a durability claim. The 53 ms figure predates real isolation and will be higher now.
@@ -262,7 +266,7 @@ The audit figure is filesystem-dependent (tmpfs may not flush durably) and is a 
 | Tier 2 (Firecracker) | Functional as wired: the jailer actually launches the VM (nothing launched one before), `/boot-source` is configured before `InstanceStart` (Firecracker rejects a start without it), then machine-config → drives → vsock → start over the API; snapshot-restored VMs resume with `PATCH /vm {"state":"Resumed"}` (the `InstanceStart` action is for fresh boots only); warm-pool failures surface as errors (only an empty pool falls back to a fresh boot) and a failed pool VM is torn down, not leaked; and `destroy()` kills the firecracker process. REST ordering, the resume verb, pool failure handling, and the Tier 2 escape suite (vsock-only with no network device ever configured, jailer confinement of the VMM process, and a control-channel escape matrix) are tested against a mock API socket; warm-claim start latency is benchmarked in `scripts/bench.sh`. Known remaining items are low-severity (e.g. a create-time TOCTOU around the API socket path) and tracked in the bug backlog. Not live-tested on the build host (no `firecracker`/`/dev/kvm` there). |
 | seccomp-BPF | Implemented and **installs** (verified: `PR_SET_SECCOMP` succeeds and the workload runs under the filter). Note this was previously broken by an invalid BPF addressing mode — `PR_SET_SECCOMP` failed with `EINVAL` on *every* kernel, which the old note here attributed to "some kernels". Fixed; it is defense in depth alongside namespaces + Landlock. The blocklist is not exhaustive: the newer mount API (`fsopen`/`move_mount`/`fsmount`), `io_uring`, and `chroot` are not blocked. Check `doctor` on your machine. |
 | Audit throughput | fsync per append (crash-safe). Group commit is the next step if throughput is ever needed. |
-| Secret handling | `fetch --secret-value` accepts the credential as a CLI flag, so it is visible to other local users via `ps`/`/proc/*/cmdline` and usually lands in shell history — despite "stays host-side". Keys written by `token keygen` / `audit keygen` are `0600`; this path is not. Prefer a file or env var. |
+| Secret handling | `fetch --secret-value` takes the credential as a CLI flag, so it is visible to other local users via `ps`/`/proc/*/cmdline` and usually lands in shell history — despite "stays host-side". **Use `--secret-file` instead**: it is read host-side and never appears on argv. Keys written by `token keygen` / `audit keygen` are `0600`; the `--secret-value` path is not. |
 | Scope | Linux only. No GPU workloads, no multi-tenant hosting, no Windows or macOS guests. |
 
 Things the design does **not** do, by construction:
