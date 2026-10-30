@@ -47,15 +47,18 @@ pub fn needs_approval(
         if r.action != action {
             return false;
         }
+        // Fail closed on unknown: an absent/empty method or host is UNKNOWN,
+        // not "matches nothing". A gate written for GET must not be dodged by
+        // not spelling the method — the same bug policy::needs_approval had.
         if !r.methods.is_empty() {
             let m = method.unwrap_or("");
-            if !r.methods.iter().any(|x| x.eq_ignore_ascii_case(m)) {
+            if !m.is_empty() && !r.methods.iter().any(|x| x.eq_ignore_ascii_case(m)) {
                 return false;
             }
         }
         if !r.hosts.is_empty() {
             let h = host.unwrap_or("");
-            if !r.hosts.iter().any(|x| x.eq_ignore_ascii_case(h)) {
+            if !h.is_empty() && !r.hosts.iter().any(|x| x.eq_ignore_ascii_case(h)) {
                 return false;
             }
         }
@@ -126,5 +129,32 @@ mod tests {
         assert_eq!(q.resolve(&id), None);
         assert!(q.decide(&id, Verdict::Deny));
         assert_eq!(q.resolve(&id), Some(false));
+    }
+
+    #[test]
+    fn unknown_method_or_host_cannot_dodge_a_gate() {
+        // An absent/empty method or host is UNKNOWN, not "matches nothing" —
+        // a gate written for POST+github must not be escaped by simply not
+        // spelling the method or the host. (policy::needs_approval had the
+        // same bug; this is the same fix.)
+        let rules = vec![ApprovalRule {
+            action: "http.request".into(),
+            methods: vec!["POST".into()],
+            hosts: vec!["github".into()],
+        }];
+        assert!(
+            needs_approval(&rules, "http.request", None, Some("github")),
+            "an unknown method must not dodge a method-constrained gate"
+        );
+        assert!(
+            needs_approval(&rules, "http.request", Some("POST"), None),
+            "an unknown host must not dodge a host-constrained gate"
+        );
+        assert!(needs_approval(&rules, "http.request", None, None));
+        // Known-and-wrong values still do not trigger the gate.
+        assert!(!needs_approval(&rules, "http.request", Some("GET"), Some("github")));
+        assert!(!needs_approval(&rules, "http.request", Some("POST"), Some("evil")));
+        // And the wrong action never triggers it.
+        assert!(!needs_approval(&rules, "proc.exec", None, None));
     }
 }
