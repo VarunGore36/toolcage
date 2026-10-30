@@ -310,14 +310,21 @@ impl Supervisor {
             let step = Duration::from_millis(50);
             let mut done = None;
             while waited.as_secs() < timeout_secs {
-                match child.try_wait()? {
-                    Some(st) => {
+                match child.try_wait() {
+                    Ok(Some(st)) => {
                         done = Some(st.code());
                         break;
                     }
-                    None => {
+                    Ok(None) => {
                         std::thread::sleep(step);
                         waited += step;
+                    }
+                    Err(e) => {
+                        // Fail closed: a wait error must not return with the
+                        // workload (and its process group) still running and
+                        // nobody supervising it. `?` used to unwind here.
+                        kill_process_group(&mut child);
+                        return Err(e.into());
                     }
                 }
             }
