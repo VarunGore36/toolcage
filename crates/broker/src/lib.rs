@@ -299,6 +299,11 @@ impl Broker {
     /// Empty methods/paths on a credential means "no constraint on that axis".
     pub fn inject(&self, name: &str, dest_alias: &str, method: &str, path: &str) -> Option<&str> {
         let c = self.creds.get(name)?;
+        // An empty credential authorizes nothing: returning it would attach an
+        // empty Authorization header and pass every binding check below.
+        if c.value.is_empty() {
+            return None;
+        }
         if !c.use_with.eq_ignore_ascii_case(dest_alias) {
             return None;
         }
@@ -603,6 +608,35 @@ mod tests {
             "the old key must no longer decrypt the store"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn empty_credential_authorizes_nothing() {
+        // An empty value used to inject as Some("") — an empty Authorization
+        // header went upstream and every binding check passed.
+        let mut b = Broker::new();
+        b.insert(Credential {
+            name: "gh".into(),
+            value: String::new(),
+            use_with: "github".into(),
+            methods: vec![],
+            paths: vec![],
+            expires_at: None,
+            encrypted_value: None,
+        });
+        assert_eq!(b.inject("gh", "github", "GET", "/"), None);
+        // A real value still injects.
+        let mut b = Broker::new();
+        b.insert(Credential {
+            name: "gh".into(),
+            value: "v1".into(),
+            use_with: "github".into(),
+            methods: vec![],
+            paths: vec![],
+            expires_at: None,
+            encrypted_value: None,
+        });
+        assert_eq!(b.inject("gh", "github", "GET", "/"), Some("v1"));
     }
 
     #[test]
