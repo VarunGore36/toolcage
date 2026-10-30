@@ -915,7 +915,7 @@ fn kill_and_reap(pid: i32) {
 /// continues, so a large-output workload still reaches its real exit code and
 /// the truncation flag stays honest. Reads are poll-based and never block past
 /// `stop_at`, so a grandchild holding the write end open cannot hang us.
-fn read_capped_until(fd: OwnedFd, stop_at: Instant, cap: usize) -> (Vec<u8>, bool) {
+pub fn read_capped_until(fd: OwnedFd, stop_at: Instant, cap: usize) -> (Vec<u8>, bool) {
     let mut buf = Vec::new();
     let mut tmp = [0u8; 4096];
     let mut truncated = false;
@@ -958,6 +958,13 @@ fn read_capped_until(fd: OwnedFd, stop_at: Instant, cap: usize) -> (Vec<u8>, boo
                     buf.truncate(cap);
                     truncated = true;
                 }
+            }
+            // EINTR must not END the drain: breaking here drops the reader,
+            // closing the pipe and SIGPIPEing the workload still writing to
+            // it (its exit code comes back corrupted). Retry; only a hard
+            // error stops us.
+            _ if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted => {
+                continue;
             }
             _ => break,
         }

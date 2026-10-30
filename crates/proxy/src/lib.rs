@@ -589,11 +589,22 @@ impl Budgets {
             .ok_or_else(|| anyhow::anyhow!("no persist path"))?;
         let data =
             serde_json::to_vec_pretty(self).map_err(|e| anyhow::anyhow!("serialize: {e}"))?;
-        let tmp = path.with_extension("tmp");
+        // APPEND the suffix: with_extension REPLACES the last one, so two
+        // stores like a.jsonl.budget and a.budget would collide on a.tmp
+        // (the same bug the budget store's own naming had).
+        let mut tmp_os = path.as_os_str().to_owned();
+        tmp_os.push(".tmp");
+        let tmp = PathBuf::from(tmp_os);
         {
             let mut f = fs::File::create(&tmp).map_err(|e| anyhow::anyhow!("io: {e}"))?;
             f.write_all(&data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
             f.sync_all().map_err(|e| anyhow::anyhow!("fsync: {e}"))?;
+            // 0600 explicitly: the store is a DAMAGE BOUND — a local user who
+            // can edit it can reset the counters, and the creation mode is
+            // umask-derived (the audit log had the same hole).
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(|e| anyhow::anyhow!("chmod: {e}"))?;
         }
         fs::rename(&tmp, path).map_err(|e| anyhow::anyhow!("io: {e}"))?;
         if let Some(parent) = path.parent() {
@@ -819,6 +830,29 @@ mod tests {
         );
         assert_eq!(host_header("example.com", 80, "http"), "example.com");
         assert_eq!(host_header("example.com", 8080, "http"), "example.com:8080");
+    }
+
+    #[test]
+    fn budget_store_is_owner_only() {
+        // The store is a DAMAGE BOUND: a local user who can edit it resets
+        // the counters. The creation mode is umask-derived (0666 & !umask),
+        // so under the common 022 it was world-readable — and the tmp name
+        // used with_extension, which replaces the last suffix.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("tc-budget-mode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.jsonl.budget");
+        let mut b = Budgets::with_path(&path).unwrap();
+        assert!(b.check("github", 10, 1000, 100).unwrap());
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the budget store must be 0600 regardless of umask");
+        // The transient file is `<path>.tmp` — appended, not extension-replaced.
+        let expected_tmp = dir.join("a.jsonl.budget.tmp");
+        assert!(!expected_tmp.exists(), "the tmp file is renamed away");
+        // (its name is what the append produces; with_extension would have
+        // produced a.jsonl.tmp — check the rename target did not linger there)
+        assert!(!dir.join("a.jsonl.tmp").exists(), "with_extension naming would collide");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
