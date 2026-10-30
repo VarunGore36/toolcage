@@ -94,7 +94,16 @@ impl Writer {
                 head = h;
             }
         }
+        let existed = path.exists();
         let file = OpenOptions::new().create(true).append(true).open(path)?;
+        if !existed {
+            // Deterministic and secure: the creation mode is umask-masked
+            // (0666 & !umask), so a hardened umask left the log 0000 and the
+            // later verify/checkpoint steps could not read it. An audit log
+            // holds session/action metadata — 0600, like the key material.
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
         Ok(Self {
             file,
             next_seq,

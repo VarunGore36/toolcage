@@ -307,7 +307,7 @@ fn build_revocations(
 fn write_secret(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
     use std::fs::OpenOptions;
     use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let mut f = OpenOptions::new()
         .write(true)
         .create(true)
@@ -315,6 +315,20 @@ fn write_secret(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
         .mode(0o600)
         .open(path)?;
     f.write_all(bytes)?;
+    // chmod, not just create-mode: `mode(0o600)` is masked by the umask
+    // (0o600 & !umask), so the actual permissions depend on who ran it. The
+    // file must be 0600 for everybody.
+    f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+/// Write public material (a public key, a checkpoint) explicitly 0644.
+/// Like write_secret, the mode must not depend on the caller's umask — the
+/// tests (and operators) should see one mode, not `0666 & !umask`.
+fn write_public(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, bytes)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644))?;
     Ok(())
 }
 
@@ -890,7 +904,7 @@ fn main() -> anyhow::Result<()> {
                 let dest = std::path::Path::new(&checkpoint_name);
                 // REVIEW: key file stays host-side; checkpoint (sig+pubkey) is
                 // public. Never commit *-secret.hex.
-                std::fs::write(dest, serde_json::to_string_pretty(&cp)?)?;
+                write_public(dest, serde_json::to_string_pretty(&cp)?.as_bytes())?;
                 println!("checkpoint seq={n} -> {}", dest.display());
             }
             Audit::Keygen { out_prefix } => {
@@ -911,7 +925,7 @@ fn main() -> anyhow::Result<()> {
                 let secret = std::path::Path::new(&secret_name);
                 let pubkey = std::path::Path::new(&pubkey_name);
                 write_secret(secret, sk_hex.as_bytes())?;
-                std::fs::write(pubkey, &cp.pubkey_hex)?;
+                write_public(pubkey, cp.pubkey_hex.as_bytes())?;
                 println!(
                     "wrote {} + {}",
                     secret.display(),
