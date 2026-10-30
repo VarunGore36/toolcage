@@ -146,6 +146,16 @@ fn mac_for(key: &Key, rev_id: &str, parent: &Option<String>, rights: &Rights) ->
 
 /// Lexical fs normalization (no FS access): resolve `.`, `..`, `//`.
 /// Same semantics as policy::canonical_path; duplicated to avoid a dep cycle.
+/// True when the normalized prefix `npp` covers the normalized path `np`.
+///
+/// The root prefix covers everything. The obvious `np.starts_with(&format!("{npp}/"))`
+/// breaks for it — that builds "//", which matches no normalized path — so a
+/// token granted `fs_prefixes: ["/"]` allowed nothing and could not even be
+/// narrowed to a subpath.
+fn fs_prefix_covers(npp: &str, np: &str) -> bool {
+    npp == "/" || np == npp || np.starts_with(&format!("{npp}/"))
+}
+
 fn normalize_fs(p: &str) -> String {
     let mut parts: Vec<&str> = vec![];
     for comp in p.split('/') {
@@ -199,10 +209,11 @@ impl Token {
         // fs: each child prefix must sit under a parent prefix (normalized).
         for p in &narrow.fs_prefixes {
             let np = normalize_fs(p);
-            let ok = self.rights.fs_prefixes.iter().any(|pp| {
-                let npp = normalize_fs(pp);
-                np == npp || np.starts_with(&format!("{npp}/"))
-            });
+            let ok = self
+                .rights
+                .fs_prefixes
+                .iter()
+                .any(|pp| fs_prefix_covers(&normalize_fs(pp), &np));
             anyhow::ensure!(ok, "fs prefix {p} widens parent");
         }
         // net/methods: subsets, case-insensitive. creds: case-sensitive (identifiers).
@@ -280,10 +291,11 @@ impl Token {
         }
         if let Some(p) = fs_path {
             let np = normalize_fs(p);
-            let ok = self.rights.fs_prefixes.iter().any(|pp| {
-                let npp = normalize_fs(pp);
-                np == npp || np.starts_with(&format!("{npp}/"))
-            });
+            let ok = self
+                .rights
+                .fs_prefixes
+                .iter()
+                .any(|pp| fs_prefix_covers(&normalize_fs(pp), &np));
             if !ok {
                 return false;
             }
@@ -621,6 +633,62 @@ mod tests {
         let res = rx.recv_timeout(std::time::Duration::from_secs(2));
         assert!(res.is_ok(), "is_revoked must terminate on a revoked cycle");
         assert!(res.unwrap(), "a revoked ancestor revokes through a cycle");
+    }
+
+    #[test]
+    fn root_fs_prefix_grants_and_narrows() {
+        // "/" must cover everything. The old `starts_with(&format!("{npp}/"))`
+        // built "//" for the root and matched no normalized path: a token
+        // granted ["/"] allowed NOTHING, and narrowing it to a subpath failed
+        // with "widens parent".
+        let k = key();
+        let mk = |prefixes: Vec<&str>| {
+            Token::root(
+                &k,
+                "r",
+                Rights {
+                    fs_prefixes: prefixes.into_iter().map(String::from).collect(),
+                    net_hosts: vec![],
+                    methods: vec![],
+                    cred_use: vec![],
+                    budget_bytes: 0,
+                    expires_at: 9_999_999_999,
+                },
+            )
+        };
+        let root = mk(vec!["/"]);
+        assert!(root.allows(&k, Some("/workspace/f"), None, None, None));
+        assert!(root.allows(&k, Some("/"), None, None, None));
+        assert!(root.allows(&k, Some("/etc/passwd"), None, None, None));
+
+        // Narrowing a root grant to a subpath must work, and must really
+        // narrow: the child sees only its subtree.
+        let child = root
+            .attenuate(
+                &k,
+                "c",
+                Rights {
+                    fs_prefixes: vec!["/workspace".into()],
+                    net_hosts: vec![],
+                    methods: vec![],
+                    cred_use: vec![],
+                    budget_bytes: 0,
+                    expires_at: 9_999_999_000,
+                },
+            )
+            .expect("a root grant can be narrowed to a subpath");
+        assert!(child.allows(&k, Some("/workspace/x"), None, None, None));
+        assert!(!child.allows(&k, Some("/etc/passwd"), None, None, None));
+
+        // The reverse still fails: a subpath parent cannot be widened to "/".
+        let parent = mk(vec!["/workspace"]);
+        let wide = parent.rights.clone();
+        let mut wide = wide;
+        wide.fs_prefixes = vec!["/".into()];
+        assert!(
+            parent.attenuate(&k, "w", wide).is_err(),
+            "widening to the root must still be refused"
+        );
     }
 
     #[test]
