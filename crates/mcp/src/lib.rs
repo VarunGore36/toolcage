@@ -195,7 +195,14 @@ pub fn route(
             }))
         }
         "read_file" | "write_file" => {
-            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("/");
+            // A missing path is UNKNOWN, not "/": a policy that mounts "/" (or
+            // a caller probing defaults) must not get a grant from an absent
+            // argument. Require the argument explicitly.
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .filter(|p| !p.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("denied [args:path required]"))?;
             let action = if name == "read_file" {
                 "fs.read"
             } else {
@@ -231,9 +238,25 @@ pub fn route(
             Ok(serde_json::json!({ "path": path, "checked": d.rule_ids }))
         }
         "http_fetch" => {
-            let host = args.get("host").and_then(|v| v.as_str()).unwrap_or("");
-            let method = args.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
-            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("/");
+            // Required arguments, no permissive defaults: an absent host must
+            // not become "" and an absent method must not silently become GET
+            // (the request would inherit GET's policy and approval posture
+            // without the caller ever asking for it).
+            let host = args
+                .get("host")
+                .and_then(|v| v.as_str())
+                .filter(|h| !h.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("denied [args:host required]"))?;
+            let method = args
+                .get("method")
+                .and_then(|v| v.as_str())
+                .filter(|m| !m.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("denied [args:method required]"))?;
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .filter(|p| !p.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("denied [args:path required]"))?;
             let o = sup.fetch_via_proxy(
                 broker, budgets, proxy, host, method, path, token, revocation, false,
             )?;
@@ -448,6 +471,75 @@ mod tests {
         let mut sup = sup_with(None);
         let rl = toolcage_capability::RevocationList::default();
         assert!(fs_call(&mut sup, None, &rl, "/workspace/x").is_ok());
+    }
+
+    #[test]
+    fn missing_tool_args_are_denied_not_defaulted() {
+        // The defaults used to be PERMISSIVE: a missing path became "/", a
+        // missing host "", a missing method GET. With a policy that mounts "/"
+        // and allows GET to github those defaults were grants the caller never
+        // asked for. Each argument is required now, and the denial names it.
+        let policy = toolcage_policy::load_yaml(
+            r#"
+tool: t
+version: 0
+fs:
+  mounts:
+    - path: /
+      mode: rw
+net:
+  mode: allowlist
+  hosts:
+    - host: github
+      methods: [GET]
+"#,
+        )
+        .unwrap();
+        let mut sup = toolcage_supervisor::Supervisor {
+            policy,
+            audit_path: std::env::temp_dir().join("tc-mcp-args-test.jsonl"),
+            session: "t".into(),
+            tier: toolcage_backend::Tier::Tier0,
+            backend: None,
+            allow_unisolated: true,
+            cap_key: None,
+        };
+        let b = toolcage_broker::Broker::new();
+        let mut budgets = toolcage_proxy::Budgets::default();
+        let mut proxy = toolcage_proxy::Proxy::new().unwrap();
+        let rl = toolcage_capability::RevocationList::default();
+        let mut call = |sup: &mut toolcage_supervisor::Supervisor,
+                    name: &str,
+                    args: &serde_json::Value|
+         -> String {
+            match route(sup, &b, &mut proxy, &mut budgets, None, &rl, name, args) {
+                Ok(_) => "ALLOWED".to_string(),
+                Err(e) => format!("{e:#}"),
+            }
+        };
+        // No path: the "/" default was a grant under this policy.
+        for name in ["read_file", "write_file"] {
+            let why = call(&mut sup, name, &serde_json::json!({}));
+            assert!(
+                why.contains("args:path required"),
+                "{name} with no path must be denied for the missing argument, got: {why}"
+            );
+        }
+        // No method (and no host/path): the GET default was a grant.
+        for args in [
+            serde_json::json!({"host": "github", "path": "/"}),
+            serde_json::json!({"method": "GET", "path": "/"}),
+            serde_json::json!({"host": "github", "method": "GET"}),
+        ] {
+            let why = call(&mut sup, "http_fetch", &args);
+            assert!(
+                why.contains("args:"),
+                "http_fetch with a missing argument must be denied for it, got: {why}"
+            );
+        }
+        // Empty values are refused the same way as absent ones.
+        let why = call(&mut sup, "read_file", &serde_json::json!({"path": ""}));
+        assert!(why.contains("args:path required"), "got: {why}");
     }
 
     #[test]
