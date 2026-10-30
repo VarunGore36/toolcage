@@ -376,6 +376,25 @@ struct BootSource {
 /// Nothing did this before — the REST configuration assumed a firecracker
 /// process was already listening on `socket`, so every boot failed at the
 /// first request with "No such file or directory".
+/// True when the API socket at `path` is really OUR firecracker's: a live
+/// socket (not a symlink, not a stale pre-plant) belonging to a still-running
+/// process.
+///
+/// `exists()` alone is a TOCTOU: it follows symlinks and accepts anything at
+/// the path, so a leftover or attacker-planted symlink/socket both shadows
+/// the real bind and fakes readiness — every REST call then lands somewhere
+/// the supervisor does not control.
+fn api_socket_ready(path: &str, child: &mut std::process::Child) -> bool {
+    use std::os::unix::fs::FileTypeExt as _;
+    let Ok(md) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !md.file_type().is_socket() {
+        return false;
+    }
+    matches!(child.try_wait(), Ok(None))
+}
+
 fn spawn_firecracker(cfg: &FcConfig, id: &str) -> anyhow::Result<std::process::Child> {
     let argv = cfg.jailer_argv(id);
     let mut cmd = std::process::Command::new(&argv[0]);
@@ -383,11 +402,14 @@ fn spawn_firecracker(cfg: &FcConfig, id: &str) -> anyhow::Result<std::process::C
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    let child = cmd.spawn().with_context(|| format!("spawn {}", argv[0]))?;
+    // Clear any stale or pre-planted entry at the socket path first: it would
+    // shadow the bind below AND fake readiness (see api_socket_ready).
+    let _ = std::fs::remove_file(&cfg.socket);
+    let mut child = cmd.spawn().with_context(|| format!("spawn {}", argv[0]))?;
     // The REST API only exists once the process is listening on the socket.
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while std::time::Instant::now() < deadline {
-        if std::path::Path::new(&cfg.socket).exists() {
+        if api_socket_ready(&cfg.socket, &mut child) {
             return Ok(child);
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -1058,6 +1080,45 @@ mod tests {
         // create() without kvm should fail — we test via the trait method
         // through a mutated backend. Since we can't easily mutate kvm_present,
         // we just assert the field is false.
+    }
+
+    #[test]
+    fn api_socket_ready_rejects_symlinks_and_stale_plants() {
+        // `exists()` follows symlinks and accepts anything at the path: a
+        // planted symlink/socket both shadows the real bind and fakes
+        // readiness, and every REST call then lands somewhere uncontrolled.
+        let dir = std::env::temp_dir().join(format!("tc-fc-sock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("api.sock");
+        let sock_path = sock.display().to_string();
+
+        // Nothing there yet.
+        let mut live = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        assert!(!api_socket_ready(&sock_path, &mut live));
+
+        // A regular file is not the API socket.
+        std::fs::write(&sock, b"not a socket").unwrap();
+        assert!(!api_socket_ready(&sock_path, &mut live));
+        std::fs::remove_file(&sock).unwrap();
+
+        // A symlink must NOT count: this is the TOCTOU `exists()` allowed.
+        std::os::unix::fs::symlink("/dev/null", &sock).unwrap();
+        assert!(
+            !api_socket_ready(&sock_path, &mut live),
+            "a symlink at the socket path must not read as ready"
+        );
+        std::fs::remove_file(&sock).unwrap();
+
+        // A real socket with the process alive is ready.
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        assert!(api_socket_ready(&sock_path, &mut live));
+
+        // A dead process means the socket is not ours to talk to.
+        let _ = live.kill();
+        let _ = live.wait();
+        assert!(!api_socket_ready(&sock_path, &mut live));
+        drop(listener);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
