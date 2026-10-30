@@ -149,6 +149,11 @@ enum McpOp {
         /// and its parent chain on every call.
         #[arg(long = "revocation")]
         revocations: Vec<String>,
+        /// LEARN MODE: record each denial and print a proposed allowlist
+        /// addition at exit. Proposals are for operator review — never
+        /// auto-applied (an injected agent must not grow its own allowlist).
+        #[arg(long, default_value_t = false)]
+        learn: bool,
     },
     /// Single call (for tests): --name run_command --args-json '{...}'.
     Call {
@@ -181,6 +186,10 @@ enum McpOp {
         /// and its parent chain on every call.
         #[arg(long = "revocation")]
         revocations: Vec<String>,
+        /// LEARN MODE: if the call is denied, print a proposed allowlist
+        /// addition. For operator review only — never auto-applied.
+        #[arg(long, default_value_t = false)]
+        learn: bool,
     },
 }
 
@@ -674,6 +683,7 @@ fn main() -> anyhow::Result<()> {
                 key_hex,
                 token,
                 revocations,
+                learn,
             } => {
                 let text = std::fs::read_to_string(&policy)?;
                 let pol = toolcage_policy::load_yaml(&text)?;
@@ -711,6 +721,7 @@ fn main() -> anyhow::Result<()> {
                         eprintln!("warning: budget persistence unavailable (in-memory): {e}");
                         toolcage_proxy::Budgets::default()
                     });
+                let mut learn_mode = toolcage_mcp::LearnMode::default();
                 let stdin = std::io::stdin();
                 use std::io::BufRead;
                 for line in stdin.lock().lines() {
@@ -768,7 +779,12 @@ fn main() -> anyhow::Result<()> {
                                 &cp.arguments,
                             ) {
                                 Ok(v) => toolcage_mcp::RpcResp::ok(id, v),
-                                Err(e) => toolcage_mcp::RpcResp::deny(id, &[e.to_string()]),
+                                Err(e) => {
+                                    if learn {
+                                        learn_mode.record(&cp.name, &cp.arguments);
+                                    }
+                                    toolcage_mcp::RpcResp::deny(id, &[e.to_string()])
+                                }
                             },
                             Err(e) => toolcage_mcp::RpcResp::error(
                                 id,
@@ -792,6 +808,22 @@ fn main() -> anyhow::Result<()> {
                         println!("{}", serde_json::to_string(&resp)?);
                     }
                 }
+                // Learn mode: dump the accumulated proposal at exit (EOF).
+                // Proposals are for operator review and are NEVER applied
+                // automatically — an injected agent must not be able to grow
+                // its own allowlist.
+                if learn {
+                    let p = learn_mode.propose();
+                    if p["add_hosts"].as_array().is_some_and(|v| !v.is_empty())
+                        || p["add_paths"].as_array().is_some_and(|v| !v.is_empty())
+                        || p["add_fs"].as_array().is_some_and(|v| !v.is_empty())
+                    {
+                        eprintln!(
+                            "learn: proposed allowlist additions (REVIEW, never auto-applied):\n{}",
+                            serde_json::to_string_pretty(&p)?
+                        );
+                    }
+                }
             }
             McpOp::Call {
                 policy,
@@ -804,6 +836,7 @@ fn main() -> anyhow::Result<()> {
                 key_hex,
                 token,
                 revocations,
+                learn,
             } => {
                 let text = std::fs::read_to_string(&policy)?;
                 let pol = toolcage_policy::load_yaml(&text)?;
@@ -852,6 +885,14 @@ fn main() -> anyhow::Result<()> {
                 ) {
                     Ok(v) => println!("{v}"),
                     Err(e) => {
+                        if learn {
+                            let mut lm = toolcage_mcp::LearnMode::default();
+                            lm.record(&name, &args);
+                            eprintln!(
+                                "learn: proposed allowlist addition (REVIEW, never auto-applied):\n{}",
+                                serde_json::to_string_pretty(&lm.propose())?
+                            );
+                        }
                         eprintln!("denied: {e}");
                         std::process::exit(2);
                     }

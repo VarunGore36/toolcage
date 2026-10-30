@@ -224,7 +224,7 @@ Clients: [`clients/python/toolcage.py`](clients/python/toolcage.py), [`clients/t
 | `write_file` | `fs.write` | mount-checked |
 | `http_fetch` | `http.request` | proxy + broker, dual auth |
 
-Third-party MCP servers run as **guest processes** under the same policy and audit trail, so a poisoned tool becomes a contained process. **Learn mode** records denials and proposes a working allowlist so you don't write policy by hand.
+Third-party MCP servers run as **guest processes** under the same policy and audit trail, so a poisoned tool becomes a contained process. **Learn mode** (`--learn` on `mcp call`/`mcp serve`) records denials and prints a proposed allowlist addition at exit so you don't write policy by hand — proposals are for operator review and are never applied automatically.
 
 ## Tests
 
