@@ -21,7 +21,10 @@ fn policy_never_panics_on_garbage() {
             limits: Default::default(),
             exec: Default::default(),
         };
-        let _ = toolcage_policy::decide(
+        // Garbage must DENY, not merely not-panic: the old test called
+        // decide() and discarded the verdict, so an allow on garbage would
+        // have passed.
+        let d = toolcage_policy::decide(
             &p,
             &toolcage_policy::Request {
                 action: s.into(),
@@ -32,17 +35,38 @@ fn policy_never_panics_on_garbage() {
                 argv: None,
             },
         );
+        assert!(!d.allow, "garbage must be denied: {s:?} -> {d:?}");
         let _ = toolcage_policy::canonical_path(s);
     }
 }
 
 #[test]
 fn guest_protocol_never_panics() {
+    // Unparseable bytes must not panic...
     for raw in ["", "{", "{\"op\":", "null", &"A".repeat(100000)] {
         let r: Result<toolcage_guest_agent::GuestMsg, _> = serde_json::from_str(raw);
         if let Ok(m) = r {
             let _ = toolcage_guest_agent::validate(&m);
         }
+    }
+    // ...and PARSED-but-hostile messages must be refused. The old test's
+    // `if let Ok` branch never fired (none of its samples parse), so nothing
+    // about validate() was checked here.
+    for raw in [
+        "{\"id\":\"1\",\"op\":{\"op\":\"Exec\",\"argv\":[],\"env_refs\":[]}}",
+        "{\"id\":\"a b\",\"op\":{\"op\":\"Heartbeat\"}}",
+        "{\"id\":\"1\",\"op\":{\"op\":\"PutFile\",\"path\":\"/etc/passwd\",\"bytes\":1}}",
+        "{\"id\":\"1\",\"op\":{\"op\":\"Exec\",\"argv\":[\"x\",\"y\\u0000z\"],\"env_refs\":[]}}",
+        "{\"id\":\"1\",\"op\":{\"op\":\"Exec\",\"argv\":[\"x\"],\"env_refs\":[\"GITHUB_TOKEN=v1\"]}}",
+    ] {
+        let m: toolcage_guest_agent::GuestMsg = match serde_json::from_str(raw) {
+            Ok(m) => m,
+            Err(e) => panic!("hostile sample must parse: {raw} ({e})"),
+        };
+        assert!(
+            toolcage_guest_agent::validate(&m).is_err(),
+            "hostile message must be refused: {raw}"
+        );
     }
 }
 

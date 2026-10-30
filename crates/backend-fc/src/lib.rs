@@ -1058,28 +1058,60 @@ mod tests {
     }
 
     #[test]
-    fn pool_claim_applies_uniqueness() {
+    fn pool_without_golden_image_fails_closed() {
+        // Named for what it checks: without a golden image (or any pooled
+        // VM) the pool fails closed with the RIGHT error. The old name
+        // promised "claim applies uniqueness" — nothing here touches
+        // uniqueness (that is snapshot_vms_resume_via_patch_vm_* and
+        // broken_pool_vm_surfaces_error_and_does_not_leak_process).
         let mut p = WarmPool::new(2);
-        // refill without a golden image must fail (no snapshot to restore).
-        assert!(p.refill().is_err());
-        // claim on empty pool must fail.
-        assert!(p.claim("s1", "/workspace").is_err());
+        let err = match p.refill() {
+            Err(e) => format!("{e:#}"),
+            Ok(_) => panic!("refill without a golden image must fail"),
+        };
+        assert!(
+            err.contains("golden image"),
+            "refill must fail for the missing golden image: {err}"
+        );
+        let err = match p.claim("s1", "/workspace") {
+            Err(e) => format!("{e:#}"),
+            Ok(_) => panic!("claim on an empty pool must fail"),
+        };
+        assert!(
+            err.contains("warm pool empty"),
+            "claim must fail for the empty pool: {err}"
+        );
         assert_eq!(p.len(), 0);
         assert_eq!(p.hit_rate(), 0.0);
     }
 
     #[test]
     fn create_fails_without_kvm() {
-        // If /dev/kvm is missing, create must fail closed.
+        // If /dev/kvm is missing, create must fail closed. The old test only
+        // asserted the `kvm_present` field was false and never called
+        // create() — its name promised a behavior it did not exercise.
         if std::path::Path::new("/dev/kvm").exists() {
             eprintln!("skip: /dev/kvm present on this host");
             return;
         }
         let b = FcBackend::new();
         assert!(!b.kvm_present);
-        // create() without kvm should fail — we test via the trait method
-        // through a mutated backend. Since we can't easily mutate kvm_present,
-        // we just assert the field is false.
+        let spec = SessionSpec {
+            id: "t-nokvm".into(),
+            tier: Tier::Tier2,
+            mem_mb: 128,
+            workspace_mb: 0,
+            workspace: "/tmp".into(),
+        };
+        let mut b = b;
+        let err = match b.create(&spec) {
+            Err(e) => format!("{e:#}"),
+            Ok(_) => panic!("create() must fail closed without /dev/kvm"),
+        };
+        assert!(
+            err.contains("/dev/kvm"),
+            "the failure must name the missing prerequisite: {err}"
+        );
     }
 
     #[test]
