@@ -122,6 +122,26 @@ pub fn validate(msg: &GuestMsg) -> anyhow::Result<()> {
     }
 }
 
+/// Validate a guest REPLY (fuzz target shape): the reply is as untrusted as
+/// the request. The id must match the request's identifier charset and the
+/// note is bounded printable text — both are echoed to logs and terminal
+/// output by the caller.
+pub fn validate_reply(reply: &HostReply) -> anyhow::Result<()> {
+    anyhow::ensure!(!reply.id.is_empty() && reply.id.len() <= 64, "id bounds");
+    anyhow::ensure!(
+        reply.id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-'),
+        "bad id charset"
+    );
+    anyhow::ensure!(reply.note.len() <= 4096, "note too long");
+    anyhow::ensure!(
+        reply.note.bytes().all(|b| (0x20..0x7f).contains(&b) || b == b'\t'),
+        "bad note charset"
+    );
+    Ok(())
+}
+
 /// Lexical fs normalization (no FS access): resolve '.', '..', '//', leading
 /// slashes. Mirrors capability::normalize_fs semantics.
 fn normalize_path(p: &str) -> String {
@@ -170,6 +190,34 @@ mod tests {
             assert!(
                 validate(&with_id(id.clone())).is_err(),
                 "id {id:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn reply_is_validated_like_the_request() {
+        // The REPLY is guest-controlled too: the id is echoed to logs and the
+        // note is shown to operators. Same identifier rule as the request id;
+        // the note is bounded printable text.
+        let mk = |id: &str, note: &str| HostReply {
+            id: id.into(),
+            ok: true,
+            note: note.into(),
+        };
+        assert!(validate_reply(&mk("1", "exited 0")).is_ok());
+        for (id, note) in [
+            ("", "ok"),
+            ("a b", "ok"),
+            ("a\nInject: 1", "ok"),
+            ("x".repeat(65).as_str(), "ok"),
+            ("1", "ok\nfake log line"),
+            ("1", "note with NUL\0"),
+            ("1", "\u{1b}[31mred"),
+            ("1", &"n".repeat(4097)),
+        ] {
+            assert!(
+                validate_reply(&mk(id, note)).is_err(),
+                "hostile reply must be refused: id={id:?} note={note:?}"
             );
         }
     }
