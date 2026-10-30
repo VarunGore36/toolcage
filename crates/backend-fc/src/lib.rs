@@ -879,10 +879,30 @@ impl FcVm {
         let mut payload = vec![0u8; payload_len];
         stream.read_exact(&mut payload)?;
 
+        // The reply is GUEST-controlled: validate it strictly. exit_code was
+        // `as_i64().map(|v| v as i32)` — 2^32 truncates to 0, so a guest could
+        // fake a clean exit — and a non-string stdout silently became "".
         let resp: serde_json::Value = serde_json::from_slice(&payload)?;
-        let exit_code = resp["exit_code"].as_i64().map(|v| v as i32);
-        let stdout = resp["stdout"].as_str().unwrap_or("").as_bytes().to_vec();
-        let stderr = resp["stderr"].as_str().unwrap_or("").as_bytes().to_vec();
+        let exit_code = match resp.get("exit_code") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(v) => {
+                let n = v
+                    .as_i64()
+                    .ok_or_else(|| anyhow::anyhow!("guest reply: exit_code must be a number"))?;
+                Some(i32::try_from(n).map_err(|_| {
+                    anyhow::anyhow!("guest reply: exit_code out of range for a status")
+                })?)
+            }
+        };
+        let str_field = |k: &str| -> anyhow::Result<Vec<u8>> {
+            match resp.get(k) {
+                None | Some(serde_json::Value::Null) => Ok(Vec::new()),
+                Some(serde_json::Value::String(s)) => Ok(s.as_bytes().to_vec()),
+                Some(_) => Err(anyhow::anyhow!("guest reply: {k} must be a string")),
+            }
+        };
+        let stdout = str_field("stdout")?;
+        let stderr = str_field("stderr")?;
 
         let truncated = stdout.len() > cap || stderr.len() > cap;
         Ok(CommandResult {
@@ -1151,6 +1171,86 @@ mod tests {
         assert!(!api_socket_ready(&sock_path, &mut live));
         drop(listener);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One-shot mock guest agent: consumes the request frame, replies with
+    /// `reply` framed the way the protocol expects.
+    fn mock_guest_reply(tag: &str, reply: serde_json::Value) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read as _R, Write as _W};
+        use std::os::unix::net::UnixListener;
+        let dir = std::env::temp_dir().join(format!("tc-fc-guest-{}", tag));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("guest.sock");
+        let sock_path = sock.display().to_string();
+        let listener = UnixListener::bind(&sock).unwrap();
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                // consume the request frame (best effort)
+                let mut len = [0u8; 4];
+                if stream.read_exact(&mut len).is_ok() {
+                    let n = u32::from_be_bytes(len) as usize;
+                    let mut body = vec![0u8; n];
+                    let _ = stream.read_exact(&mut body);
+                }
+                let payload = serde_json::to_vec(&reply).unwrap();
+                let mut frame = (payload.len() as u32).to_be_bytes().to_vec();
+                frame.extend_from_slice(&payload);
+                let _ = stream.write_all(&frame);
+            }
+        });
+        (sock_path, handle)
+    }
+
+    fn fake_vm(sock_path: &str) -> FcVm {
+        FcVm {
+            id: "t".into(),
+            socket_path: PathBuf::from("/tmp/none.sock"),
+            vsock_uds: PathBuf::from(sock_path),
+            vsock_cid: 3,
+            mem_mib: 128,
+            child: std::process::Command::new("sleep").arg("60").spawn().unwrap(),
+        }
+    }
+
+    #[test]
+    fn guest_reply_is_validated_not_trusted() {
+        // A guest controls its reply. exit_code used to be `as i32` — 2^32
+        // truncates to 0 (a faked clean exit) — and a non-string stdout
+        // silently became "".
+        // Out-of-range exit code: must be rejected, not truncated to 0.
+        let (sock, h) = mock_guest_reply(
+            "bigcode",
+            serde_json::json!({"exit_code": 4294967296i64, "stdout": "", "stderr": ""}),
+        );
+        let mut vm = fake_vm(&sock);
+        let r = vm.exec_vsock(&["/bin/true".to_string()], 5, 4096);
+        assert!(r.is_err(), "an out-of-range exit_code must be rejected: {r:?}");
+        let _ = h.join();
+        let _ = vm.child.kill();
+
+        // Non-string stdout: must be rejected, not silently emptied.
+        let (sock, h) = mock_guest_reply(
+            "badout",
+            serde_json::json!({"exit_code": 0, "stdout": 123, "stderr": ""}),
+        );
+        let mut vm = fake_vm(&sock);
+        let r = vm.exec_vsock(&["/bin/true".to_string()], 5, 4096);
+        assert!(r.is_err(), "a non-string stdout must be rejected: {r:?}");
+        let _ = h.join();
+        let _ = vm.child.kill();
+
+        // A well-formed reply still works.
+        let (sock, h) = mock_guest_reply(
+            "good",
+            serde_json::json!({"exit_code": 0, "stdout": "hi", "stderr": ""}),
+        );
+        let mut vm = fake_vm(&sock);
+        let r = vm.exec_vsock(&["/bin/true".to_string()], 5, 4096).unwrap();
+        assert_eq!(r.exit_code, Some(0));
+        assert_eq!(r.stdout, b"hi");
+        let _ = h.join();
+        let _ = vm.child.kill();
     }
 
     #[test]
