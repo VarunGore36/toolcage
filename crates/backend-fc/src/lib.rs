@@ -39,6 +39,11 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
 
+/// Largest Exec request frame (bytes). The wire length is a u32 and the
+/// guest's own argv bound is 64 x 4 KiB; 1 MiB is far above either and keeps
+/// a runaway request from being framed at all.
+const MAX_REQ_FRAME_BYTES: usize = 1024 * 1024;
+
 
 
 // ---------------------------------------------------------------------------
@@ -847,6 +852,21 @@ impl FcVm {
         timeout_secs: u64,
         cap: usize,
     ) -> anyhow::Result<CommandResult> {
+        // Guest agent protocol: Exec request as JSON-RPC-like frame. Built
+        // (and bounded) BEFORE dialing: the frame length is a u32, so a huge
+        // argv must be refused, not wrapped into a short frame.
+        let exec_req = serde_json::json!({
+            "op": "Exec",
+            "argv": argv,
+        });
+        let req_bytes = serde_json::to_vec(&exec_req)?;
+        anyhow::ensure!(
+            req_bytes.len() <= MAX_REQ_FRAME_BYTES,
+            "exec request too large: {} bytes (max {})",
+            req_bytes.len(),
+            MAX_REQ_FRAME_BYTES
+        );
+
         let mut stream = UnixStream::connect(&self.vsock_uds).with_context(|| {
             format!(
                 "connect to guest agent vsock at {}",
@@ -856,12 +876,6 @@ impl FcVm {
         stream.set_read_timeout(Some(Duration::from_secs(timeout_secs)))?;
         stream.set_write_timeout(Some(Duration::from_secs(timeout_secs)))?;
 
-        // Guest agent protocol: Exec request as JSON-RPC-like frame
-        let exec_req = serde_json::json!({
-            "op": "Exec",
-            "argv": argv,
-        });
-        let req_bytes = serde_json::to_vec(&exec_req)?;
         // Length-prefixed frame: 4-byte big-endian length + payload
         let mut frame = Vec::with_capacity(4 + req_bytes.len());
         frame.extend_from_slice(&(req_bytes.len() as u32).to_be_bytes());
@@ -1251,6 +1265,33 @@ mod tests {
         assert_eq!(r.stdout, b"hi");
         let _ = h.join();
         let _ = vm.child.kill();
+    }
+
+    #[test]
+    fn oversized_exec_request_is_refused_before_dialing() {
+        // The frame length is a u32: a runaway argv must be refused, not
+        // wrapped into a short frame. The check runs BEFORE the dial, so a
+        // nonexistent socket is the right fixture — if the size check were
+        // after the connect, this would fail on the socket instead.
+        let mut vm = FcVm {
+            id: "t".into(),
+            socket_path: PathBuf::from("/tmp/none.sock"),
+            vsock_uds: PathBuf::from("/tmp/tc-fc-no-such-guest.sock"),
+            vsock_cid: 3,
+            mem_mib: 128,
+            child: std::process::Command::new("sleep").arg("60").spawn().unwrap(),
+        };
+        let big = vec!["x".repeat(2 * 1024 * 1024)];
+        let err = match vm.exec_vsock(&big, 5, 4096) {
+            Err(e) => format!("{e:#}"),
+            Ok(_) => panic!("an oversized request must be refused"),
+        };
+        assert!(
+            err.contains("too large"),
+            "the refusal must be about the size, got: {err}"
+        );
+        let _ = vm.child.kill();
+        let _ = vm.child.wait();
     }
 
     #[test]
