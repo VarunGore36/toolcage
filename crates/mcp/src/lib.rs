@@ -20,7 +20,7 @@
 //! - RpcReq parsing: malformed lines get error responses, never panic (fuzz
 //!   the JSON-RPC layer next: truncated frames, huge ids, duplicate ids).
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Deserialize)]
 pub struct RpcReq {
@@ -275,20 +275,33 @@ pub fn route(
 /// Learn mode: collect denials, propose minimal allowlist additions.
 #[derive(Debug, Default)]
 pub struct LearnMode {
-    pub denied_hosts: BTreeSet<String>,
-    pub denied_paths: BTreeSet<String>,
+    /// host -> methods seen on denied calls. A proposal naming a host WITHOUT
+    /// its method would over-grant every method on it.
+    pub denied_hosts: BTreeMap<String, BTreeSet<String>>,
+    /// path -> methods seen on denied calls.
+    pub denied_paths: BTreeMap<String, BTreeSet<String>>,
     pub denied_fs: BTreeSet<String>,
 }
-
 impl LearnMode {
     pub fn record(&mut self, name: &str, args: &serde_json::Value) {
+        let method = args
+            .get("method")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         match name {
             "http_fetch" => {
                 if let Some(h) = args.get("host").and_then(|v| v.as_str()) {
-                    self.denied_hosts.insert(h.to_string());
+                    self.denied_hosts
+                        .entry(h.to_string())
+                        .or_default()
+                        .insert(method.clone());
                 }
                 if let Some(p) = args.get("path").and_then(|v| v.as_str()) {
-                    self.denied_paths.insert(p.to_string());
+                    self.denied_paths
+                        .entry(p.to_string())
+                        .or_default()
+                        .insert(method);
                 }
             }
             "read_file" | "write_file" => {
@@ -300,9 +313,29 @@ impl LearnMode {
         }
     }
     pub fn propose(&self) -> serde_json::Value {
+        let hosts: Vec<_> = self
+            .denied_hosts
+            .iter()
+            .map(|(h, ms)| {
+                serde_json::json!({
+                    "host": h,
+                    "methods": ms.iter().collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        let paths: Vec<_> = self
+            .denied_paths
+            .iter()
+            .map(|(p, ms)| {
+                serde_json::json!({
+                    "path": p,
+                    "methods": ms.iter().collect::<Vec<_>>(),
+                })
+            })
+            .collect();
         serde_json::json!({
-            "add_hosts": self.denied_hosts.iter().collect::<Vec<_>>(),
-            "add_paths": self.denied_paths.iter().collect::<Vec<_>>(),
+            "add_hosts": hosts,
+            "add_paths": paths,
             "add_fs": self.denied_fs.iter().collect::<Vec<_>>(),
         })
     }
@@ -648,14 +681,40 @@ net:
         assert!(e.to_string().contains("token:deny"), "got: {e}");
     }
     #[test]
-    fn learn_proposes_denials() {
+    fn learn_proposals_carry_the_denied_methods() {
+        // A proposal naming a host without its method would over-grant every
+        // method on it. The denied call's method travels with the host/path.
         let mut l = LearnMode::default();
         l.record(
             "http_fetch",
-            &serde_json::json!({"host": "new.example.com", "path": "/a"}),
+            &serde_json::json!({"host": "github", "method": "GET", "path": "/a"}),
         );
+        l.record(
+            "http_fetch",
+            &serde_json::json!({"host": "github", "method": "POST", "path": "/a"}),
+        );
+        l.record(
+            "http_fetch",
+            &serde_json::json!({"host": "evil", "method": "DELETE", "path": "/b"}),
+        );
+        l.record("read_file", &serde_json::json!({"path": "/etc/passwd"}));
         let p = l.propose();
-        assert!(p.to_string().contains("new.example.com"));
+        let hosts = p["add_hosts"].as_array().unwrap();
+        let gh = hosts.iter().find(|h| h["host"] == "github").unwrap();
+        let mut ms: Vec<&str> = gh["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m.as_str().unwrap())
+            .collect();
+        ms.sort();
+        assert_eq!(ms, vec!["GET", "POST"], "the proposal must not widen to all methods");
+        let evil = hosts.iter().find(|h| h["host"] == "evil").unwrap();
+        assert_eq!(evil["methods"][0], "DELETE");
+        let paths = p["add_paths"].as_array().unwrap();
+        let a = paths.iter().find(|x| x["path"] == "/a").unwrap();
+        assert_eq!(a["methods"].as_array().unwrap().len(), 2);
+        assert!(p["add_fs"].as_array().unwrap().iter().any(|f| f == "/etc/passwd"));
     }
     #[test]
     fn rpc_response_omits_absent_members() {
