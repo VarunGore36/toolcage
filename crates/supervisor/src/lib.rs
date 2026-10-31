@@ -749,9 +749,13 @@ pub fn panic_freeze(audit_path: &std::path::Path, reason: &str) -> anyhow::Resul
         prev_hash: String::new(),
         hash: String::new(),
     })?;
-    let taint = audit_path.with_extension("tainted");
+    // APPEND the suffix: with_extension replaces the last one, so two logs
+    // a.jsonl and a.log would collide on one a.tainted marker (the same bug
+    // the budget store's naming had).
+    let mut taint_os = audit_path.as_os_str().to_owned();
+    taint_os.push(".tainted");
     std::fs::write(
-        &taint,
+        PathBuf::from(taint_os),
         format!("tainted at {} head {}\n", e.ts_wall, e.hash),
     )?;
     Ok(e.hash)

@@ -248,3 +248,76 @@ fn disk_full_simulated_by_readonly() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn panic_freeze_taints_and_keeps_the_chain_verifiable() {
+    // The panic path is the operator's last resort: it must append a deny-all
+    // to the chain (which then VERIFIES — the log is frozen, not corrupted)
+    // and leave a taint marker that cannot collide with another log's.
+    let dir = std::env::temp_dir().join(format!("tc-panic-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("a.jsonl");
+    let mut w = toolcage_audit::Writer::open(&log).unwrap();
+    w.append(toolcage_audit::Event {
+        seq: 0,
+        ts_wall: "t".into(),
+        session: "s".into(),
+        actor: "agent".into(),
+        action: "proc.exec".into(),
+        request_hash: "h".into(),
+        decision: "allow".into(),
+        rule_ids: vec![],
+        token_rev_id: String::new(),
+        result: "ok".into(),
+        bytes: 0,
+        claimed_by: "host".into(),
+        prev_hash: String::new(),
+        hash: String::new(),
+    })
+    .unwrap();
+    drop(w);
+
+    let head = toolcage_supervisor::panic_freeze(&log, "suspected compromise").unwrap();
+    assert!(!head.is_empty());
+
+    // The marker is `<log>.tainted` — APPENDED, not extension-replaced.
+    assert!(
+        dir.join("a.jsonl.tainted").exists(),
+        "the taint marker must keep the log's full name"
+    );
+    assert!(
+        !dir.join("a.tainted").exists(),
+        "with_extension naming would collide across logs"
+    );
+
+    // The chain still verifies (frozen, not corrupted) and ends in deny-all.
+    toolcage_audit::verify(&log).expect("a frozen log must still verify");
+    let last = std::fs::read_to_string(&log).unwrap();
+    let last = last.lines().last().unwrap().to_string();
+    assert!(last.contains("deny-all"), "the freeze must deny all: {last}");
+
+    // A second log's marker must not collide with the first's.
+    let log2 = dir.join("b.log");
+    let mut w = toolcage_audit::Writer::open(&log2).unwrap();
+    w.append(toolcage_audit::Event {
+        seq: 0,
+        ts_wall: "t".into(),
+        session: "s".into(),
+        actor: "agent".into(),
+        action: "proc.exec".into(),
+        request_hash: "h".into(),
+        decision: "allow".into(),
+        rule_ids: vec![],
+        token_rev_id: String::new(),
+        result: "ok".into(),
+        bytes: 0,
+        claimed_by: "host".into(),
+        prev_hash: String::new(),
+        hash: String::new(),
+    })
+    .unwrap();
+    drop(w);
+    toolcage_supervisor::panic_freeze(&log2, "x").unwrap();
+    assert!(dir.join("b.log.tainted").exists(), "second log's own marker");
+    let _ = std::fs::remove_dir_all(&dir);
+}
