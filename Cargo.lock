@@ -949,6 +949,7 @@ dependencies = [
  "anyhow",
  "clap",
  "serde_json",
+ "sha2",
  "toolcage-audit",
  "toolcage-backend",
  "toolcage-backend-fc",

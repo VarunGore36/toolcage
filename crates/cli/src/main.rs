@@ -1,5 +1,6 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use sha2::Digest as _;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -78,6 +79,11 @@ enum Cmd {
         #[command(subcommand)]
         op: TokenOp,
     },
+    /// Golden image: sign the manifest the runtime loads.
+    Image {
+        #[command(subcommand)]
+        op: ImageOp,
+    },
     /// MCP front door (stdio JSON-RPC).
     Mcp {
         #[command(subcommand)]
@@ -119,6 +125,21 @@ enum Audit {
 }
 
 type AuditOp = Audit;
+
+#[derive(Subcommand)]
+enum ImageOp {
+    /// Sign <dir>/manifest.json -> <dir>/signature.bin: Ed25519 over the
+    /// manifest hash, exactly what GoldenImage::load verifies before it
+    /// trusts the image. Prints the public key to pin.
+    Sign {
+        /// Directory holding manifest.json (as written by images/build.sh).
+        #[arg(long)]
+        dir: PathBuf,
+        /// Ed25519 secret key file (32-byte hex), as written by `audit keygen`.
+        #[arg(long)]
+        key_hex: PathBuf,
+    },
+}
 
 #[derive(Subcommand)]
 enum McpOp {
@@ -669,6 +690,23 @@ fn main() -> anyhow::Result<()> {
                 )?;
                 write_secret(&out, serde_json::to_string_pretty(&c)?.as_bytes())?;
                 println!("attenuated {} -> {rev}", p.rev_id);
+            }
+        },
+        Cmd::Image { op } => match op {
+            ImageOp::Sign { dir, key_hex } => {
+                let sk = parse_hex32(&std::fs::read_to_string(&key_hex)?)?;
+                let manifest_path = dir.join("manifest.json");
+                let text = std::fs::read_to_string(&manifest_path)
+                    .with_context(|| format!("read {}", manifest_path.display()))?;
+                // The loader verifies over the manifest HASH.
+                let hash = sha2::Sha256::digest(text.as_bytes());
+                let sig = toolcage_audit::sign_bytes(&sk, hash.as_slice())?;
+                anyhow::ensure!(sig.len() == 64, "signature must be 64 bytes");
+                let sig_path = dir.join("signature.bin");
+                write_public(&sig_path, &sig)?;
+                let pk = toolcage_audit::pubkey_of(&sk)?;
+                let pk_hex: String = pk.iter().map(|b| format!("{b:02x}")).collect();
+                println!("signed {} (pubkey {pk_hex})", sig_path.display());
             }
         },
         Cmd::Mcp { op } => match op {

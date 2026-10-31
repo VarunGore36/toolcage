@@ -222,6 +222,24 @@ pub fn sign_checkpoint(
     })
 }
 
+/// Sign arbitrary bytes with an Ed25519 key (64-byte signature). Used for
+/// golden-image manifests, whose loader verifies the signature over the
+/// manifest hash; checkpoints use sign_checkpoint's shaped message.
+pub fn sign_bytes(sk_bytes: &[u8], msg: &[u8]) -> anyhow::Result<Vec<u8>> {
+    use ed25519_dalek::{Signer, SigningKey};
+    anyhow::ensure!(sk_bytes.len() == 32, "sk must be 32 bytes");
+    let sk = SigningKey::from_bytes(sk_bytes.try_into().unwrap());
+    Ok(sk.sign(msg).to_bytes().to_vec())
+}
+
+/// The Ed25519 public key (32 bytes) for a secret key.
+pub fn pubkey_of(sk_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+    use ed25519_dalek::SigningKey;
+    anyhow::ensure!(sk_bytes.len() == 32, "sk must be 32 bytes");
+    let sk = SigningKey::from_bytes(sk_bytes.try_into().unwrap());
+    Ok(sk.verifying_key().to_bytes().to_vec())
+}
+
 /// Verify one checkpoint against a pinned pubkey (32 bytes).
 pub fn verify_checkpoint(cp: &Checkpoint, pubkey: &[u8]) -> anyhow::Result<()> {
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
