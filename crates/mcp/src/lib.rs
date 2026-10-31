@@ -188,10 +188,13 @@ pub fn route(
             if !o.allowed {
                 anyhow::bail!("denied {:?}", o.rule_ids);
             }
+            // Byte counts, not lossy-UTF8 lengths: from_utf8_lossy turns each
+            // invalid byte into U+FFFD (3 bytes), so binary output inflated
+            // the reported size. The count is what the audit/charge uses.
             Ok(serde_json::json!({
                 "exit": o.exit_code,
-                "stdout_trunc": String::from_utf8_lossy(&o.stdout).len(),
-                "stderr_trunc": String::from_utf8_lossy(&o.stderr).len(),
+                "stdout_trunc": o.stdout.len(),
+                "stderr_trunc": o.stderr.len(),
             }))
         }
         "read_file" | "write_file" => {
@@ -573,6 +576,42 @@ net:
         // Empty values are refused the same way as absent ones.
         let why = call(&mut sup, "read_file", &serde_json::json!({"path": ""}));
         assert!(why.contains("args:path required"), "got: {why}");
+    }
+
+    #[test]
+    fn run_command_reports_byte_counts_not_lossy_lengths() {
+        // from_utf8_lossy turns every invalid byte into U+FFFD (3 bytes), so
+        // binary output inflated the reported stdout size. The count must be
+        // the real byte count.
+        let dir = std::env::temp_dir().join(format!("tc-mcp-bytes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let f = dir.join("bin.out");
+        std::fs::write(&f, [0xffu8, 0xfe, 0x41]).unwrap(); // 3 bytes, 2 invalid
+
+        let mut sup = sup_with(None);
+        let b = toolcage_broker::Broker::new();
+        let mut budgets = toolcage_proxy::Budgets::default();
+        let mut proxy = toolcage_proxy::Proxy::new().unwrap();
+        let rl = toolcage_capability::RevocationList::default();
+        let args = serde_json::json!({"argv": ["/bin/cat", f.display().to_string()]});
+        let v = route(
+            &mut sup,
+            &b,
+            &mut proxy,
+            &mut budgets,
+            None,
+            &rl,
+            "run_command",
+            &args,
+        )
+        .expect("cat runs");
+        // 3 bytes out. The lossy length is 7 (two U+FFFD + 'A').
+        assert_eq!(v["stdout_trunc"], 3, "must count bytes, got {v}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
