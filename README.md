@@ -205,6 +205,7 @@ This is **tamper evidence, not tamper prevention.** An attacker who controls the
 | `$TC check-net --host H --method M --path P` | Proxy decision and upstream resolution, no network touched |
 | `$TC fetch [--token T] [--approve]` | Proxy + broker fetch with dual auth and approval pause; scrubbed body; both steps audited |
 | `$TC token keygen / mint / attenuate` | Host MAC key; create root tokens; delegate narrower ones |
+| `$TC image sign --dir D --key-hex K` | Ed25519-sign a golden image manifest (`signature.bin`) — what `GoldenImage::load` verifies before trusting the image |
 | `$TC mcp serve / call` | Stdio JSON-RPC front door |
 | `$TC audit keygen / checkpoint / verify` | Keys, signed checkpoints, pinned-key verification |
 | `$TC panic --audit LOG` | Freeze a log after a suspected compromise |
