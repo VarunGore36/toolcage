@@ -615,6 +615,44 @@ net:
     }
 
     #[test]
+    fn rpc_layer_survives_hostile_frames() {
+        // Smoke twin of fuzz/fuzz_targets/mcp_rpc.rs (the nightly campaign
+        // covers the long tail; this runs every commit): malformed frames Err
+        // without panicking, and every response serializes as valid JSON-RPC
+        // 2.0 — exactly one of result/error.
+        for raw in [
+            "",
+            "{",
+            "null",
+            "\\xff\\xfe",
+            &"A".repeat(50_000),
+            r#"{"jsonrpc":"2.0","id":{"a":1},"method":"m"}"#,
+            r#"{"jsonrpc":"2.0","id":[]}"#,
+            r#"{"jsonrpc":"1.0","id":1,"method":"m"}"#,
+            r#"{"jsonrpc":"2.0","id":"x\u0000y","method":"m"}"#,
+        ] {
+            if let Ok(req) = serde_json::from_str::<RpcReq>(raw) {
+                let _ = req.validate();
+                let id = req.id.clone().unwrap_or(serde_json::Value::Null);
+                for resp in [
+                    RpcResp::ok(id.clone(), serde_json::Value::Null),
+                    RpcResp::deny(id.clone(), &["r".into()]),
+                    RpcResp::error(id.clone(), -32600, "bad"),
+                ] {
+                    let s = serde_json::to_string(&resp).unwrap();
+                    let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+                    let has_result = v.get("result").is_some();
+                    let has_error = v.get("error").is_some();
+                    assert!(
+                        has_result ^ has_error,
+                        "exactly one of result/error, got {s}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn unknown_tool_rejected() {
         let mut sup = toolcage_supervisor::Supervisor {
             policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml"))
