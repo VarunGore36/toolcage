@@ -49,3 +49,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo run --release -p toolcage-cli -- doctor
       - run: ./scripts/bench.sh
+
+  fuzz:
+    name: fuzz targets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt
+      # fuzz/ is a separate workspace: the root fmt/build never sees it, so
+      # the nightly fuzz targets could rot silently without these.
+      - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
+      - run: cargo check --manifest-path fuzz/Cargo.toml
