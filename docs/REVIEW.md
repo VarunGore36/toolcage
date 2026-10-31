@@ -14,7 +14,7 @@ This document is the review package for Gate 2 (independent review before any pu
 
 ## Threat model
 
-Seven adversaries (A1–A5) and seven attack paths are modeled in `docs/THREAT_MODEL.md`. Each attack path maps to a primary control:
+Five adversaries (A1–A5) and seven attack paths are modeled in `docs/THREAT_MODEL.md`. Each attack path maps to a primary control:
 
 | Attack path | Primary control |
 |-------------|-----------------|
@@ -49,7 +49,7 @@ cargo build --release
 ### Test
 
 ```bash
-cargo test --workspace       # 72 tests, 0 failures
+cargo test --workspace       # 194 tests, 0 failures (see docs/TEST_RESULTS.md)
 cargo clippy --workspace --all-targets  # clean
 ```
 
@@ -73,12 +73,12 @@ cargo clippy --workspace --all-targets  # clean
 # 4. Tamper-evident log
 ./target/release/toolcage-cli audit keygen --out-prefix /tmp/k
 ./target/release/toolcage-cli audit checkpoint --log /tmp/tc.jsonl --key-hex /tmp/k.secret.hex
-./target/release/toolcage-cli audit verify --log /tmp/tc.jsonl --pubkey /tmp/tc.pub.hex
+./target/release/toolcage-cli audit verify --log /tmp/tc.jsonl --pubkey /tmp/k.pub.hex
 # ok: N events, head ... (checkpoints verified)
 
 # 5. Flip one byte — verify fails
 # (flip any byte in /tmp/tc.jsonl, then:)
-./target/release/toolcage-cli audit verify --log /tmp/tc.jsonl --pubkey /tmp/tc.pub.hex
+./target/release/toolcage-cli audit verify --log /tmp/tc.jsonl --pubkey /tmp/k.pub.hex
 # error
 ```
 
