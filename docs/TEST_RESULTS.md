@@ -1,6 +1,6 @@
 # Test results — toolcage
 
-198 tests, 0 failures (`cargo test --workspace`). Clippy clean
+200 tests, 0 failures (`cargo test --workspace`). Clippy clean
 (`cargo clippy --workspace --all-targets`: 0 findings).
 
 Generated from the workspace run; re-run `cargo test --workspace` to
@@ -41,6 +41,7 @@ reproduce. The breakdown is by test target (integration targets marked `*`).
 | cli min_isolation `*` | 2 | tier fail-closed |
 | cli secret_arg `*` (secret never on argv) | 2 | I2 |
 | cli clients `*` (python + ts clients: allow, deny, unknown tool) | 2 | A2 |
+| verify binary `*` (clean log ok, tamper fails, forged checkpoint fails) | 2 | I5 |
 
 Live tier tests **skip loudly** where the host lacks the prerequisites
 (userns/mount/net/ipc/pid/uts, Landlock, `runsc`, firecracker + `/dev/kvm`);
