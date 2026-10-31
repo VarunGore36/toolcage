@@ -30,11 +30,7 @@ fn over_cap_output_does_not_sigpipe_the_writer() {
     // 2 MiB on stdout — far past both the 64 KiB pipe buffer and the cap
     // below, so the writer is still producing when the reader would have
     // stopped.
-    std::fs::write(
-        &script,
-        "#!/bin/bash\nhead -c 2000000 /dev/zero\n",
-    )
-    .unwrap();
+    std::fs::write(&script, "#!/bin/bash\nhead -c 2000000 /dev/zero\n").unwrap();
     let mut perm = std::fs::metadata(&script).unwrap().permissions();
     perm.set_mode(0o755);
     std::fs::set_permissions(&script, perm).unwrap();

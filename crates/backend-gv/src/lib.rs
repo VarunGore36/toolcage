@@ -555,7 +555,10 @@ mod tests {
                 "sess1".to_string()
             ]
         );
-        assert_eq!(runsc_start_args("sess1"), vec!["start".to_string(), "sess1".to_string()]);
+        assert_eq!(
+            runsc_start_args("sess1"),
+            vec!["start".to_string(), "sess1".to_string()]
+        );
         assert_eq!(
             runsc_exec_args("sess1", &["/bin/echo".into(), "hi".into()]),
             vec![
@@ -572,7 +575,10 @@ mod tests {
             runsc_kill_args("sess1"),
             vec!["kill".to_string(), "sess1".to_string(), "KILL".to_string()]
         );
-        assert_eq!(runsc_delete_args("sess1"), vec!["delete".to_string(), "sess1".to_string()]);
+        assert_eq!(
+            runsc_delete_args("sess1"),
+            vec!["delete".to_string(), "sess1".to_string()]
+        );
     }
 
     #[test]
@@ -664,7 +670,12 @@ mod tests {
             eprintln!("skip: runsc is installed on this host");
             return;
         }
-        let err = b.exec("nonexistent", &["/bin/echo".into(), "hi".into()], 30, OUTPUT_CAP);
+        let err = b.exec(
+            "nonexistent",
+            &["/bin/echo".into(), "hi".into()],
+            30,
+            OUTPUT_CAP,
+        );
         assert!(err.is_err(), "exec without runsc must fail closed");
     }
 

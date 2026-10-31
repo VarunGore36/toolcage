@@ -16,11 +16,7 @@ fn cli_run(args: &[&str]) -> std::process::ExitStatus {
 #[cfg(unix)]
 fn mode(path: &std::path::Path) -> u32 {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .unwrap()
-        .permissions()
-        .mode()
-        & 0o777
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
 }
 
 /// Temp dir with an explicit 0700. create_dir_all inherits the umask, so a
@@ -49,7 +45,11 @@ fn secret_files_are_mode_0600() {
     let key = dir.join("key");
     let status = cli_run(&["token", "keygen", "--out-prefix", key.to_str().unwrap()]);
     assert!(status.success(), "keygen must succeed");
-    assert_eq!(mode(&key.with_extension("key.hex")), 0o600, "key.hex must be 0600");
+    assert_eq!(
+        mode(&key.with_extension("key.hex")),
+        0o600,
+        "key.hex must be 0600"
+    );
 
     // token mint -> token file must be 0600.
     let token = dir.join("token.json");
@@ -79,7 +79,10 @@ fn secret_files_are_mode_0600() {
     // so this must not depend on the caller's umask (a hardened umask like
     // 0o077 used to land it at exactly 0600 and fail the old assertion).
     let pub_mode = mode(&ak.with_extension("pub.hex"));
-    assert_eq!(pub_mode, 0o644, "pub.hex is public: 0644, umask-independent");
+    assert_eq!(
+        pub_mode, 0o644,
+        "pub.hex is public: 0644, umask-independent"
+    );
 }
 
 #[cfg(unix)]
@@ -101,7 +104,12 @@ fn keygen_out_prefix_is_not_extension_replaced() {
         .unwrap();
     }
 
-    let s1 = cli_run(&["token", "keygen", "--out-prefix", base.with_extension("v1").to_str().unwrap()]);
+    let s1 = cli_run(&[
+        "token",
+        "keygen",
+        "--out-prefix",
+        base.with_extension("v1").to_str().unwrap(),
+    ]);
     assert!(s1.success(), "keygen v1 must succeed");
     assert!(
         base.with_extension("v1.key.hex").exists(),
@@ -112,7 +120,12 @@ fn keygen_out_prefix_is_not_extension_replaced() {
         "old buggy name out/a.key.hex must not be created"
     );
 
-    let s2 = cli_run(&["token", "keygen", "--out-prefix", base.with_extension("v2").to_str().unwrap()]);
+    let s2 = cli_run(&[
+        "token",
+        "keygen",
+        "--out-prefix",
+        base.with_extension("v2").to_str().unwrap(),
+    ]);
     assert!(s2.success(), "keygen v2 must succeed");
     assert!(
         base.with_extension("v2.key.hex").exists(),
@@ -137,10 +150,10 @@ fn checkpoint_file_uses_log_name() {
 
     // Generate a valid audit log via a real run (Tier0).
     let log = dir.join("audit.log"); // NOTE: .log, not .jsonl
-    // CARGO_MANIFEST_DIR, not current_dir(): the test must not depend on
-    // where the binary was invoked from.
-    let policy = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../schemas/policy-v0.yaml");
+                                     // CARGO_MANIFEST_DIR, not current_dir(): the test must not depend on
+                                     // where the binary was invoked from.
+    let policy =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/policy-v0.yaml");
     let s = cli_run(&[
         "run",
         "--policy",
@@ -171,4 +184,3 @@ fn checkpoint_file_uses_log_name() {
         "audit.jsonl.checkpoint.2 (old buggy name) must not be created"
     );
 }
-

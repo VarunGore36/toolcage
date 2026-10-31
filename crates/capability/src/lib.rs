@@ -417,7 +417,8 @@ mod tests {
                 budget_bytes: 1000,
                 expires_at: 9_999_999_999,
             },
-        ).unwrap()
+        )
+        .unwrap()
     }
     #[test]
     fn narrow_ok_widen_fails() {
@@ -519,7 +520,8 @@ mod tests {
                 budget_bytes: u64::MAX,
                 expires_at: 9_999_999_999,
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert!(
             !forged.verify_tag(&key()),
             "forged tag must not verify under the host key"
@@ -671,7 +673,8 @@ mod tests {
                     budget_bytes: 0,
                     expires_at: 9_999_999_999,
                 },
-            ).unwrap()
+            )
+            .unwrap()
         };
         let root = mk(vec!["/"]);
         assert!(root.allows(&k, Some("/workspace/f"), None, None, None));

@@ -18,14 +18,15 @@ fn successful_run_exits_zero() {
         "--policy",
         "../../schemas/policy-v0.yaml",
         "--audit",
-        &format!(
-            "{}/tc-exit-ok.jsonl",
-            std::env::temp_dir().display()
-        ),
+        &format!("{}/tc-exit-ok.jsonl", std::env::temp_dir().display()),
         "--",
         "/bin/true",
     ]);
-    assert!(status.success(), "/bin/true must exit 0, got {:?}", status.code());
+    assert!(
+        status.success(),
+        "/bin/true must exit 0, got {:?}",
+        status.code()
+    );
 }
 
 #[test]
@@ -37,10 +38,7 @@ fn timeout_killed_run_exits_nonzero() {
         "--policy",
         "../../schemas/policy-v0.yaml",
         "--audit",
-        &format!(
-            "{}/tc-exit-test.jsonl",
-            std::env::temp_dir().display()
-        ),
+        &format!("{}/tc-exit-test.jsonl", std::env::temp_dir().display()),
         "--",
         "/bin/sleep",
         "300",

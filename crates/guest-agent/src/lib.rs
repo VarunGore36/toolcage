@@ -81,17 +81,22 @@ pub fn validate(msg: &GuestMsg) -> anyhow::Result<()> {
                 // be dangerous overrides that the guest could use to hijack its
                 // own runtime (LD_PRELOAD, LD_LIBRARY_PATH, ...).
                 anyhow::ensure!(
-                    name
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
-                        && name.as_bytes().first().is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_'),
+                    name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                        && name
+                            .as_bytes()
+                            .first()
+                            .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_'),
                     "bad env ref name"
                 );
                 anyhow::ensure!(
                     !matches!(
                         name.to_ascii_uppercase().as_str(),
-                        "LD_PRELOAD" | "LD_LIBRARY_PATH" | "LD_AUDIT" | "LD_DEBUG"
-                            | "PATH" | "HOME"
+                        "LD_PRELOAD"
+                            | "LD_LIBRARY_PATH"
+                            | "LD_AUDIT"
+                            | "LD_DEBUG"
+                            | "PATH"
+                            | "HOME"
                     ),
                     "dangerous env ref name"
                 );
@@ -129,14 +134,18 @@ pub fn validate(msg: &GuestMsg) -> anyhow::Result<()> {
 pub fn validate_reply(reply: &HostReply) -> anyhow::Result<()> {
     anyhow::ensure!(!reply.id.is_empty() && reply.id.len() <= 64, "id bounds");
     anyhow::ensure!(
-        reply.id
+        reply
+            .id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-'),
         "bad id charset"
     );
     anyhow::ensure!(reply.note.len() <= 4096, "note too long");
     anyhow::ensure!(
-        reply.note.bytes().all(|b| (0x20..0x7f).contains(&b) || b == b'\t'),
+        reply
+            .note
+            .bytes()
+            .all(|b| (0x20..0x7f).contains(&b) || b == b'\t'),
         "bad note charset"
     );
     Ok(())
@@ -272,7 +281,13 @@ mod tests {
         };
         assert!(validate(&ok).is_ok());
         // Dangerous override names are rejected even with a valid kind.
-        for bad_name in ["LD_PRELOAD", "ld_preload", "LD_LIBRARY_PATH", "PATH", "HOME"] {
+        for bad_name in [
+            "LD_PRELOAD",
+            "ld_preload",
+            "LD_LIBRARY_PATH",
+            "PATH",
+            "HOME",
+        ] {
             let m = GuestMsg {
                 id: "1".into(),
                 op: GuestOp::Exec {
@@ -283,7 +298,13 @@ mod tests {
             assert!(validate(&m).is_err(), "env ref {bad_name} must be rejected");
         }
         // Names must follow the portable env-var charset.
-        for bad in ["secret:a=b", "secret:a b", "secret:a\0b", "secret:1bad", "secret:-bad"] {
+        for bad in [
+            "secret:a=b",
+            "secret:a b",
+            "secret:a\0b",
+            "secret:1bad",
+            "secret:-bad",
+        ] {
             let m = GuestMsg {
                 id: "1".into(),
                 op: GuestOp::Exec {
@@ -353,7 +374,10 @@ mod tests {
                     bytes: 1,
                 },
             };
-            assert!(validate(&m).is_err(), "relative path {p:?} must be rejected");
+            assert!(
+                validate(&m).is_err(),
+                "relative path {p:?} must be rejected"
+            );
         }
         // NUL bytes diverge the checked path from any C-API opened path.
         let nul_paths = ["/workspace/foo\0/etc", "/workspace/\0etc/passwd"];

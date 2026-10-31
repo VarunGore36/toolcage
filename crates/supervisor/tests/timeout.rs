@@ -46,7 +46,10 @@ fn timeout_kills_the_whole_process_group() {
     let argv = vec![script.display().to_string()];
     let out = s.exec_limits(&argv, 1, 4096).unwrap();
     assert!(out.allowed);
-    assert!(out.exit_code.is_none(), "the run must be recorded as a timeout");
+    assert!(
+        out.exit_code.is_none(),
+        "the run must be recorded as a timeout"
+    );
 
     // The grandchild must die with the group. Poll briefly: it is reparented
     // to init and reaped asynchronously after the SIGKILL.

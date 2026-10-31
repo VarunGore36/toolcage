@@ -44,8 +44,6 @@ use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
 /// a runaway request from being framed at all.
 const MAX_REQ_FRAME_BYTES: usize = 1024 * 1024;
 
-
-
 // ---------------------------------------------------------------------------
 // Firecracker session configuration
 // ---------------------------------------------------------------------------
@@ -730,91 +728,95 @@ fn claim_or_boot(pool: &mut WarmPool, spec: &SessionSpec) -> anyhow::Result<FcVm
 /// Order matters: /boot-source must be set before InstanceStart, or the start
 /// is rejected and no VM ever runs. Split out from boot() so the sequence is
 /// testable against a mock socket without spawning a real VM.
-fn configure_and_start(socket: &str, cfg: &FcConfig, workspace_host_path: &str) -> anyhow::Result<()> {
-        // 0b. Boot source (kernel + command line). Firecracker requires this
-        // before InstanceStart; without it the start is rejected and no VM
-        // ever runs.
-        let boot = BootSource {
-            kernel_image_path: cfg.kernel.clone(),
-            boot_args: cfg.boot_args.clone(),
-        };
-        let body = serde_json::to_vec(&boot)?;
-        let resp = http_put(socket, "/boot-source", &body)?;
-        let status = http_status(&resp)?;
-        anyhow::ensure!(
-            status == 200 || status == 204,
-            "boot-source failed: HTTP {status}"
-        );
+fn configure_and_start(
+    socket: &str,
+    cfg: &FcConfig,
+    workspace_host_path: &str,
+) -> anyhow::Result<()> {
+    // 0b. Boot source (kernel + command line). Firecracker requires this
+    // before InstanceStart; without it the start is rejected and no VM
+    // ever runs.
+    let boot = BootSource {
+        kernel_image_path: cfg.kernel.clone(),
+        boot_args: cfg.boot_args.clone(),
+    };
+    let body = serde_json::to_vec(&boot)?;
+    let resp = http_put(socket, "/boot-source", &body)?;
+    let status = http_status(&resp)?;
+    anyhow::ensure!(
+        status == 200 || status == 204,
+        "boot-source failed: HTTP {status}"
+    );
 
-        // 1. Machine config (vCPU + memory)
-        let mc = MachineConfig {
-            vcpu_count: cfg.vcpu,
-            mem_size_mib: cfg.mem_mb,
-            ht_enabled: false,
-        };
-        let body = serde_json::to_vec(&mc)?;
-        let resp = http_put(socket, "/machine-config", &body)?;
-        let status = http_status(&resp)?;
-        anyhow::ensure!(
-            status == 200 || status == 204,
-            "machine-config failed: HTTP {status}"
-        );
+    // 1. Machine config (vCPU + memory)
+    let mc = MachineConfig {
+        vcpu_count: cfg.vcpu,
+        mem_size_mib: cfg.mem_mb,
+        ht_enabled: false,
+    };
+    let body = serde_json::to_vec(&mc)?;
+    let resp = http_put(socket, "/machine-config", &body)?;
+    let status = http_status(&resp)?;
+    anyhow::ensure!(
+        status == 200 || status == 204,
+        "machine-config failed: HTTP {status}"
+    );
 
-        // 2. Rootfs drive (read-only)
-        let root_drive = DriveConfig {
-            drive_id: "rootfs".into(),
-            path_on_host: cfg.rootfs.clone(),
-            is_root_device: true,
-            is_read_only: true,
-        };
-        let body = serde_json::to_vec(&root_drive)?;
-        let resp = http_put(socket, "/drive/rootfs", &body)?;
-        let status = http_status(&resp)?;
-        anyhow::ensure!(
-            status == 200 || status == 204,
-            "drive rootfs failed: HTTP {status}"
-        );
+    // 2. Rootfs drive (read-only)
+    let root_drive = DriveConfig {
+        drive_id: "rootfs".into(),
+        path_on_host: cfg.rootfs.clone(),
+        is_root_device: true,
+        is_read_only: true,
+    };
+    let body = serde_json::to_vec(&root_drive)?;
+    let resp = http_put(socket, "/drive/rootfs", &body)?;
+    let status = http_status(&resp)?;
+    anyhow::ensure!(
+        status == 200 || status == 204,
+        "drive rootfs failed: HTTP {status}"
+    );
 
-        // 3. Workspace drive (writable, per-session)
-        let ws_drive = DriveConfig {
-            drive_id: "workspace".into(),
-            path_on_host: workspace_host_path.to_string(),
-            is_root_device: false,
-            is_read_only: false,
-        };
-        let body = serde_json::to_vec(&ws_drive)?;
-        let resp = http_put(socket, "/drive/workspace", &body)?;
-        let status = http_status(&resp)?;
-        anyhow::ensure!(
-            status == 200 || status == 204,
-            "drive workspace failed: HTTP {status}"
-        );
+    // 3. Workspace drive (writable, per-session)
+    let ws_drive = DriveConfig {
+        drive_id: "workspace".into(),
+        path_on_host: workspace_host_path.to_string(),
+        is_root_device: false,
+        is_read_only: false,
+    };
+    let body = serde_json::to_vec(&ws_drive)?;
+    let resp = http_put(socket, "/drive/workspace", &body)?;
+    let status = http_status(&resp)?;
+    anyhow::ensure!(
+        status == 200 || status == 204,
+        "drive workspace failed: HTTP {status}"
+    );
 
-        // 4. vsock device (control channel to guest agent)
-        let vsock = VsockConfig {
-            vsock_id: "vsock0".into(),
-            guest_cid: cfg.vsock_cid,
-            uds_path: cfg.vsock_uds_path(),
-        };
-        let body = serde_json::to_vec(&vsock)?;
-        let resp = http_put(socket, "/vsock/vsock0", &body)?;
-        let status = http_status(&resp)?;
-        anyhow::ensure!(
-            status == 200 || status == 204,
-            "vsock failed: HTTP {status}"
-        );
+    // 4. vsock device (control channel to guest agent)
+    let vsock = VsockConfig {
+        vsock_id: "vsock0".into(),
+        guest_cid: cfg.vsock_cid,
+        uds_path: cfg.vsock_uds_path(),
+    };
+    let body = serde_json::to_vec(&vsock)?;
+    let resp = http_put(socket, "/vsock/vsock0", &body)?;
+    let status = http_status(&resp)?;
+    anyhow::ensure!(
+        status == 200 || status == 204,
+        "vsock failed: HTTP {status}"
+    );
 
-        // 5. Start the VM
-        let start = InstanceStart {
-            action_type: "InstanceStart".into(),
-        };
-        let body = serde_json::to_vec(&start)?;
-        let resp = http_put(socket, "/actions", &body)?;
-        let status = http_status(&resp)?;
-        anyhow::ensure!(
-            status == 200 || status == 204,
-            "start VM failed: HTTP {status}"
-        );
+    // 5. Start the VM
+    let start = InstanceStart {
+        action_type: "InstanceStart".into(),
+    };
+    let body = serde_json::to_vec(&start)?;
+    let resp = http_put(socket, "/actions", &body)?;
+    let status = http_status(&resp)?;
+    anyhow::ensure!(
+        status == 200 || status == 204,
+        "start VM failed: HTTP {status}"
+    );
 
     Ok(())
 }
@@ -1159,7 +1161,10 @@ mod tests {
         let sock_path = sock.display().to_string();
 
         // Nothing there yet.
-        let mut live = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        let mut live = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
         assert!(!api_socket_ready(&sock_path, &mut live));
 
         // A regular file is not the API socket.
@@ -1189,7 +1194,10 @@ mod tests {
 
     /// One-shot mock guest agent: consumes the request frame, replies with
     /// `reply` framed the way the protocol expects.
-    fn mock_guest_reply(tag: &str, reply: serde_json::Value) -> (String, std::thread::JoinHandle<()>) {
+    fn mock_guest_reply(
+        tag: &str,
+        reply: serde_json::Value,
+    ) -> (String, std::thread::JoinHandle<()>) {
         use std::io::{Read as _R, Write as _W};
         use std::os::unix::net::UnixListener;
         let dir = std::env::temp_dir().join(format!("tc-fc-guest-{}", tag));
@@ -1223,7 +1231,10 @@ mod tests {
             vsock_uds: PathBuf::from(sock_path),
             vsock_cid: 3,
             mem_mib: 128,
-            child: std::process::Command::new("sleep").arg("60").spawn().unwrap(),
+            child: std::process::Command::new("sleep")
+                .arg("60")
+                .spawn()
+                .unwrap(),
         }
     }
 
@@ -1239,7 +1250,10 @@ mod tests {
         );
         let mut vm = fake_vm(&sock);
         let r = vm.exec_vsock(&["/bin/true".to_string()], 5, 4096);
-        assert!(r.is_err(), "an out-of-range exit_code must be rejected: {r:?}");
+        assert!(
+            r.is_err(),
+            "an out-of-range exit_code must be rejected: {r:?}"
+        );
         let _ = h.join();
         let _ = vm.child.kill();
 
@@ -1279,7 +1293,10 @@ mod tests {
             vsock_uds: PathBuf::from("/tmp/tc-fc-no-such-guest.sock"),
             vsock_cid: 3,
             mem_mib: 128,
-            child: std::process::Command::new("sleep").arg("60").spawn().unwrap(),
+            child: std::process::Command::new("sleep")
+                .arg("60")
+                .spawn()
+                .unwrap(),
         };
         let big = vec!["x".repeat(2 * 1024 * 1024)];
         let err = match vm.exec_vsock(&big, 5, 4096) {
@@ -1376,7 +1393,8 @@ mod tests {
         let mem = write("mem", b"guest-ram-data");
         let kernel = write("kernel", b"vmlinux-data");
         let rootfs = write("rootfs", b"rootfs-data");
-        let hash = |p: &std::path::Path| hex_encode(&sha2::Sha256::digest(std::fs::read(p).unwrap()));
+        let hash =
+            |p: &std::path::Path| hex_encode(&sha2::Sha256::digest(std::fs::read(p).unwrap()));
 
         // All correct hashes pass.
         assert!(verify_snapshot_hash(snap.to_str().unwrap(), &hash(&snap)).is_ok());
@@ -1622,13 +1640,20 @@ mod order_tests {
             vsock_uds: "/run/toolcage/sess-resume2.vsock".into(),
             vsock_cid: 8,
             started: false,
-            child: std::process::Command::new("sleep").arg("60").spawn().unwrap(),
+            child: std::process::Command::new("sleep")
+                .arg("60")
+                .spawn()
+                .unwrap(),
         };
         let res = vm2.start();
         assert!(res.is_ok(), "start failed: {res:?}");
         let _ = mock2.join();
         let seen2 = seen2.lock().unwrap().clone();
-        assert_eq!(seen2.len(), 1, "start() must send exactly one request: {seen2:?}");
+        assert_eq!(
+            seen2.len(),
+            1,
+            "start() must send exactly one request: {seen2:?}"
+        );
         assert_eq!(seen2[0].method, "PATCH");
         assert_eq!(seen2[0].path, "/vm");
         assert!(seen2[0].body.contains("\"Resumed\""), "{}", seen2[0].body);
@@ -1695,7 +1720,10 @@ mod order_tests {
             vsock_uds: format!("/run/toolcage/{id}.vsock"),
             vsock_cid: 3,
             started: false,
-            child: std::process::Command::new("sleep").arg("60").spawn().unwrap(),
+            child: std::process::Command::new("sleep")
+                .arg("60")
+                .spawn()
+                .unwrap(),
         };
         // First refill fills the pool (same id flow as refill()).
         while pool.free.len() < pool.max {
@@ -1754,7 +1782,10 @@ mod escape_tests {
             b.capabilities().net_vsock_only,
             "Tier 2 must declare vsock-only networking"
         );
-        assert!(b.capabilities().separate_kernel, "Tier 2 has a guest kernel");
+        assert!(
+            b.capabilities().separate_kernel,
+            "Tier 2 has a guest kernel"
+        );
     }
 
     /// I1 at the wire: the boot sequence configures boot source, machine,

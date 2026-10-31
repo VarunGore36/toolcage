@@ -152,8 +152,18 @@ mod tests {
         );
         assert!(needs_approval(&rules, "http.request", None, None));
         // Known-and-wrong values still do not trigger the gate.
-        assert!(!needs_approval(&rules, "http.request", Some("GET"), Some("github")));
-        assert!(!needs_approval(&rules, "http.request", Some("POST"), Some("evil")));
+        assert!(!needs_approval(
+            &rules,
+            "http.request",
+            Some("GET"),
+            Some("github")
+        ));
+        assert!(!needs_approval(
+            &rules,
+            "http.request",
+            Some("POST"),
+            Some("evil")
+        ));
         // And the wrong action never triggers it.
         assert!(!needs_approval(&rules, "proc.exec", None, None));
     }

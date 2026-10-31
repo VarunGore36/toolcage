@@ -259,7 +259,11 @@ fn request_target_traversal_denied() {
     ] {
         let d = policy::decide(&p, &at("github", "GET", path));
         assert!(!d.allow, "traversal target must be denied: {path}");
-        assert_eq!(d.rule_ids, vec!["deny:request-target".to_string()], "{path}");
+        assert_eq!(
+            d.rule_ids,
+            vec!["deny:request-target".to_string()],
+            "{path}"
+        );
     }
 }
 
@@ -280,7 +284,13 @@ fn request_line_injection_denied() {
         assert!(!d.allow, "injected target must be denied: {path:?}");
         assert_eq!(d.rule_ids, vec!["deny:request-target".to_string()]);
     }
-    for method in ["GET / HTTP/1.1\r\nX: 1", "GET\r\nX: 1", "GET POST", "GE\0T", ""] {
+    for method in [
+        "GET / HTTP/1.1\r\nX: 1",
+        "GET\r\nX: 1",
+        "GET POST",
+        "GE\0T",
+        "",
+    ] {
         let d = policy::decide(&p, &at("github", method, "/repos/acme/app/x"));
         assert!(!d.allow, "injected method must be denied: {method:?}");
         assert_eq!(d.rule_ids, vec!["deny:request-target".to_string()]);
@@ -381,7 +391,10 @@ exec:
         vec!["perl", "-E", "system 1"],
     ] {
         let d = exec_dec(&p, Some(argv.clone()));
-        assert!(!d.allow, "allowlisted but dangerous form must be denied: {argv:?}");
+        assert!(
+            !d.allow,
+            "allowlisted but dangerous form must be denied: {argv:?}"
+        );
     }
 }
 
@@ -436,7 +449,10 @@ approval:
             argv: None,
         },
     );
-    assert!(!d.allow, "absent method must not inherit GET privileges: {d:?}");
+    assert!(
+        !d.allow,
+        "absent method must not inherit GET privileges: {d:?}"
+    );
     assert_eq!(d.rule_ids, vec!["deny:method-missing".to_string()]);
     // ... and must not escape GET's approval gate.
     assert!(
@@ -502,8 +518,14 @@ fs:
         limits: Default::default(),
         exec: Default::default(),
     };
-    assert!(!fs(&typo, "fs.write").allow, "typo'd mode must not allow writes");
-    assert!(fs(&typo, "fs.read").allow, "reads under the mount stay allowed");
+    assert!(
+        !fs(&typo, "fs.write").allow,
+        "typo'd mode must not allow writes"
+    );
+    assert!(
+        fs(&typo, "fs.read").allow,
+        "reads under the mount stay allowed"
+    );
     // Explicit rw allows writes (any case); ro denies them.
     for mode in ["rw", "RW"] {
         let p = pol(mode).unwrap();
@@ -525,10 +547,8 @@ fn overlapping_mounts_cannot_shadow_read_only() {
     // re-open writes under the parent (and the same mounts in the other order
     // denied). Every covering mount must agree: a write needs all of them.
     let dec = |mounts: &str, action: &str, path: &str| {
-        let p = policy::load_yaml(&format!(
-            "tool: t\nversion: 0\nfs:\n  mounts:\n{mounts}"
-        ))
-        .unwrap();
+        let p =
+            policy::load_yaml(&format!("tool: t\nversion: 0\nfs:\n  mounts:\n{mounts}")).unwrap();
         policy::decide(
             &p,
             &policy::Request {

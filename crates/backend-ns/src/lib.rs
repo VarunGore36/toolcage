@@ -37,8 +37,7 @@
 
 use libc::{
     c_char, c_int, c_long, c_uint, c_ulong, c_void, getgid, getuid, prctl, sock_filter, sock_fprog,
-    syscall, BPF_ABS, BPF_JEQ, BPF_JMP, BPF_K, BPF_LD, BPF_RET, BPF_W, EPERM,
-    SECCOMP_MODE_FILTER,
+    syscall, BPF_ABS, BPF_JEQ, BPF_JMP, BPF_K, BPF_LD, BPF_RET, BPF_W, EPERM, SECCOMP_MODE_FILTER,
     SECCOMP_RET_ALLOW, SECCOMP_RET_DATA, SECCOMP_RET_ERRNO, SIGKILL, STDERR_FILENO, STDIN_FILENO,
     STDOUT_FILENO, WEXITSTATUS, WIFEXITED, WNOHANG,
 };
@@ -603,9 +602,8 @@ fn isolated_exec(
             }
 
             // Child may now become root (inside its own user namespace only).
-            let n = unsafe {
-                libc::write(go_w.as_raw_fd(), &[1u8] as *const u8 as *const c_void, 1)
-            };
+            let n =
+                unsafe { libc::write(go_w.as_raw_fd(), &[1u8] as *const u8 as *const c_void, 1) };
             if n != 1 {
                 // Without the go signal the workload must not start at all.
                 kill_and_reap(child_raw);
@@ -651,8 +649,7 @@ fn isolated_exec(
                     // arm) reported no exit code and left the workload
                     // running — keep polling instead.
                     n if n < 0 => {
-                        if std::io::Error::last_os_error().kind()
-                            == std::io::ErrorKind::Interrupted
+                        if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
                         {
                             continue;
                         }
@@ -899,10 +896,7 @@ fn kill_and_reap(pid: i32) {
             if r == pid {
                 break;
             }
-            if r < 0
-                && std::io::Error::last_os_error().kind()
-                    != std::io::ErrorKind::Interrupted
-            {
+            if r < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
                 break; // ECHILD etc: nothing left to reap
             }
         }
@@ -943,9 +937,7 @@ pub fn read_capped_until(fd: OwnedFd, stop_at: Instant, cap: usize) -> (Vec<u8>,
         }
         // Readable, hung up or errored — one read() resolves all three
         // (0 means EOF).
-        let n = unsafe {
-            libc::read(fd.as_raw_fd(), tmp.as_mut_ptr() as *mut c_void, tmp.len())
-        };
+        let n = unsafe { libc::read(fd.as_raw_fd(), tmp.as_mut_ptr() as *mut c_void, tmp.len()) };
         match n {
             0 => break,
             n if n > 0 => {
@@ -1261,7 +1253,12 @@ mod tests {
         let r = b.exec("t1", &["/bin/true".into()], 30, OUTPUT_CAP).unwrap();
         assert_eq!(r.exit_code, Some(0));
         let r = b
-            .exec("t1", &["/bin/echo".into(), "hello-cage".into()], 30, OUTPUT_CAP)
+            .exec(
+                "t1",
+                &["/bin/echo".into(), "hello-cage".into()],
+                30,
+                OUTPUT_CAP,
+            )
             .unwrap();
         assert_eq!(r.exit_code, Some(0));
         assert_eq!(String::from_utf8_lossy(&r.stdout), "hello-cage\n");
@@ -1327,7 +1324,9 @@ mod tests {
         let mut b = NsBackend::new();
         b.create(&spec).unwrap();
         // cwd is the workspace, so relative path works.
-        let r = b.exec("t2", &["./net-helper".into()], 30, OUTPUT_CAP).unwrap();
+        let r = b
+            .exec("t2", &["./net-helper".into()], 30, OUTPUT_CAP)
+            .unwrap();
         assert_eq!(
             r.exit_code,
             Some(0),
@@ -1358,7 +1357,9 @@ mod tests {
         // so a shell script cannot spawn `env` on hosts where seccomp actually
         // installs (this host returns EINVAL for seccomp; runners do not).
         // `env` prints exactly the scrubbed environment.
-        let r = b.exec("t3", &["/usr/bin/env".into()], 30, OUTPUT_CAP).unwrap();
+        let r = b
+            .exec("t3", &["/usr/bin/env".into()], 30, OUTPUT_CAP)
+            .unwrap();
         assert_eq!(r.exit_code, Some(0));
         let out = String::from_utf8_lossy(&r.stdout);
         // env is cleared before exec (only PATH); nothing else may leak.
@@ -1522,16 +1523,16 @@ mod tests {
 
         // A representative slice of the syscalls a workload actually needs.
         for nr in [
-            0,  // read
-            1,  // write
-            2,  // open
-            3,  // close
-            9,  // mmap
-            12, // brk
-            21, // access
-            39, // getpid
-            59, // execve   <-- v0 returned EPERM here: nothing could run
-            60, // exit
+            0,   // read
+            1,   // write
+            2,   // open
+            3,   // close
+            9,   // mmap
+            12,  // brk
+            21,  // access
+            39,  // getpid
+            59,  // execve   <-- v0 returned EPERM here: nothing could run
+            60,  // exit
             231, // exit_group
             257, // openat
             262, // newfstatat
@@ -1614,7 +1615,10 @@ mod tests {
         for chunk in insns[1..insns.len() - 1].chunks(2) {
             assert_eq!(chunk[0].code, (BPF_JMP | BPF_JEQ | BPF_K) as u16);
             assert_eq!(chunk[1].code, (BPF_RET | BPF_K) as u16);
-            assert_eq!(chunk[1].k, SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA));
+            assert_eq!(
+                chunk[1].k,
+                SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA)
+            );
         }
     }
 
@@ -1804,7 +1808,12 @@ mod tests {
         let mut b = NsBackend::new();
         b.create(&spec).unwrap();
         let r = b
-            .exec("t6", &["/nonexistent/toolcage-test-prog".into()], 30, OUTPUT_CAP)
+            .exec(
+                "t6",
+                &["/nonexistent/toolcage-test-prog".into()],
+                30,
+                OUTPUT_CAP,
+            )
             .unwrap();
         assert_eq!(r.exit_code, Some(127));
         assert!(
@@ -1825,18 +1834,24 @@ mod tests {
         };
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
-            let Ok(pid) = name.parse::<i32>() else { continue };
+            let Ok(pid) = name.parse::<i32>() else {
+                continue;
+            };
             let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
                 continue;
             };
             // "pid (comm) state ppid ..." — comm may contain spaces and ')',
             // so split after the last ')' instead of on whitespace.
-            let Some((_, rest)) = stat.rsplit_once(") ") else { continue };
+            let Some((_, rest)) = stat.rsplit_once(") ") else {
+                continue;
+            };
             let mut it = rest.split_whitespace();
             let (Some(state), Some(ppid)) = (it.next(), it.next()) else {
                 continue;
             };
-            let Ok(ppid) = ppid.parse::<i32>() else { continue };
+            let Ok(ppid) = ppid.parse::<i32>() else {
+                continue;
+            };
             if ppid == me && state == "Z" {
                 out.push(pid);
             }
@@ -2106,7 +2121,12 @@ mod tests {
         let mut b = NsBackend::new();
         b.create(&spec).unwrap();
         let r = b
-            .exec("t-pidns", &["/bin/sh".into(), "-c".into(), "echo $$".into()], 30, OUTPUT_CAP)
+            .exec(
+                "t-pidns",
+                &["/bin/sh".into(), "-c".into(), "echo $$".into()],
+                30,
+                OUTPUT_CAP,
+            )
             .unwrap();
         assert_eq!(r.exit_code, Some(0), "sh -c 'echo $$' failed: {r:?}");
         assert_eq!(
@@ -2157,10 +2177,8 @@ mod tests {
             .map(|t| {
                 std::thread::spawn(move || {
                     for i in 0..3 {
-                        let dir = std::env::temp_dir().join(format!(
-                            "tc-ns-lock-{}-{t}-{i}",
-                            std::process::id()
-                        ));
+                        let dir = std::env::temp_dir()
+                            .join(format!("tc-ns-lock-{}-{t}-{i}", std::process::id()));
                         std::fs::create_dir_all(&dir).unwrap();
                         let id = format!("lock-{t}-{i}");
                         let spec = SessionSpec {
@@ -2284,7 +2302,9 @@ mod tests {
         let payload = vec![b'b'; 2 * 1024 * 1024];
         std::fs::write(dir.join("huge.bin"), &payload).unwrap();
         let src = dir.join("huge.bin").display().to_string();
-        let r = b.exec("t9", &["/bin/cat".into(), src], 30, OUTPUT_CAP).unwrap();
+        let r = b
+            .exec("t9", &["/bin/cat".into(), src], 30, OUTPUT_CAP)
+            .unwrap();
         assert_eq!(
             r.exit_code,
             Some(0),
@@ -2317,11 +2337,17 @@ mod tests {
         let mut b = NsBackend::new();
         b.create(&spec).unwrap();
         let start = Instant::now();
-        let r = b.exec("t-timeout", &["/bin/sleep".into(), "10".into()], 2, OUTPUT_CAP).unwrap();
+        let r = b
+            .exec(
+                "t-timeout",
+                &["/bin/sleep".into(), "10".into()],
+                2,
+                OUTPUT_CAP,
+            )
+            .unwrap();
         let elapsed = start.elapsed();
         assert_eq!(
-            r.exit_code,
-            None,
+            r.exit_code, None,
             "a timeout-killed run must return exit_code None, got {:?}",
             r.exit_code
         );

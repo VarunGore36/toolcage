@@ -103,7 +103,15 @@ fn credential_follows_destination_not_prefix() {
     // (one upstream): the credential travels.
     let o = s
         .fetch_via_proxy(
-            &b, &mut budgets, &mut proxy, "github.internal", method, path, None, &rl, true,
+            &b,
+            &mut budgets,
+            &mut proxy,
+            "github.internal",
+            method,
+            path,
+            None,
+            &rl,
+            true,
         )
         .unwrap();
     assert!(!o.allowed, "1-byte budget must deny: {o:?}");
@@ -115,15 +123,22 @@ fn credential_follows_destination_not_prefix() {
     // nothing.
     let o = s
         .fetch_via_proxy(
-            &b, &mut budgets, &mut proxy, "github.evil.com", method, path, None, &rl, true,
+            &b,
+            &mut budgets,
+            &mut proxy,
+            "github.evil.com",
+            method,
+            path,
+            None,
+            &rl,
+            true,
         )
         .unwrap();
     assert!(!o.allowed, "1-byte budget must deny: {o:?}");
     assert_eq!(o.rule_ids, vec!["budget:exceeded".to_string()]);
     let without_cred = last_bytes(&audit);
 
-    let header_len =
-        ("Authorization".len() + 2 + format!("Bearer {SECRET}").len() + 2) as u64;
+    let header_len = ("Authorization".len() + 2 + format!("Bearer {SECRET}").len() + 2) as u64;
     assert_eq!(
         with_cred - without_cred,
         header_len,
@@ -133,7 +148,17 @@ fn credential_follows_destination_not_prefix() {
 
     // And the plain alias behaves like its own alias spelling.
     let o = s
-        .fetch_via_proxy(&b, &mut budgets, &mut proxy, "github", method, path, None, &rl, true)
+        .fetch_via_proxy(
+            &b,
+            &mut budgets,
+            &mut proxy,
+            "github",
+            method,
+            path,
+            None,
+            &rl,
+            true,
+        )
         .unwrap();
     assert!(!o.allowed);
     assert_eq!(last_bytes(&audit), with_cred, "aliases share the binding");
@@ -156,16 +181,35 @@ fn approval_gate_matches_destination_aliases() {
     // POST to the gated destination, spelled as the operator wrote it.
     let o = s
         .fetch_via_proxy(
-            &b, &mut budgets, &mut proxy, "github", "POST", "/x", None, &rl, false,
+            &b,
+            &mut budgets,
+            &mut proxy,
+            "github",
+            "POST",
+            "/x",
+            None,
+            &rl,
+            false,
         )
         .unwrap();
-    assert!(o.need_approval, "POST to github must pause for approval: {o:?}");
+    assert!(
+        o.need_approval,
+        "POST to github must pause for approval: {o:?}"
+    );
     assert!(!o.allowed);
 
     // The same destination under its alias spelling must hit the same gate.
     let o = s
         .fetch_via_proxy(
-            &b, &mut budgets, &mut proxy, "github.internal", "POST", "/x", None, &rl, false,
+            &b,
+            &mut budgets,
+            &mut proxy,
+            "github.internal",
+            "POST",
+            "/x",
+            None,
+            &rl,
+            false,
         )
         .unwrap();
     assert!(
@@ -178,17 +222,38 @@ fn approval_gate_matches_destination_aliases() {
     // still without dialing).
     let o = s
         .fetch_via_proxy(
-            &b, &mut budgets, &mut proxy, "github.internal", "POST", "/x", None, &rl, true,
+            &b,
+            &mut budgets,
+            &mut proxy,
+            "github.internal",
+            "POST",
+            "/x",
+            None,
+            &rl,
+            true,
         )
         .unwrap();
-    assert!(!o.need_approval, "an approved call must not pause again: {o:?}");
+    assert!(
+        !o.need_approval,
+        "an approved call must not pause again: {o:?}"
+    );
     assert_eq!(o.rule_ids, vec!["budget:exceeded".to_string()]);
 
     // GET is not gated under either spelling: it reaches the budget check
     // (which denies it) rather than the approval gate.
     for host in ["github", "github.internal"] {
         let o = s
-            .fetch_via_proxy(&b, &mut budgets, &mut proxy, host, "GET", "/x", None, &rl, false)
+            .fetch_via_proxy(
+                &b,
+                &mut budgets,
+                &mut proxy,
+                host,
+                "GET",
+                "/x",
+                None,
+                &rl,
+                false,
+            )
             .unwrap();
         assert!(!o.need_approval, "GET to {host} is not gated: {o:?}");
         assert_eq!(o.rule_ids, vec!["budget:exceeded".to_string()]);

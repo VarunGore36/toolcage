@@ -166,10 +166,7 @@ pub fn route(
     // — and a presented token cannot be verified, so it is refused (fail
     // closed).
     match token {
-        None => anyhow::ensure!(
-            sup.cap_key.is_none(),
-            "denied [token:missing]"
-        ),
+        None => anyhow::ensure!(sup.cap_key.is_none(), "denied [token:missing]"),
         Some(t) => {
             // Fail closed: no host key means the tag cannot be verified.
             let ok = sup
@@ -414,7 +411,16 @@ mod tests {
         let mut budgets = toolcage_proxy::Budgets::default();
         let mut proxy = toolcage_proxy::Proxy::new().unwrap();
         let args = serde_json::json!({"path": path});
-        route(sup, &b, &mut proxy, &mut budgets, token, rl, "read_file", &args)
+        route(
+            sup,
+            &b,
+            &mut proxy,
+            &mut budgets,
+            token,
+            rl,
+            "read_file",
+            &args,
+        )
     }
 
     #[test]
@@ -433,11 +439,9 @@ mod tests {
         );
 
         // The same call with a valid token goes through (policy allows it).
-        let tok = toolcage_capability::Token::root(
-            &k,
-            "root-1",
-            fs_rights(vec!["workspace".into()]),
-        ).unwrap();
+        let tok =
+            toolcage_capability::Token::root(&k, "root-1", fs_rights(vec!["workspace".into()]))
+                .unwrap();
         assert!(fs_call(&mut sup, Some(&tok), &rl, "/workspace/x").is_ok());
     }
 
@@ -453,7 +457,8 @@ mod tests {
             &k,
             "root-2",
             fs_rights(vec!["workspace/narrow".into()]),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Narrow right: allowed.
         assert!(fs_call(&mut sup, Some(&tok), &rl, "/workspace/narrow/f").is_ok());
@@ -473,11 +478,9 @@ mod tests {
         // files. Revocation is now checked at the front door.
         let k = cap_key();
         let mut sup = sup_with(Some(k.clone()));
-        let tok = toolcage_capability::Token::root(
-            &k,
-            "root-3",
-            fs_rights(vec!["workspace".into()]),
-        ).unwrap();
+        let tok =
+            toolcage_capability::Token::root(&k, "root-3", fs_rights(vec!["workspace".into()]))
+                .unwrap();
         let mut rl = toolcage_capability::RevocationList::default();
         rl.track(&tok);
         rl.revoke("root-3");
@@ -487,11 +490,7 @@ mod tests {
 
         // Revoking a PARENT id revokes the subtree too.
         let child = tok
-            .attenuate(
-                &k,
-                "child-3",
-                fs_rights(vec!["workspace".into()]),
-            )
+            .attenuate(&k, "child-3", fs_rights(vec!["workspace".into()]))
             .unwrap();
         let mut rl2 = toolcage_capability::RevocationList::default();
         rl2.track(&child);
@@ -545,8 +544,8 @@ net:
         let mut proxy = toolcage_proxy::Proxy::new().unwrap();
         let rl = toolcage_capability::RevocationList::default();
         let mut call = |sup: &mut toolcage_supervisor::Supervisor,
-                    name: &str,
-                    args: &serde_json::Value|
+                        name: &str,
+                        args: &serde_json::Value|
          -> String {
             match route(sup, &b, &mut proxy, &mut budgets, None, &rl, name, args) {
                 Ok(_) => "ALLOWED".to_string(),
@@ -742,7 +741,8 @@ net:
                 budget_bytes: 1,
                 expires_at: 9_999_999_999,
             },
-        ).unwrap();
+        )
+        .unwrap();
         let args = serde_json::json!({"path": "/workspace/f"});
         let e = route(
             &mut sup,
@@ -785,13 +785,21 @@ net:
             .map(|m| m.as_str().unwrap())
             .collect();
         ms.sort();
-        assert_eq!(ms, vec!["GET", "POST"], "the proposal must not widen to all methods");
+        assert_eq!(
+            ms,
+            vec!["GET", "POST"],
+            "the proposal must not widen to all methods"
+        );
         let evil = hosts.iter().find(|h| h["host"] == "evil").unwrap();
         assert_eq!(evil["methods"][0], "DELETE");
         let paths = p["add_paths"].as_array().unwrap();
         let a = paths.iter().find(|x| x["path"] == "/a").unwrap();
         assert_eq!(a["methods"].as_array().unwrap().len(), 2);
-        assert!(p["add_fs"].as_array().unwrap().iter().any(|f| f == "/etc/passwd"));
+        assert!(p["add_fs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f == "/etc/passwd"));
     }
     #[test]
     fn rpc_response_omits_absent_members() {
@@ -831,7 +839,9 @@ net:
         // Id must be a string, number or null — not an object or array.
         assert!(mk("2.0", serde_json::Value::Null).validate().is_ok());
         assert!(mk("2.0", serde_json::json!("abc")).validate().is_ok());
-        let (code, _) = mk("2.0", serde_json::json!({"a": 1})).validate().unwrap_err();
+        let (code, _) = mk("2.0", serde_json::json!({"a": 1}))
+            .validate()
+            .unwrap_err();
         assert_eq!(code, INVALID_REQUEST);
         let (code, _) = mk("2.0", serde_json::json!([1, 2])).validate().unwrap_err();
         assert_eq!(code, INVALID_REQUEST);

@@ -550,9 +550,7 @@ fn main() -> anyhow::Result<()> {
                         });
                     }
                     None => {
-                        eprintln!(
-                            "warning: no policy credential named {cred}; secret not loaded"
-                        );
+                        eprintln!("warning: no policy credential named {cred}; secret not loaded");
                     }
                 }
             }
@@ -967,11 +965,7 @@ fn main() -> anyhow::Result<()> {
                 let pubkey = std::path::Path::new(&pubkey_name);
                 write_secret(secret, sk_hex.as_bytes())?;
                 write_public(pubkey, cp.pubkey_hex.as_bytes())?;
-                println!(
-                    "wrote {} + {}",
-                    secret.display(),
-                    pubkey.display()
-                );
+                println!("wrote {} + {}", secret.display(), pubkey.display());
             }
         },
     }

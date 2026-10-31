@@ -483,7 +483,7 @@ mod tests {
         // operates on bytes and rejects anything that is not ASCII hex.
         assert!(hex_decode("😀").is_err()); // 4 bytes, even, slices mid-char
         assert!(hex_decode("zz").is_err()); // non-hex digits
-        assert!(hex_decode("z").is_err());  // odd length
+        assert!(hex_decode("z").is_err()); // odd length
         assert_eq!(
             hex_decode("deadBEEF").unwrap(),
             vec![0xde, 0xad, 0xbe, 0xef]

@@ -54,7 +54,10 @@ fn learn_mode_proposes_on_denial_and_never_applies() {
         "the proposal must demand operator review and disclaim auto-apply: {err}"
     );
     // The proposal is advisory: the call was still denied.
-    assert!(err.contains("denied"), "the denial itself still happens: {err}");
+    assert!(
+        err.contains("denied"),
+        "the denial itself still happens: {err}"
+    );
 }
 
 #[test]

@@ -145,11 +145,11 @@ pub fn policy_host(policy: &Policy, alias_or_host: &str) -> String {
         .iter()
         .filter(|(alias, up)| {
             up.as_str() == upstream.as_str()
-                && policy
-                    .net
-                    .hosts
-                    .iter()
-                    .any(|h| h.alias.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(alias)))
+                && policy.net.hosts.iter().any(|h| {
+                    h.alias
+                        .as_deref()
+                        .is_some_and(|a| a.eq_ignore_ascii_case(alias))
+                })
         })
         .map(|(alias, _)| alias.clone())
         .collect();
@@ -159,12 +159,11 @@ pub fn policy_host(policy: &Policy, alias_or_host: &str) -> String {
     }
     // The operator may have written the rule as `host: registry.npmjs.org`
     // instead of `alias: registry` — resolve to the upstream in that case.
-    if policy
-        .net
-        .hosts
-        .iter()
-        .any(|h| h.host.as_deref().is_some_and(|hh| hh.eq_ignore_ascii_case(upstream)))
-    {
+    if policy.net.hosts.iter().any(|h| {
+        h.host
+            .as_deref()
+            .is_some_and(|hh| hh.eq_ignore_ascii_case(upstream))
+    }) {
         return upstream.clone();
     }
     key
@@ -470,11 +469,8 @@ fn decode_response_body(head: &[u8], raw_body: &[u8]) -> Result<Vec<u8>, ProxyEr
     }
     // Transfer-Encoding: chunked means the body is framed with chunk headers.
     match header_value(head, "transfer-encoding") {
-        Some(te) if te.to_ascii_lowercase().contains("chunked") => {
-            decode_chunked(raw_body).ok_or_else(|| {
-                ProxyError::Io("malformed chunked response body".to_string())
-            })
-        }
+        Some(te) if te.to_ascii_lowercase().contains("chunked") => decode_chunked(raw_body)
+            .ok_or_else(|| ProxyError::Io("malformed chunked response body".to_string())),
         _ => Ok(raw_body.to_vec()),
     }
 }
@@ -723,7 +719,13 @@ mod tests {
                 other => panic!("target {path:?} must be rejected before dialing: {other:?}"),
             }
         }
-        for method in ["GET / HTTP/1.1\r\nX: 1", "GET\r\nX: 1", "GET POST", "GE\0T", ""] {
+        for method in [
+            "GET / HTTP/1.1\r\nX: 1",
+            "GET\r\nX: 1",
+            "GET POST",
+            "GE\0T",
+            "",
+        ] {
             match p.fetch("api.github.com", method, "/x", &[], u64::MAX) {
                 Err(ProxyError::Policy(_)) => {}
                 other => panic!("method {method:?} must be rejected before dialing: {other:?}"),
@@ -845,13 +847,19 @@ mod tests {
         let mut b = Budgets::with_path(&path).unwrap();
         assert!(b.check("github", 10, 1000, 100).unwrap());
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "the budget store must be 0600 regardless of umask");
+        assert_eq!(
+            mode, 0o600,
+            "the budget store must be 0600 regardless of umask"
+        );
         // The transient file is `<path>.tmp` — appended, not extension-replaced.
         let expected_tmp = dir.join("a.jsonl.budget.tmp");
         assert!(!expected_tmp.exists(), "the tmp file is renamed away");
         // (its name is what the append produces; with_extension would have
         // produced a.jsonl.tmp — check the rename target did not linger there)
-        assert!(!dir.join("a.jsonl.tmp").exists(), "with_extension naming would collide");
+        assert!(
+            !dir.join("a.jsonl.tmp").exists(),
+            "with_extension naming would collide"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -897,9 +905,9 @@ mod tests {
         // Fail closed: bad framing must error, not return partial bytes.
         let head = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
         let bad: &[&[u8]] = &[
-            b"4\r\ns3cr\r\n",                 // truncated: no terminator
-            b"zz\r\ns3cr\r\n0\r\n\r\n",       // non-hex size
-            b"20\r\nshort\r\n0\r\n\r\n",      // size larger than payload
+            b"4\r\ns3cr\r\n",            // truncated: no terminator
+            b"zz\r\ns3cr\r\n0\r\n\r\n",  // non-hex size
+            b"20\r\nshort\r\n0\r\n\r\n", // size larger than payload
         ];
         for raw in bad {
             assert!(
@@ -916,7 +924,10 @@ mod tests {
             header_value(head, "content-encoding").as_deref(),
             Some(" gzip")
         );
-        assert_eq!(header_value(head, "CONTENT-ENCODING").as_deref(), Some(" gzip"));
+        assert_eq!(
+            header_value(head, "CONTENT-ENCODING").as_deref(),
+            Some(" gzip")
+        );
         assert_eq!(header_value(head, "missing").as_deref(), None);
     }
 

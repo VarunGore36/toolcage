@@ -34,7 +34,9 @@ fn canary_secret_not_in_guest_environment() {
     let spec = ws_spec("env-canary", &dir);
     let mut b = NsBackend::new();
     b.create(&spec).unwrap();
-    let r = b.exec("env-canary", &["/usr/bin/env".into()], 30, 1024 * 1024).unwrap();
+    let r = b
+        .exec("env-canary", &["/usr/bin/env".into()], 30, 1024 * 1024)
+        .unwrap();
     let output = String::from_utf8_lossy(&r.stdout);
     assert_eq!(r.exit_code, Some(0), "env exec failed: {output}");
     assert!(
@@ -87,13 +89,23 @@ fn canary_cross_session_isolation_after_teardown() {
     b.create(&spec).unwrap();
     // Session exists: exec works.
     let r1 = b
-        .exec("session-canary", &["/bin/echo".into(), "hello".into()], 30, 1024 * 1024)
+        .exec(
+            "session-canary",
+            &["/bin/echo".into(), "hello".into()],
+            30,
+            1024 * 1024,
+        )
         .unwrap();
     assert_eq!(r1.exit_code, Some(0), "pre-teardown exec failed");
     // Teardown.
     b.destroy("session-canary").unwrap();
     // After teardown: exec fails (session not created).
-    let r2 = b.exec("session-canary", &["/bin/echo".into(), "hello".into()], 30, 1024 * 1024);
+    let r2 = b.exec(
+        "session-canary",
+        &["/bin/echo".into(), "hello".into()],
+        30,
+        1024 * 1024,
+    );
     assert!(r2.is_err(), "exec after destroy should fail, got {r2:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

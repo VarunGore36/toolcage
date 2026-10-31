@@ -333,9 +333,12 @@ fn interpreter_flags(bin: &str) -> &'static [&'static str] {
 /// version (digits and dots) so `python3x` does not match `python`.
 fn bin_matches(name: &str, known: &str) -> bool {
     name == known
-        || name
-            .strip_prefix(known)
-            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b'-'))
+        || name.strip_prefix(known).is_some_and(|rest| {
+            !rest.is_empty()
+                && rest
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || b == b'.' || b == b'-')
+        })
 }
 
 /// True for shell short-flag args that run an inline command string:
@@ -383,8 +386,7 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
             // path are forwarded verbatim upstream, so a guest must not be able
             // to smuggle a different resource or extra headers past the rule
             // that was checked (see request_target_is_clean).
-            if (req.method.is_some() && !method_is_token(&method))
-                || !request_target_is_clean(path)
+            if (req.method.is_some() && !method_is_token(&method)) || !request_target_is_clean(path)
             {
                 return deny(
                     "deny:request-target",
@@ -494,49 +496,47 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
             {
                 let bin = argv[0].rsplit('/').next().unwrap_or(&argv[0]);
                 let rest = &argv[1..];
-                    // A shell binary anywhere in argv (argv[0] itself, or reached
-                    // indirectly via `env sh -c`) running an inline-code string
-                    // executes arbitrary command text outside argv-array
-                    // scrutiny. Running a shell script file is the same class of
-                    // risk as `sh -c`, so either form is denied.
-                    let shell_here = SHELL_BINS
+                // A shell binary anywhere in argv (argv[0] itself, or reached
+                // indirectly via `env sh -c`) running an inline-code string
+                // executes arbitrary command text outside argv-array
+                // scrutiny. Running a shell script file is the same class of
+                // risk as `sh -c`, so either form is denied.
+                let shell_here = SHELL_BINS.iter().any(|s| bin_matches(bin, s))
+                    || rest
                         .iter()
-                        .any(|s| bin_matches(bin, s))
-                        || rest
-                            .iter()
-                            .any(|a| SHELL_BINS.iter().any(|s| bin_matches(a, s)));
-                    if shell_here && rest.iter().any(|a| shell_inline_flag(a)) {
-                        return deny("deny:shell", "shell -c is not allowed; use argv arrays");
+                        .any(|a| SHELL_BINS.iter().any(|s| bin_matches(a, s)));
+                if shell_here && rest.iter().any(|a| shell_inline_flag(a)) {
+                    return deny("deny:shell", "shell -c is not allowed; use argv arrays");
+                }
+                if shell_here && rest.iter().any(|a| !a.starts_with('-')) {
+                    return deny(
+                        "deny:shell",
+                        "shell script files are not allowed; use argv arrays",
+                    );
+                }
+                // Interpreters given inline code are denied WHEREVER they
+                // appear in argv, not just argv[0]: `env python3 -c`, `nice
+                // perl -E` and `timeout 5 python3 -c` must be caught just
+                // like `python3 -c`. Every spelling of the inline-code flag
+                // is matched (see interpreter_flags): `-c`, `-e`, `-E`, `-p`,
+                // `--eval`, `-r`, `-R`, and the joined forms (`-ccode`).
+                for a in argv {
+                    let name = a.rsplit('/').next().unwrap_or(a);
+                    let flags = interpreter_flags(name);
+                    if flags.is_empty() {
+                        continue;
                     }
-                    if shell_here && rest.iter().any(|a| !a.starts_with('-')) {
+                    if argv
+                        .iter()
+                        .any(|b| flags.iter().any(|f| b == f || b.starts_with(*f)))
+                    {
                         return deny(
                             "deny:shell",
-                            "shell script files are not allowed; use argv arrays",
+                            "interpreter inline code is not allowed; use argv arrays",
                         );
                     }
-                    // Interpreters given inline code are denied WHEREVER they
-                    // appear in argv, not just argv[0]: `env python3 -c`, `nice
-                    // perl -E` and `timeout 5 python3 -c` must be caught just
-                    // like `python3 -c`. Every spelling of the inline-code flag
-                    // is matched (see interpreter_flags): `-c`, `-e`, `-E`, `-p`,
-                    // `--eval`, `-r`, `-R`, and the joined forms (`-ccode`).
-                    for a in argv {
-                        let name = a.rsplit('/').next().unwrap_or(a);
-                        let flags = interpreter_flags(name);
-                        if flags.is_empty() {
-                            continue;
-                        }
-                        if argv
-                            .iter()
-                            .any(|b| flags.iter().any(|f| b == f || b.starts_with(*f)))
-                        {
-                            return deny(
-                                "deny:shell",
-                                "interpreter inline code is not allowed; use argv arrays",
-                            );
-                        }
-                    }
                 }
+            }
             Decision {
                 allow: true,
                 rule_ids: vec!["proc:allow".into()],

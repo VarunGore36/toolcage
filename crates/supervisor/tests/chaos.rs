@@ -109,7 +109,8 @@ fn revoked_token_denied_and_audited() {
             budget_bytes: 1000,
             expires_at: 9_999_999_999,
         },
-    ).unwrap();
+    )
+    .unwrap();
     let child = root
         .attenuate(
             &key,
@@ -294,7 +295,10 @@ fn panic_freeze_taints_and_keeps_the_chain_verifiable() {
     toolcage_audit::verify(&log).expect("a frozen log must still verify");
     let last = std::fs::read_to_string(&log).unwrap();
     let last = last.lines().last().unwrap().to_string();
-    assert!(last.contains("deny-all"), "the freeze must deny all: {last}");
+    assert!(
+        last.contains("deny-all"),
+        "the freeze must deny all: {last}"
+    );
 
     // A second log's marker must not collide with the first's.
     let log2 = dir.join("b.log");
@@ -318,6 +322,9 @@ fn panic_freeze_taints_and_keeps_the_chain_verifiable() {
     .unwrap();
     drop(w);
     toolcage_supervisor::panic_freeze(&log2, "x").unwrap();
-    assert!(dir.join("b.log.tainted").exists(), "second log's own marker");
+    assert!(
+        dir.join("b.log.tainted").exists(),
+        "second log's own marker"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

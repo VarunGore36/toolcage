@@ -403,11 +403,11 @@ impl Supervisor {
         // broker attaches this credential upstream, so the token must be
         // allowed to use it. Passing `None` here (the old code) skipped the
         // axis entirely, making `cred_use` attenuation advisory.
-        let bound_cred = self
-            .policy
-            .credentials
-            .iter()
-            .find(|c| dest_names.iter().any(|n| n.eq_ignore_ascii_case(&c.use_with)));
+        let bound_cred = self.policy.credentials.iter().find(|c| {
+            dest_names
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(&c.use_with))
+        });
         let mut w = Writer::open(&self.audit_path)?;
         // Token check (I3): valid keyed tag, narrow rights, unexpired, not
         // revoked. Fail closed: with no host key the tag cannot be verified,
