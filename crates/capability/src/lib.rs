@@ -113,6 +113,20 @@ fn hex_bytes(s: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
+/// A rev_id names a token in the audit trail and the revocation list: keep it
+/// to the portable identifier charset (the guest-agent id rule) and non-empty,
+/// so it cannot smuggle control characters into logs or collide with the
+/// empty key of the revocation map.
+pub fn validate_rev_id(rev: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(!rev.is_empty() && rev.len() <= 64, "rev_id bounds");
+    anyhow::ensure!(
+        rev.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-'),
+        "bad rev_id charset"
+    );
+    Ok(())
+}
+
 fn feed(mac: &mut Hmac<Sha256>, part: &[u8]) {
     // Length prefixes avoid concatenation ambiguity ("ab"+"c" vs "a"+"bc").
     mac.update(&(part.len() as u64).to_le_bytes());
@@ -178,15 +192,17 @@ fn now_secs() -> u64 {
 }
 
 impl Token {
-    /// Mint a root token under the host key.
-    pub fn root(key: &Key, rev_id: &str, rights: Rights) -> Self {
+    /// Mint a root token under the host key. The rev_id is validated: it names
+    /// the token in audit and revocation.
+    pub fn root(key: &Key, rev_id: &str, rights: Rights) -> anyhow::Result<Self> {
+        validate_rev_id(rev_id)?;
         let tag = hex_lower(&mac_for(key, rev_id, &None, &rights).finalize().into_bytes());
-        Self {
+        Ok(Self {
             rev_id: rev_id.into(),
             parent: None,
             rights,
             tag,
-        }
+        })
     }
 
     /// Constant-time tag check against the host key. A token minted under any
@@ -205,6 +221,7 @@ impl Token {
     /// shorter-or-equal expiry. New rev_id linked to parent.
     /// Parent must verify under the key (fail-closed): no key, no delegation.
     pub fn attenuate(&self, key: &Key, rev_id: &str, narrow: Rights) -> anyhow::Result<Token> {
+        validate_rev_id(rev_id)?;
         anyhow::ensure!(self.verify_tag(key), "parent tag invalid");
         // fs: each child prefix must sit under a parent prefix (normalized).
         for p in &narrow.fs_prefixes {
@@ -400,7 +417,7 @@ mod tests {
                 budget_bytes: 1000,
                 expires_at: 9_999_999_999,
             },
-        )
+        ).unwrap()
     }
     #[test]
     fn narrow_ok_widen_fails() {
@@ -502,7 +519,7 @@ mod tests {
                 budget_bytes: u64::MAX,
                 expires_at: 9_999_999_999,
             },
-        );
+        ).unwrap();
         assert!(
             !forged.verify_tag(&key()),
             "forged tag must not verify under the host key"
@@ -654,7 +671,7 @@ mod tests {
                     budget_bytes: 0,
                     expires_at: 9_999_999_999,
                 },
-            )
+            ).unwrap()
         };
         let root = mk(vec!["/"]);
         assert!(root.allows(&k, Some("/workspace/f"), None, None, None));
@@ -689,6 +706,36 @@ mod tests {
             parent.attenuate(&k, "w", wide).is_err(),
             "widening to the root must still be refused"
         );
+    }
+
+    #[test]
+    fn rev_id_is_validated_at_mint_and_delegation() {
+        // The rev_id names the token in the audit trail and keys the
+        // revocation map: control characters smuggle into logs, an oversized
+        // one amplifies memory, and "" collides on the empty key.
+        let k = key();
+        let rights = || Rights {
+            fs_prefixes: vec!["/workspace".into()],
+            net_hosts: vec![],
+            methods: vec![],
+            cred_use: vec![],
+            budget_bytes: 0,
+            expires_at: 9_999_999_999,
+        };
+        for rev in ["", "a b", "a\nInjected: 1", "a\0b", &"x".repeat(65)] {
+            assert!(
+                Token::root(&k, rev, rights()).is_err(),
+                "rev_id {rev:?} must be refused at mint"
+            );
+        }
+        let root = Token::root(&k, "root-1.2_3", rights()).unwrap();
+        for rev in ["", "a b", "a\nInjected: 1", &"x".repeat(65)] {
+            assert!(
+                root.attenuate(&k, rev, rights()).is_err(),
+                "rev_id {rev:?} must be refused at delegation"
+            );
+        }
+        assert!(root.attenuate(&k, "child-1", rights()).is_ok());
     }
 
     #[test]

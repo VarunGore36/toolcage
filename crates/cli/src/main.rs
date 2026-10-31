@@ -618,7 +618,7 @@ fn main() -> anyhow::Result<()> {
                         budget_bytes: 1000,
                         expires_at: 9_999_999_999,
                     },
-                );
+                )?;
                 write_secret(&out, serde_json::to_string_pretty(&t)?.as_bytes())?;
                 println!("minted {rev} -> {}", out.display());
             }

@@ -109,7 +109,7 @@ fn revoked_token_denied_and_audited() {
             budget_bytes: 1000,
             expires_at: 9_999_999_999,
         },
-    );
+    ).unwrap();
     let child = root
         .attenuate(
             &key,

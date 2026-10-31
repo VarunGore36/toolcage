@@ -437,7 +437,7 @@ mod tests {
             &k,
             "root-1",
             fs_rights(vec!["workspace".into()]),
-        );
+        ).unwrap();
         assert!(fs_call(&mut sup, Some(&tok), &rl, "/workspace/x").is_ok());
     }
 
@@ -453,7 +453,7 @@ mod tests {
             &k,
             "root-2",
             fs_rights(vec!["workspace/narrow".into()]),
-        );
+        ).unwrap();
 
         // Narrow right: allowed.
         assert!(fs_call(&mut sup, Some(&tok), &rl, "/workspace/narrow/f").is_ok());
@@ -477,7 +477,7 @@ mod tests {
             &k,
             "root-3",
             fs_rights(vec!["workspace".into()]),
-        );
+        ).unwrap();
         let mut rl = toolcage_capability::RevocationList::default();
         rl.track(&tok);
         rl.revoke("root-3");
@@ -704,7 +704,7 @@ net:
                 budget_bytes: 1,
                 expires_at: 9_999_999_999,
             },
-        );
+        ).unwrap();
         let args = serde_json::json!({"path": "/workspace/f"});
         let e = route(
             &mut sup,

@@ -116,7 +116,7 @@ fn valid_token_passes_the_gate_when_cap_key_armed() {
             budget_bytes: 0,
             expires_at: 0,
         },
-    );
+    ).unwrap();
     let mut sup = sup_at(&audit, Some(k.clone()));
     let rl = toolcage_capability::RevocationList::default();
     let o = fetch(&mut sup, Some(&tok), &rl);
@@ -154,7 +154,7 @@ fn token_identity_recorded_in_audit_events() {
             budget_bytes: 0,
             expires_at: 0,
         },
-    );
+    ).unwrap();
     let mut sup = sup_at(&audit, Some(k));
     let rl = toolcage_capability::RevocationList::default();
     let _ = fetch(&mut sup, Some(&tok), &rl);
@@ -277,7 +277,7 @@ fn cred_use_axis_is_enforced_on_credential_attachment() {
             budget_bytes: 0,
             expires_at: 0,
         },
-    );
+    ).unwrap();
     let mut sup = Supervisor {
         policy: toolcage_policy::load_yaml(POLICY_WITH_CRED).unwrap(),
         audit_path: audit.clone(),
@@ -308,7 +308,7 @@ fn cred_use_axis_is_enforced_on_credential_attachment() {
             budget_bytes: 0,
             expires_at: 0,
         },
-    );
+    ).unwrap();
     let mut sup = Supervisor {
         policy: toolcage_policy::load_yaml(POLICY_WITH_CRED).unwrap(),
         audit_path: audit.clone(),

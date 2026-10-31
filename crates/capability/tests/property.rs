@@ -51,7 +51,7 @@ fn chains_never_widen_over_200_seeds() {
             budget_bytes: 500,
             expires_at: 9_999_999_999,
         },
-    );
+    ).unwrap();
     for seed in 0..200u64 {
         // Multi-hop delegation: root -> c0 -> c1 -> c2, each hop narrowed.
         let mut parent = root.clone();
@@ -127,7 +127,7 @@ fn tokens_minted_under_another_key_are_dead() {
                 },
                 seed,
             ),
-        );
+        ).unwrap();
         assert!(
             !forged.verify_tag(&host),
             "seed {seed}: forged tag verified"
@@ -171,7 +171,7 @@ fn revocation_subtree_holds_over_200_seeds() {
             budget_bytes: 500,
             expires_at: 9_999_999_999,
         },
-    );
+    ).unwrap();
     for seed in 0..200u64 {
         // root -> c0 -> c1 -> c2
         let mut chain = vec![root.clone()];
