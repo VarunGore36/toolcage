@@ -109,7 +109,7 @@ try {{ tc.call("read_file", {{ path: "/etc/passwd" }}); }} catch (e) {{ denied =
 if (!denied) throw new Error("reading /etc/passwd must throw");
 console.log("ok");
 "#,
-            client = client.display().to_string(),
+            client = client.display(),
             policy = policy(),
             audit = audit.display().to_string(),
             bin = cli(),
