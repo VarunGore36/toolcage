@@ -1,6 +1,6 @@
 # Test results — toolcage
 
-194 tests, 0 failures (`cargo test --workspace`). Clippy clean
+196 tests, 0 failures (`cargo test --workspace`). Clippy clean
 (`cargo clippy --workspace --all-targets`: 0 findings).
 
 Generated from the workspace run; re-run `cargo test --workspace` to
@@ -19,10 +19,10 @@ reproduce. The breakdown is by test target (integration targets marked `*`).
 | approval unit (gate matching, unknown dodges, queue) | 2 | policy |
 | proxy unit (alias, metadata, budgets, http parsing, chunked decode) | 19 | I1 |
 | guest-agent unit (request + reply validation) | 6 | I6 |
-| mcp unit (gate, tool args, learn, JSON-RPC 2.0 conformance) | 14 | A2 |
+| mcp unit (gate, tool args, learn, JSON-RPC 2.0 conformance, RPC smoke) | 15 | A2 |
 | supervisor unit (hashing, budget helpers) | 1 | — |
 | supervisor canary `*` | 3 | I2, I7 |
-| supervisor chaos `*` (audit-fail, proxy-down, broker-down, ro-disk, revoked-token, over-budget) | 7 | fail-closed |
+| supervisor chaos `*` (audit-fail, proxy-down, broker-down, ro-disk, revoked-token, over-budget, panic freeze) | 8 | fail-closed |
 | supervisor destination `*` | 2 | I1 |
 | supervisor fuzz `*` (policy/guest/audit/proxy) | 4 | all |
 | supervisor isolation `*` (fail-closed, tier2 no host spawn, escape hatch) | 4 | I1 |

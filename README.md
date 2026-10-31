@@ -228,7 +228,7 @@ Third-party MCP servers run as **guest processes** under the same policy and aud
 
 ## Tests
 
-`cargo test --workspace` runs **186 tests, 0 failures**; clippy is clean. Beyond unit tests the suite includes:
+`cargo test --workspace` runs the full suite green with clippy clean — the current count and per-suite breakdown live in [`docs/TEST_RESULTS.md`](docs/TEST_RESULTS.md) (regenerated from the run; counts here went stale every commit when duplicated). Beyond unit tests the suite includes:
 
 - **Escape suite** against the policy and proxy (I1, I6), and a Tier 2 escape suite asserting the design closes each exit — vsock-only with no network device ever configured, jailer confinement of the VMM process, and a control-channel escape matrix
 - **Fuzzing** of the policy, guest-agent, audit, and proxy parsers

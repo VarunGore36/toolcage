@@ -49,7 +49,7 @@ cargo build --release
 ### Test
 
 ```bash
-cargo test --workspace       # 194 tests, 0 failures (see docs/TEST_RESULTS.md)
+cargo test --workspace       # all green (count + breakdown: docs/TEST_RESULTS.md)
 cargo clippy --workspace --all-targets  # clean
 ```
 
