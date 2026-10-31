@@ -1,6 +1,6 @@
 # Test results — toolcage
 
-200 tests, 0 failures (`cargo test --workspace`). Clippy clean
+201 tests, 0 failures (`cargo test --workspace`). Clippy clean
 (`cargo clippy --workspace --all-targets`: 0 findings).
 
 Generated from the workspace run; re-run `cargo test --workspace` to
@@ -33,7 +33,7 @@ reproduce. The breakdown is by test target (integration targets marked `*`).
 | supervisor token gate `*` (dual auth, attenuation, revocation) | 5 | I3 |
 | backend-ns unit (probe, pidns, exec isolation, seccomp, Landlock ABI, environ scrub, waitpid EINTR) | 22 | I1, I2 |
 | backend-gv unit (OCI bundle, read_capped, honors lattice, fail-closed) | 9 | tier fail-closed |
-| backend-fc unit (config, jailer, pool, snapshot, guest reply, frame, escape suite) | 27 | I1, I6 |
+| backend-fc unit (config, jailer, pool, snapshot, guest reply, frame, escape suite, image manifest) | 28 | I1, I6 |
 | cli unit (budget naming) | 1 | — |
 | cli exit_code `*` | 2 | fail-closed |
 | cli key_permissions `*` (0600/0644 exact, umask-independent) | 3 | I2 |

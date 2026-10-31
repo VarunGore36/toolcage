@@ -2033,3 +2033,63 @@ mod bench_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+
+    /// The image builder's manifest must be the manifest the runtime loads:
+    /// ImageManifest with the sha256 of every artifact. The old build.sh
+    /// emitted {kernel, rootfs, guest_agent, vsock_only} — which no loader
+    /// could parse — and a bare manifest.sha256 instead of a signature.
+    #[test]
+    fn build_manifest_matches_what_the_loader_parses() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let script = root.join("images/build.sh");
+        let dir = std::env::temp_dir().join(format!("tc-img-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let art = |name: &str, bytes: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+        let kernel = art("vmlinux", b"kernel-bytes");
+        let rootfs = art("rootfs.ext4", b"rootfs-bytes");
+        let snapshot = art("snap.bin", b"snap-bytes");
+        let mem = art("mem.bin", b"mem-bytes");
+        let out = dir.join("out");
+
+        let st = std::process::Command::new("bash")
+            .arg(&script)
+            .arg(&out)
+            .arg(&kernel)
+            .arg(&rootfs)
+            .arg(&snapshot)
+            .arg(&mem)
+            .args(["2", "512"])
+            .output()
+            .expect("build.sh runs");
+        assert!(
+            st.status.success(),
+            "build.sh failed: {}",
+            String::from_utf8_lossy(&st.stderr)
+        );
+
+        // The manifest parses as the runtime's ImageManifest...
+        let text = std::fs::read_to_string(out.join("manifest.json")).unwrap();
+        let m: ImageManifest = serde_json::from_str(&text).expect("loader must parse it");
+        assert_eq!(m.vcpu_count, 2);
+        assert_eq!(m.mem_size_mib, 512);
+        assert_eq!(m.snapshot_path, snapshot.display().to_string());
+
+        // ...and every hash matches the artifact it names.
+        let sha =
+            |p: &std::path::Path| hex_encode(&sha2::Sha256::digest(std::fs::read(p).unwrap()));
+        assert_eq!(m.kernel_hash, sha(&kernel));
+        assert_eq!(m.rootfs_hash, sha(&rootfs));
+        assert_eq!(m.snapshot_hash, sha(&snapshot));
+        assert_eq!(m.mem_file_hash, sha(&mem));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
