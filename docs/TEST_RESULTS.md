@@ -1,6 +1,6 @@
 # Test results — toolcage
 
-202 tests, 0 failures (`cargo test --workspace`). Clippy clean
+204 tests, 0 failures (`cargo test --workspace`). Clippy clean
 (`cargo clippy --workspace --all-targets`: 0 findings).
 
 Generated from the workspace run; re-run `cargo test --workspace` to
@@ -14,7 +14,7 @@ reproduce. The breakdown is by test target (integration targets marked `*`).
 | audit unit (chain, checkpoint, verify) | 6 | I4, I5 |
 | audit throughput `*` | 1 | perf |
 | broker unit (inject/scrub/canary, encrypt/load/rotate, hex, empty credential) | 8 | I2 |
-| capability unit (narrow/widen/revoke/tamper, MAC shape, root prefix, rev_id) | 11 | I3 |
+| capability unit (narrow/widen/revoke/tamper, MAC shape, root prefix, rev_id, signed lineage) | 13 | I3 |
 | capability property `*` (200-seed chains, revocation subtree, keyed tokens) | 3 | I3 |
 | approval unit (gate matching, unknown dodges, queue) | 2 | policy |
 | proxy unit (alias, metadata, budgets, http parsing, chunked decode) | 19 | I1 |

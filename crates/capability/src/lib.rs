@@ -48,10 +48,20 @@ pub struct Rights {
     pub expires_at: u64,
 }
 
+/// Delegation depth bound. The ancestor chain is carried (and signed) in
+/// every token; a bound keeps a token's size linear in a sane number of hops.
+const MAX_CHAIN_DEPTH: usize = 64;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Token {
     pub rev_id: String,
     pub parent: Option<String>,
+    /// Signed lineage, root first, immediate parent last. The token only used
+    /// to carry its immediate parent, so a 2-hop chain whose INTERMEDIATE was
+    /// never track()ed (always true when just the leaf is presented) walked
+    /// off the end of `parent_of` and survived its root's revocation.
+    #[serde(default)]
+    pub ancestors: Vec<String>,
     pub rights: Rights,
     /// HMAC-SHA256 tag (hex) over the chain under the host `Key`.
     pub tag: String,
@@ -135,7 +145,13 @@ fn feed(mac: &mut Hmac<Sha256>, part: &[u8]) {
 
 /// Unfinalized HMAC over the canonical token body. Length-prefixed fields,
 /// keyed with the host secret (I3).
-fn mac_for(key: &Key, rev_id: &str, parent: &Option<String>, rights: &Rights) -> Hmac<Sha256> {
+fn mac_for(
+    key: &Key,
+    rev_id: &str,
+    parent: &Option<String>,
+    ancestors: &[String],
+    rights: &Rights,
+) -> Hmac<Sha256> {
     let mut mac =
         <Hmac<Sha256> as Mac>::new_from_slice(&key.0).expect("hmac accepts keys of any length");
     feed(&mut mac, rev_id.as_bytes());
@@ -149,6 +165,12 @@ fn mac_for(key: &Key, rev_id: &str, parent: &Option<String>, rights: &Rights) ->
             feed(&mut mac, &[1u8]);
             feed(&mut mac, p.as_bytes());
         }
+    }
+    // The lineage is signed with the rest: it must not be strippable or
+    // extendable, or a holder could hide a revoked ancestor.
+    feed(&mut mac, &(ancestors.len() as u64).to_le_bytes());
+    for anc in ancestors {
+        feed(&mut mac, anc.as_bytes());
     }
     feed(
         &mut mac,
@@ -196,10 +218,16 @@ impl Token {
     /// the token in audit and revocation.
     pub fn root(key: &Key, rev_id: &str, rights: Rights) -> anyhow::Result<Self> {
         validate_rev_id(rev_id)?;
-        let tag = hex_lower(&mac_for(key, rev_id, &None, &rights).finalize().into_bytes());
+        let ancestors = Vec::new();
+        let tag = hex_lower(
+            &mac_for(key, rev_id, &None, &ancestors, &rights)
+                .finalize()
+                .into_bytes(),
+        );
         Ok(Self {
             rev_id: rev_id.into(),
             parent: None,
+            ancestors,
             rights,
             tag,
         })
@@ -208,12 +236,26 @@ impl Token {
     /// Constant-time tag check against the host key. A token minted under any
     /// other key (or hand-edited) fails here and everywhere downstream.
     pub fn verify_tag(&self, key: &Key) -> bool {
+        // The lineage is attacker-controlled JSON: bound it before the MAC
+        // sees it (an oversized chain is a memory amplifier; garbage ids are
+        // not something any signer would have produced).
+        if self.ancestors.len() > MAX_CHAIN_DEPTH
+            || self.ancestors.iter().any(|a| validate_rev_id(a).is_err())
+        {
+            return false;
+        }
         let Some(raw) = hex_bytes(&self.tag) else {
             return false;
         };
-        mac_for(key, &self.rev_id, &self.parent, &self.rights)
-            .verify_slice(&raw)
-            .is_ok()
+        mac_for(
+            key,
+            &self.rev_id,
+            &self.parent,
+            &self.ancestors,
+            &self.rights,
+        )
+        .verify_slice(&raw)
+        .is_ok()
     }
 
     /// Attenuate: child rights must be SUBSET of parent. Never widens.
@@ -223,6 +265,10 @@ impl Token {
     pub fn attenuate(&self, key: &Key, rev_id: &str, narrow: Rights) -> anyhow::Result<Token> {
         validate_rev_id(rev_id)?;
         anyhow::ensure!(self.verify_tag(key), "parent tag invalid");
+        anyhow::ensure!(
+            self.ancestors.len() < MAX_CHAIN_DEPTH,
+            "delegation depth exceeds {MAX_CHAIN_DEPTH}"
+        );
         // fs: each child prefix must sit under a parent prefix (normalized).
         for p in &narrow.fs_prefixes {
             let np = normalize_fs(p);
@@ -263,14 +309,17 @@ impl Token {
                 "expiry widens parent"
             );
         }
+        let mut ancestors = self.ancestors.clone();
+        ancestors.push(self.rev_id.clone());
         let t = Token {
             rev_id: rev_id.into(),
             parent: Some(self.rev_id.clone()),
+            ancestors,
             rights: narrow,
             tag: String::new(),
         };
         let tag = hex_lower(
-            &mac_for(key, &t.rev_id, &t.parent, &t.rights)
+            &mac_for(key, &t.rev_id, &t.parent, &t.ancestors, &t.rights)
                 .finalize()
                 .into_bytes(),
         );
@@ -371,10 +420,15 @@ impl RevocationList {
         if self.revoked.contains(&t.rev_id) {
             return true;
         }
-        // Walk up the ancestor chain: the token's OWN parent link first (so a
-        // descendant that was never track()ed is still revoked with its
-        // ancestor), then tracked links for the rest of the chain. Revoking
-        // any ancestor revokes the whole subtree.
+        // The signed lineage covers every hop regardless of what was
+        // track()ed: revoking any ancestor revokes the whole subtree, which
+        // is the README's claim ("including ones that were never tracked
+        // explicitly").
+        if t.ancestors.iter().any(|a| self.revoked.contains(a)) {
+            return true;
+        }
+        // Belt and braces: walk tracked links too (the token's own parent
+        // first), for tokens whose lineage predates this field.
         //
         // A seen set terminates the walk: track() records links from
         // UNVERIFIED input (it never checks the tag), so a hostile pair
@@ -608,6 +662,59 @@ mod tests {
     }
 
     #[test]
+    fn revoke_root_kills_untracked_multi_hop_descendant() {
+        // VULN-01 reproduction: README says "revoking a rev_id kills every
+        // token delegated from it, including ones that were never tracked
+        // explicitly". A 2-hop chain presented cold (the mcp paths only ever
+        // see the LEAF token) must die when the root is revoked.
+        let k = key();
+        let root = root();
+        let child = root.attenuate(&k, "r1", root.rights.clone()).unwrap();
+        let grandchild = child.attenuate(&k, "r2", child.rights.clone()).unwrap();
+        let mut rl = RevocationList::default();
+        // Nothing tracked — exactly the fresh-process case.
+        rl.revoke("r0");
+        assert!(
+            rl.is_revoked(&grandchild),
+            "revoking r0 must revoke the untracked 2-hop grandchild r2"
+        );
+    }
+
+    #[test]
+    fn ancestor_lineage_is_signed_and_cannot_be_stripped() {
+        // The lineage only helps if a holder cannot edit it: stripping (or
+        // padding) ancestors would hide a revoked root from is_revoked. It is
+        // covered by the tag, so any edit fails verification first.
+        let k = key();
+        let root = root();
+        let child = root.attenuate(&k, "r1", root.rights.clone()).unwrap();
+        let grandchild = child.attenuate(&k, "r2", child.rights.clone()).unwrap();
+        assert_eq!(
+            grandchild.ancestors,
+            vec!["r0".to_string(), "r1".to_string()],
+            "lineage is root-first, immediate parent last"
+        );
+        // Strip the lineage.
+        let mut stripped = grandchild.clone();
+        stripped.ancestors.clear();
+        assert!(!stripped.verify_tag(&key()), "stripped lineage must fail");
+        // Hide just the revoked root.
+        let mut hidden = grandchild.clone();
+        hidden.ancestors.remove(0);
+        assert!(!hidden.verify_tag(&key()), "hidden ancestor must fail");
+        // Pad with an unrelated ancestor.
+        let mut padded = grandchild.clone();
+        padded.ancestors.push("r9".into());
+        assert!(!padded.verify_tag(&key()), "padded lineage must fail");
+        // A garbage id in the chain is refused before the MAC even runs.
+        let mut garbage = grandchild.clone();
+        garbage.ancestors = vec!["a b".into()];
+        assert!(!garbage.verify_tag(&key()));
+        // The intact token is still good.
+        assert!(grandchild.verify_tag(&key()));
+    }
+
+    #[test]
     fn revoke_walk_terminates_on_a_cycle() {
         // track() records links from UNVERIFIED input (it never checks the
         // tag), so a hostile pair a→b, b→a can be planted. is_revoked must
@@ -615,6 +722,7 @@ mod tests {
         let mk = |rev_id: &str, parent: &str| Token {
             rev_id: rev_id.into(),
             parent: Some(parent.into()),
+            ancestors: Vec::new(),
             rights: Rights {
                 fs_prefixes: vec![],
                 net_hosts: vec![],
@@ -752,6 +860,7 @@ mod tests {
         let relabeled = Token {
             rev_id: r.rev_id.clone(),
             parent: Some(String::new()),
+            ancestors: r.ancestors.clone(),
             rights: r.rights.clone(),
             tag: r.tag.clone(),
         };
@@ -765,12 +874,13 @@ mod tests {
             let t = Token {
                 rev_id: "r9".into(),
                 parent: Some(String::new()),
+                ancestors: Vec::new(),
                 rights: r.rights.clone(),
                 tag: String::new(),
             };
             // Mint its real tag under the key (simulate what a signer would do).
             let tag = hex_lower(
-                &mac_for(&key(), &t.rev_id, &t.parent, &t.rights)
+                &mac_for(&key(), &t.rev_id, &t.parent, &t.ancestors, &t.rights)
                     .finalize()
                     .into_bytes(),
             );
@@ -780,6 +890,7 @@ mod tests {
         let as_root = Token {
             rev_id: child_of_empty.rev_id.clone(),
             parent: None,
+            ancestors: child_of_empty.ancestors.clone(),
             rights: child_of_empty.rights.clone(),
             tag: child_of_empty.tag.clone(),
         };
