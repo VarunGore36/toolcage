@@ -4,9 +4,10 @@
 
 **A local-first Rust runtime that puts a policy engine, a credential broker, an egress proxy, and a tamper-evident audit log between an AI agent and everything it touches.**
 
+[![CI](https://github.com/VarunGore36/toolcage/actions/workflows/ci.yml/badge.svg)](https://github.com/VarunGore36/toolcage/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![Status: alpha](https://img.shields.io/badge/status-alpha%20%C2%B7%20not%20independently%20reviewed-orange.svg)
-![Tests: 137 passing](https://img.shields.io/badge/tests-137%20passing-brightgreen.svg)
+[![Status: alpha](https://img.shields.io/badge/status-alpha%20%C2%B7%20not%20independently%20reviewed-orange.svg)](docs/REVIEW.md)
+[![Tests](https://img.shields.io/badge/tests-202%20%C2%B7%200%20failures-brightgreen.svg)](docs/TEST_RESULTS.md)
 ![Rust](https://img.shields.io/badge/built%20with-Rust-black.svg)
 
 [Quickstart](#quickstart) · [Why](#why-toolcage) · [Architecture](#architecture) · [Invariants](#the-seven-invariants) · [Policy](#policy) · [CLI](#cli-reference) · [MCP](#mcp-front-door) · [Limits](#status-and-known-limits) · [Threat model](docs/THREAT_MODEL.md)
@@ -21,9 +22,9 @@
 
 A sandbox that only stops escapes misses what actually goes wrong with agents. Agents read untrusted content, call third-party tools, and install packages. The failure modes are:
 
-- A prompt injection in a web page or CSV tells the agent to **leak an API key**.
-- A malicious **MCP server or dependency** runs with the agent's privileges.
-- Something goes wrong and nobody can say **what the agent did**, or trust the log that says so.
+- 🔑 A prompt injection in a web page or CSV tells the agent to **leak an API key**.
+- 📦 A malicious **MCP server or dependency** runs with the agent's privileges.
+- 🧾 Something goes wrong and nobody can say **what the agent did**, or trust the log that says so.
 
 toolcage is the **policy, secrets, and evidence layer** on top of isolation. It is not another code-interpreter box.
 
@@ -83,7 +84,15 @@ The demo flow was last verified end to end on 2026-10-19 ([`docs/TEST_RESULTS.md
 
 Every tool call crosses one small trusted core, the **supervisor**. It decides, records, isolates, proxies, and proves. Everything else (model output, guest processes, tool and MCP output, file and web content) is untrusted.
 
-**Trusted, and kept small:** supervisor, policy engine, credential broker, egress proxy, audit writer.
+| | Moving part | Job |
+|---|---|---|
+| 📜 | **policy engine** | One YAML file per tool. Anything not allowed is denied. |
+| 🔐 | **credential broker** | Secrets live host-side; injected only toward the destinations they are bound to. |
+| 🌐 | **egress proxy** | The single network chokepoint — the guest never dials. |
+| 🧾 | **audit writer** | Write-ahead intent, hash chain, signed checkpoints. |
+| 🧰 | **supervisor** | The thin trusted core that ties the four above to the sandbox. |
+
+> **Trusted, and kept small.** Those five are the entire trusted computing base — the guest never holds a key, a policy, or a pen to the log.
 
 Decision order for every request:
 
@@ -111,13 +120,13 @@ These are the security claims toolcage makes. Each one is tied to a test suite, 
 
 | | Invariant | Enforced and tested by |
 |---|---|---|
-| **I1** | No guest process reaches any network except through the egress proxy | Escape suite: raw sockets, DNS, ICMP, IPv6, tunnels; proxy alias, metadata, and budget tests |
-| **I2** | No credential value appears in guest memory, files, environment, or arguments | Planted canary secrets scanned for; broker encryption and rotation tests |
-| **I3** | A token can only be narrowed on delegation, never widened — and can't be minted without the host key | 200-seed multi-hop property test; narrow / widen / revoke / tamper / forgery tests |
-| **I4** | Every decision is recorded before the action runs | Write-ahead intent logging; chaos tests that kill the supervisor mid-action |
-| **I5** | Any edit, deletion, or reordering of the log **below the newest retained checkpoint** is detected by `audit verify` (see [Audit log](#audit-log) for the tail caveat) | Mutation tests; checkpoint truncation and old-checkpoint tests |
-| **I6** | The guest cannot loosen its own policy or reach the policy engine | `sh -c` denial, path traversal, mount checks, adversarial guest-agent validation |
-| **I7** | After teardown, no session state is reachable from another session | Cross-session canary tests |
+| 🌐 **I1** | No guest process reaches any network except through the egress proxy | Escape suite: raw sockets, DNS, ICMP, IPv6, tunnels; proxy alias, metadata, and budget tests |
+| 🔑 **I2** | No credential value appears in guest memory, files, environment, or arguments | Planted canary secrets scanned for; broker encryption and rotation tests |
+| 🎟️ **I3** | A token can only be narrowed on delegation, never widened — and can't be minted without the host key | 200-seed multi-hop property test; narrow / widen / revoke / tamper / forgery tests |
+| 🧾 **I4** | Every decision is recorded before the action runs | Write-ahead intent logging; chaos tests that kill the supervisor mid-action |
+| 🔏 **I5** | Any edit, deletion, or reordering of the log **below the newest retained checkpoint** is detected by `audit verify` (see [Audit log](#audit-log) for the tail caveat) | Mutation tests; checkpoint truncation and old-checkpoint tests |
+| 🛡️ **I6** | The guest cannot loosen its own policy or reach the policy engine | `sh -c` denial, path traversal, mount checks, adversarial guest-agent validation |
+| 🧹 **I7** | After teardown, no session state is reachable from another session | Cross-session canary tests |
 
 ## Policy
 
@@ -231,12 +240,12 @@ Third-party MCP servers run as **guest processes** under the same policy and aud
 
 `cargo test --workspace` runs the full suite green with clippy clean — the current count and per-suite breakdown live in [`docs/TEST_RESULTS.md`](docs/TEST_RESULTS.md) (regenerated from the run; counts here went stale every commit when duplicated). Beyond unit tests the suite includes:
 
-- **Escape suite** against the policy and proxy (I1, I6), and a Tier 2 escape suite asserting the design closes each exit — vsock-only with no network device ever configured, jailer confinement of the VMM process, and a control-channel escape matrix
-- **Fuzzing** of the policy, guest-agent, audit, and proxy parsers
-- **Chaos tests** that fail the audit disk, proxy, and broker, revoke tokens mid-run, and exceed budgets, asserting every case fails closed
-- **Property tests** over capability chains (200 seeds): a delegation never widens, and revoking an ancestor kills the whole subtree
-- **Mutation tests** on the audit log (flip, delete, reorder, truncate)
-- **Tier 0 live isolation tests**: command executes, network namespace blocks egress, Landlock blocks file access, environment is cleared
+- 🎯 **Escape suite** against the policy and proxy (I1, I6), and a Tier 2 escape suite asserting the design closes each exit — vsock-only with no network device ever configured, jailer confinement of the VMM process, and a control-channel escape matrix
+- 🐞 **Fuzzing** of the policy, guest-agent, audit, proxy, and MCP JSON-RPC parsers (nightly campaigns + commit-time smoke twins)
+- 💥 **Chaos tests** that fail the audit disk, proxy, and broker, revoke tokens mid-run, and exceed budgets, asserting every case fails closed
+- 📐 **Property tests** over capability chains (200 seeds): a delegation never widens, and revoking an ancestor kills the whole subtree
+- 🧬 **Mutation tests** on the audit log (flip, delete, reorder, truncate)
+- 🏕️ **Tier 0 live isolation tests**: command executes, network namespace blocks egress, Landlock blocks file access, environment is cleared
 
 Live Tier 0 tests **skip loudly** on hosts that can't provide the namespace stack or Landlock (GitHub's hosted runners allow user namespaces but block mount/net/ipc/pid/uts — probes test the real thing, not sysctls), and `run --tier tier0` refuses to start with a clear error instead of downgrading.
 
@@ -311,3 +320,17 @@ Found a vulnerability or a broken invariant? Please report it privately through 
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+---
+
+<div align="center">
+
+<sub>
+
+[Threat model](docs/THREAT_MODEL.md) · [Test results](docs/TEST_RESULTS.md) · [Review package](docs/REVIEW.md) · [Build plan](Agent%20Sandbox%20Analysis%20and%20Build%20Plan.md)
+
+**Designed to be verified, not trusted.** Every claim above has a test; every test is listed.
+
+</sub>
+
+</div>
