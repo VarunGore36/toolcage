@@ -1,6 +1,6 @@
 # Test results — toolcage
 
-206 tests, 0 failures (`cargo test --workspace`). Clippy clean
+207 tests, 0 failures (`cargo test --workspace`). Clippy clean
 (`cargo clippy --workspace --all-targets`: 0 findings).
 
 Generated from the workspace run; re-run `cargo test --workspace` to
@@ -9,7 +9,7 @@ reproduce. The breakdown is by test target (integration targets marked `*`).
 | Suite | Count | Invariants |
 |---|---|---|
 | policy unit (decide, request hygiene, modes, exec gate) | 7 | I1, I6 |
-| policy escape `*` (shell/interpreter incl. path-qualified + bundled flags, traversal, request-line, allowlist, mount modes, absent method) | 16 | I1, I6 |
+| policy escape `*` (shell/interpreter incl. path-qualified + bundled flags, allowlist trusted paths, traversal, request-line, mount modes, absent method) | 17 | I1, I6 |
 | policy timing `*` (decision p99) | 1 | perf |
 | audit unit (chain, checkpoint, verify) | 6 | I4, I5 |
 | audit throughput `*` | 1 | perf |

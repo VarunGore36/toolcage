@@ -628,3 +628,58 @@ fn path_qualified_shell_and_bundled_interpreter_flags_blocked() {
         assert!(d.allow, "{argv:?} must stay allowed: {d:?}");
     }
 }
+
+#[test]
+fn allowlist_matches_trusted_paths_only() {
+    // VULN-02, second half: the allowlist matched the BASENAME of argv[0], so
+    // a binary the guest wrote into its own writable workspace — /workspace/
+    // git or ./git — passed `allowlist: [git]`. The name matched; the binary
+    // was attacker-controlled.
+    //
+    // Trusted = what the sandbox grants execute on minus the writable part:
+    // bare names (resolved via the fixed PATH) or the read-only system tree.
+    let p = toolcage_policy::load_yaml(
+        r#"
+tool: t
+version: 0
+exec:
+  allowlist:
+    - git
+"#,
+    )
+    .unwrap();
+    // Trusted forms stay allowed.
+    for argv in [
+        vec!["git", "status"],
+        vec!["/usr/bin/git", "status"],
+        vec!["/bin/git", "status"],
+        vec!["/usr/local/bin/git", "status"],
+        vec!["/usr/lib/git-core/git", "status"],
+    ] {
+        let d = exec_dec(&p, Some(argv.clone()));
+        assert!(d.allow, "{argv:?} must stay allowed: {d:?}");
+    }
+    // A matching NAME at an untrusted path is a guest binary.
+    for argv in [
+        vec!["/workspace/git", "status"],
+        vec!["./git", "status"],
+        vec!["sub/git", "status"],
+        vec!["/tmp/git", "status"],
+        vec!["/workspace/../usr/bin/git", "status"],
+    ] {
+        let d = exec_dec(&p, Some(argv.clone()));
+        assert!(!d.allow, "{argv:?} must be denied: {d:?}");
+        assert_eq!(
+            d.rule_ids,
+            vec!["deny:exec-untrusted-path".to_string()],
+            "{argv:?}"
+        );
+    }
+    // A trusted path whose NAME is not listed is still denied — and says so.
+    let d = exec_dec(&p, Some(vec!["/usr/bin/svn", "status"]));
+    assert!(!d.allow);
+    assert_eq!(d.rule_ids, vec!["deny:exec-not-allowlisted".to_string()]);
+    // Without an allowlist nothing changes (denylist-only mode is untouched).
+    let p2 = toolcage_policy::load_yaml("tool: t\nversion: 0\n").unwrap();
+    assert!(exec_dec(&p2, Some(vec!["/workspace/git", "status"])).allow);
+}

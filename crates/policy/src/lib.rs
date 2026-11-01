@@ -371,6 +371,29 @@ fn interpreter_inline_arg(arg: &str, flags: &[&str]) -> bool {
     false
 }
 
+/// True when `argv0` names a binary at a TRUSTED location: a bare name
+/// (resolved by the sandbox's fixed PATH) or an absolute path in the
+/// read-only system tree. Relative forms (`./git`, `sub/git`), traversal,
+/// and guest-writable locations (`/workspace/git`, `/tmp/git`) are refused —
+/// those are a guest-written binary wearing an allowlisted NAME. The trusted
+/// set mirrors what the sandbox grants execute on (system tree + workspace):
+/// the workspace is the one writable part, so it is the one that must not
+/// satisfy an allowlist.
+fn trusted_exec_path(argv0: &str) -> bool {
+    if !argv0.contains('/') {
+        return !argv0.is_empty();
+    }
+    if argv0.split('/').any(|c| c == "." || c == "..") {
+        return false;
+    }
+    if !argv0.starts_with('/') {
+        return false;
+    }
+    ["/bin/", "/sbin/", "/usr/", "/lib/", "/lib64/"]
+        .iter()
+        .any(|p| argv0.starts_with(p))
+}
+
 pub fn decide(policy: &Policy, req: &Request) -> Decision {
     let deny = |rule: &str, reason: &str| Decision {
         allow: false,
@@ -503,6 +526,14 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
             // version tolerance, and the denylist below still applies on top:
             // an allowlisted interpreter still cannot take inline code.
             if !policy.exec.allowlist.is_empty() {
+                // The name may match while the BINARY is guest-controlled:
+                // /workspace/git or ./git is a file the guest just wrote.
+                if !trusted_exec_path(&argv[0]) {
+                    return deny(
+                        "deny:exec-untrusted-path",
+                        "allowlisted name at an untrusted path",
+                    );
+                }
                 let bin = argv[0].rsplit('/').next().unwrap_or(&argv[0]);
                 if !policy.exec.allowlist.iter().any(|a| bin_matches(bin, a)) {
                     return deny(
