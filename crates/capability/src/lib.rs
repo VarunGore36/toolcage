@@ -303,6 +303,11 @@ impl Token {
             narrow.budget_bytes <= self.rights.budget_bytes,
             "budget widens parent"
         );
+        // 0 = no token-level budget (like expires_at = 0 = no expiry), so a
+        // bounded parent must not delegate an unbounded child.
+        if self.rights.budget_bytes != 0 {
+            anyhow::ensure!(narrow.budget_bytes != 0, "budget widens parent");
+        }
         if self.rights.expires_at != 0 {
             anyhow::ensure!(
                 narrow.expires_at != 0 && narrow.expires_at <= self.rights.expires_at,

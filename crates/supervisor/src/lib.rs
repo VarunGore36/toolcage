@@ -49,6 +49,14 @@ pub struct Supervisor {
     pub cap_key: Option<toolcage_capability::Key>,
 }
 
+/// Session teardown on every exit path (I7): early returns and `?` errors
+/// used to skip the caller's explicit `destroy`, leaving session state behind.
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        self.teardown();
+    }
+}
+
 pub struct ExecOutcome {
     pub allowed: bool,
     pub rule_ids: Vec<String>,
@@ -133,8 +141,31 @@ fn kill_process_group(child: &mut std::process::Child) {
 }
 
 impl Supervisor {
+    /// Destroy the backend session (I7). Idempotent: the backend is taken, so
+    /// a second call (or the Drop below) is a no-op. Call it explicitly before
+    /// `std::process::exit`, which skips destructors.
+    pub fn teardown(&mut self) {
+        if let Some(mut b) = self.backend.take() {
+            let _ = b.destroy(&self.session);
+        }
+    }
+
     pub fn check(&self, req: &Request) -> Decision {
         toolcage_policy::decide(&self.policy, req)
+    }
+
+    /// Egress byte bound for one destination bucket: the policy limit,
+    /// narrowed by the presenting token's `budget_bytes`. 0 on either side
+    /// means "no bound from this source".
+    fn egress_byte_cap(&self, token: Option<&toolcage_capability::Token>) -> u64 {
+        let policy_cap = match self.policy.limits.egress_bytes {
+            0 => u64::MAX,
+            n => n,
+        };
+        match token.map(|t| t.rights.budget_bytes).unwrap_or(0) {
+            0 => policy_cap,
+            tb => policy_cap.min(tb),
+        }
     }
 
     /// Run argv array (no shell). Logs intent before spawn (I4) and outcome after.
@@ -312,6 +343,16 @@ impl Supervisor {
             while waited.as_secs() < timeout_secs {
                 match child.try_wait() {
                     Ok(Some(st)) => {
+                        // The workload is the whole process group, not just
+                        // the direct child: a background grandchild that
+                        // inherited stdout/stderr would otherwise keep
+                        // running on the host after the run "finished" (and
+                        // hold the pipes open past the drain). While any
+                        // member is alive the kernel will not hand its group
+                        // id to a new process, so this targets only the
+                        // workload; ESRCH (no members left) is the normal
+                        // case and is ignored.
+                        unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
                         done = Some(st.code());
                         break;
                     }
@@ -433,14 +474,20 @@ impl Supervisor {
                     .cap_key
                     .as_ref()
                     .map(|k| {
+                        // Matched over every spelling of the destination,
+                        // like the approval gate and credential binding: a
+                        // token attenuated to `github` must authorize a
+                        // request for its alias `github.internal`.
                         t.verify_tag(k)
-                            && t.allows(
-                                k,
-                                None,
-                                Some(alias_or_host),
-                                Some(method),
-                                bound_cred.map(|c| c.name.as_str()),
-                            )
+                            && dest_names.iter().any(|n| {
+                                t.allows(
+                                    k,
+                                    None,
+                                    Some(n),
+                                    Some(method),
+                                    bound_cred.map(|c| c.name.as_str()),
+                                )
+                            })
                     })
                     .unwrap_or(false);
                 if !authorized || revocation.is_revoked(t) {
@@ -549,12 +596,10 @@ impl Supervisor {
         }
         // Egress damage bound (§8): reserve budget for the outgoing request BEFORE
         // dialing, so a credential-bearing request never leaves the supervisor when
-        // over budget. Zero limit = unbounded (back-compat).
-        let max_bytes = if self.policy.limits.egress_bytes == 0 {
-            u64::MAX
-        } else {
-            self.policy.limits.egress_bytes
-        };
+        // over budget. Zero limit = unbounded (back-compat). A capability
+        // token's attenuated `budget_bytes` (non-zero) narrows it further (I3):
+        // `token attenuate --budget N` must actually bound the holder.
+        let max_bytes = self.egress_byte_cap(token);
         let max_req = if self.policy.limits.egress_requests == 0 {
             u64::MAX
         } else {
@@ -657,11 +702,7 @@ impl Supervisor {
         // body (secrets become "[REDACTED]"), and the damage bound must count
         // real volume. The pre-charged request estimate is not refunded, so
         // the total is a deliberate over-count (fail-closed).
-        let max_bytes = if self.policy.limits.egress_bytes == 0 {
-            u64::MAX
-        } else {
-            self.policy.limits.egress_bytes
-        };
+        let max_bytes = self.egress_byte_cap(token);
         if !budgets.charge_bytes(&dest, resp.body.len() as u64, max_bytes)? {
             w.append(Event {
                 seq: 0,

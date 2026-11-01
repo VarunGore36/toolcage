@@ -458,35 +458,69 @@ impl Proxy {
 /// across a chunk boundary, or one inside gzip, is not matched and reaches the
 /// guest intact). Fail closed rather than return bytes we cannot sanitize.
 fn decode_response_body(head: &[u8], raw_body: &[u8]) -> Result<Vec<u8>, ProxyError> {
-    // Content-Encoding: a compressed body cannot be scrubbed.
-    if let Some(enc) = header_value(head, "content-encoding") {
-        let enc = enc.trim().to_ascii_lowercase();
-        if !enc.is_empty() && enc != "identity" {
-            return Err(ProxyError::Policy(format!(
-                "content-encoded response ({enc}) cannot be scrubbed; refusing"
-            )));
-        }
-    }
-    // Transfer-Encoding: chunked means the body is framed with chunk headers.
-    match header_value(head, "transfer-encoding") {
-        Some(te) if te.to_ascii_lowercase().contains("chunked") => decode_chunked(raw_body)
-            .ok_or_else(|| ProxyError::Io("malformed chunked response body".to_string())),
-        _ => Ok(raw_body.to_vec()),
-    }
-}
-
-/// Extract a header value from a response head (case-insensitive name).
-fn header_value(head: &[u8], name: &str) -> Option<String> {
-    let text = String::from_utf8_lossy(head);
-    let want = name.to_ascii_lowercase();
-    for line in text.split("\r\n").skip(1) {
-        if let Some((k, v)) = line.split_once(':') {
-            if k.trim().eq_ignore_ascii_case(&want) {
-                return Some(v.to_string());
+    // Content-Encoding: inspect EVERY header line and comma-separated token.
+    // Checking only the first header allowed `Content-Encoding: identity`
+    // followed by `Content-Encoding: gzip` to smuggle compressed secrets past
+    // Broker::scrub.
+    for val in header_values(head, "content-encoding") {
+        for tok in val.split(',') {
+            let enc = tok.trim().to_ascii_lowercase();
+            if !enc.is_empty() && enc != "identity" {
+                return Err(ProxyError::Policy(format!(
+                    "content-encoded response ({enc}) cannot be scrubbed; refusing"
+                )));
             }
         }
     }
-    None
+    // Transfer-Encoding: inspect every token across all Transfer-Encoding
+    // headers. Only `chunked` (at most once) and `identity` are understood;
+    // stacked codings like `gzip, chunked` or duplicate `chunked` are refused.
+    let mut chunked_count = 0usize;
+    for val in header_values(head, "transfer-encoding") {
+        for tok in val.split(',') {
+            let te = tok.trim().to_ascii_lowercase();
+            match te.as_str() {
+                "" | "identity" => {}
+                "chunked" => chunked_count += 1,
+                other => {
+                    return Err(ProxyError::Policy(format!(
+                        "transfer-encoded response ({other}) cannot be scrubbed; refusing"
+                    )));
+                }
+            }
+        }
+    }
+    if chunked_count > 1 {
+        return Err(ProxyError::Io(
+            "duplicate chunked transfer-encoding refused".to_string(),
+        ));
+    }
+    if chunked_count == 1 {
+        decode_chunked(raw_body)
+            .ok_or_else(|| ProxyError::Io("malformed chunked response body".to_string()))
+    } else {
+        Ok(raw_body.to_vec())
+    }
+}
+
+/// Extract all header values matching `name` (case-insensitive) in order.
+fn header_values(head: &[u8], name: &str) -> Vec<String> {
+    let text = String::from_utf8_lossy(head);
+    let want = name.to_ascii_lowercase();
+    let mut out = Vec::new();
+    for line in text.split("\r\n").skip(1) {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim().eq_ignore_ascii_case(&want) {
+                out.push(v.to_string());
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+fn header_value(head: &[u8], name: &str) -> Option<String> {
+    header_values(head, name).into_iter().next()
 }
 
 /// Decode an HTTP/1.1 chunked body into its payload. Returns None on any

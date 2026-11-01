@@ -246,6 +246,33 @@ fn tier_honors_min(tier: toolcage_backend::Tier, min_isolation: &str) -> bool {
     )
 }
 
+/// I6 / I2 guard: the guest has read-write access to `workspace`, so host
+/// control files (policy YAML, audit log, capability/signing keys) must never
+/// live inside it. Otherwise a guest can edit its own policy, rewrite the
+/// audit log, or read the host HMAC key.
+fn reject_control_files_in_workspace(
+    workspace: &std::path::Path,
+    control_files: &[Option<&std::path::Path>],
+) {
+    let ws = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+    for f in control_files.iter().flatten() {
+        let abs = std::fs::canonicalize(f).unwrap_or_else(|_| {
+            f.parent()
+                .and_then(|p| std::fs::canonicalize(p).ok())
+                .map(|p| p.join(f.file_name().unwrap_or_default()))
+                .unwrap_or_else(|| f.to_path_buf())
+        });
+        if abs.starts_with(&ws) {
+            eprintln!(
+                "denied: host control file {} lies inside writable workspace {} (I6)",
+                abs.display(),
+                ws.display()
+            );
+            std::process::exit(2);
+        }
+    }
+}
+
 fn wire_backend(
     tier_str: &str,
     t: toolcage_backend::Tier,
@@ -452,6 +479,7 @@ fn main() -> anyhow::Result<()> {
             // Resolve workspace to an absolute path so it works from inside the
             // namespace regardless of cwd changes.
             let workspace = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
+            reject_control_files_in_workspace(&workspace, &[Some(&policy), Some(&audit)]);
             let spec = toolcage_backend::SessionSpec {
                 id: format!("run-{}", std::process::id()),
                 tier: t,
@@ -470,9 +498,8 @@ fn main() -> anyhow::Result<()> {
                 cap_key: None,
             };
             let o = sup.exec(&argv)?;
-            if let Some(mut b) = sup.backend.take() {
-                let _ = b.destroy(&spec.id);
-            }
+            // Explicit: the exit() calls below skip Supervisor's Drop.
+            sup.teardown();
             if !o.allowed {
                 eprintln!("denied: {:?}", o.rule_ids);
                 std::process::exit(2);
@@ -740,6 +767,15 @@ fn main() -> anyhow::Result<()> {
                 let budget_file = budget_file(&audit);
                 let workspace =
                     std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
+                reject_control_files_in_workspace(
+                    &workspace,
+                    &[
+                        Some(&policy),
+                        Some(&audit),
+                        key_hex.as_deref(),
+                        token.as_deref(),
+                    ],
+                );
                 let spec = toolcage_backend::SessionSpec {
                     id: format!("mcp-{}", std::process::id()),
                     tier: t,
@@ -893,6 +929,15 @@ fn main() -> anyhow::Result<()> {
                 let budget_file = budget_file(&audit);
                 let workspace =
                     std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
+                reject_control_files_in_workspace(
+                    &workspace,
+                    &[
+                        Some(&policy),
+                        Some(&audit),
+                        key_hex.as_deref(),
+                        token.as_deref(),
+                    ],
+                );
                 let spec = toolcage_backend::SessionSpec {
                     id: format!("mcp-call-{}", std::process::id()),
                     tier: t,
@@ -939,6 +984,8 @@ fn main() -> anyhow::Result<()> {
                             );
                         }
                         eprintln!("denied: {e}");
+                        // exit() skips destructors: tear the session down first (I7).
+                        sup.teardown();
                         std::process::exit(2);
                     }
                 }
