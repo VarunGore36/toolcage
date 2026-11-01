@@ -580,3 +580,51 @@ fn overlapping_mounts_cannot_shadow_read_only() {
     let dup = format!("{rw_child}    - path: /workspace/in\n      mode: ro\n");
     assert!(!dec(&dup, "fs.write", "/workspace/in/x").allow);
 }
+
+#[test]
+fn path_qualified_shell_and_bundled_interpreter_flags_blocked() {
+    // VULN-02 reproduction. Two shapes the denylist promised to catch and
+    // did not:
+    //  (a) the shell check never stripped a path prefix off argv[1..], so
+    //      `bin_matches("/bin/sh", "sh")` failed and a path-qualified shell
+    //      reached the inline-code gate with shell_here=false;
+    //  (b) the interpreter check was `b == f || b.starts_with(f)`, which
+    //      misses every bundled short-option cluster where another flag
+    //      precedes the inline one (`python3 -ic` is `-i -c`).
+    let p = sample();
+    for argv in [
+        // (a) path-qualified shells anywhere in argv
+        vec!["env", "/bin/sh", "-c", "id"],
+        vec!["/usr/bin/env", "/usr/bin/bash", "-lc", "id"],
+        vec!["/bin/busybox", "/bin/sh", "evil.sh"],
+        vec!["nice", "/bin/bash", "evil.sh"],
+        // (b) bundled interpreter short flags
+        vec!["python3", "-ic", "import os"],
+        vec!["python3", "-uc", "print(1)"],
+        vec!["perl", "-le", "system 1"],
+        vec!["ruby", "-ne", "puts $_"],
+        vec!["node", "-pe", "1"],
+    ] {
+        let d = exec_dec(&p, Some(argv.clone()));
+        assert!(!d.allow, "{argv:?} must be denied: {d:?}");
+        assert_eq!(d.rule_ids, vec!["deny:shell".to_string()], "{argv:?}");
+    }
+    // And the already-blocked shapes stay blocked.
+    for argv in [
+        vec!["sh", "-c", "id"],
+        vec!["python3", "-c", "import os"],
+        vec!["python3", "-cprint(1)"],
+    ] {
+        assert!(!exec_dec(&p, Some(argv.clone())).allow, "{argv:?}");
+    }
+    // Harmless interpreter invocations stay allowed.
+    for argv in [
+        vec!["python3", "script.py"],
+        vec!["perl", "-v"],
+        vec!["git", "-c", "user.name=x", "commit"],
+        vec!["/usr/bin/git", "status"],
+    ] {
+        let d = exec_dec(&p, Some(argv.clone()));
+        assert!(d.allow, "{argv:?} must stay allowed: {d:?}");
+    }
+}

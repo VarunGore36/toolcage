@@ -348,6 +348,29 @@ fn shell_inline_flag(a: &str) -> bool {
     b.len() >= 2 && b[0] == b'-' && b[1] != b'-' && a.contains('c')
 }
 
+/// True when `arg` supplies an inline-code flag from `flags`: a direct or
+/// joined match (`-c`, `-cprint(1)`, `--eval=1`) — or the flag's letter
+/// bundled in a single-dash short-option cluster (`python3 -ic` is `-i -c`,
+/// `perl -le` is `-l -e`). The old check was `b == f || b.starts_with(f)`,
+/// which missed every bundled form where another short flag precedes the
+/// inline one.
+fn interpreter_inline_arg(arg: &str, flags: &[&str]) -> bool {
+    if flags.iter().any(|f| arg == *f || arg.starts_with(*f)) {
+        return true;
+    }
+    let b = arg.as_bytes();
+    if b.len() >= 2 && b[0] == b'-' && b[1] != b'-' {
+        for f in flags {
+            let fb = f.as_bytes();
+            // Short flags only: the letter after the single dash IS the flag.
+            if fb.len() == 2 && fb[0] == b'-' && b[1..].contains(&fb[1]) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn decide(policy: &Policy, req: &Request) -> Decision {
     let deny = |rule: &str, reason: &str| Decision {
         allow: false,
@@ -501,10 +524,15 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
                 // executes arbitrary command text outside argv-array
                 // scrutiny. Running a shell script file is the same class of
                 // risk as `sh -c`, so either form is denied.
+                // Strip the path in argv[1..] too: `bin_matches` compares
+                // basenames, and `bin_matches("/bin/sh", "sh")` is false —
+                // so `env /bin/sh -c` and `/bin/busybox /bin/sh evil.sh`
+                // used to reach the gates below with shell_here=false.
                 let shell_here = SHELL_BINS.iter().any(|s| bin_matches(bin, s))
-                    || rest
-                        .iter()
-                        .any(|a| SHELL_BINS.iter().any(|s| bin_matches(a, s)));
+                    || rest.iter().any(|a| {
+                        let name = a.rsplit('/').next().unwrap_or(a);
+                        SHELL_BINS.iter().any(|s| bin_matches(name, s))
+                    });
                 if shell_here && rest.iter().any(|a| shell_inline_flag(a)) {
                     return deny("deny:shell", "shell -c is not allowed; use argv arrays");
                 }
@@ -526,10 +554,7 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
                     if flags.is_empty() {
                         continue;
                     }
-                    if argv
-                        .iter()
-                        .any(|b| flags.iter().any(|f| b == f || b.starts_with(*f)))
-                    {
+                    if argv.iter().any(|b| interpreter_inline_arg(b, flags)) {
                         return deny(
                             "deny:shell",
                             "interpreter inline code is not allowed; use argv arrays",
