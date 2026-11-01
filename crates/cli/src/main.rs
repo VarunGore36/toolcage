@@ -73,6 +73,11 @@ enum Cmd {
         /// Capability HMAC key file (64 hex chars), required to verify --token.
         #[arg(long)]
         key_hex: Option<PathBuf>,
+        /// Revoked rev_id (repeatable). Checked against the presented token
+        /// AND its signed ancestry — revoking a root kills every token
+        /// delegated from it.
+        #[arg(long = "revocation")]
+        revocations: Vec<String>,
     },
     /// Mint root token / attenuate child (never widens).
     Token {
@@ -514,6 +519,7 @@ fn main() -> anyhow::Result<()> {
             approve,
             token,
             key_hex,
+            revocations,
         } => {
             let text = std::fs::read_to_string(&policy)?;
             let pol = toolcage_policy::load_yaml(&text)?;
@@ -576,7 +582,10 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             let tok = load_token(&token)?;
-            let rl = toolcage_capability::RevocationList::default();
+            // Revocations were silently empty here: `fetch` had no --revocation
+            // flag at all, so a revoked token kept working on this path while
+            // `mcp` refused it.
+            let rl = build_revocations(&revocations, tok.as_ref());
             let mut budgets =
                 toolcage_proxy::Budgets::with_path(&budget_file).unwrap_or_else(|e| {
                     eprintln!("warning: budget persistence unavailable (in-memory): {e}");
