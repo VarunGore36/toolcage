@@ -203,7 +203,7 @@ This is **tamper evidence, not tamper prevention.** An attacker who controls the
 
 **Scope of detection.** The chain hash is unkeyed (SHA-256 over public fields), so anyone can recompute a self-consistent chain; what makes it tamper-*evident* is the signed checkpoints pinning `(seq, head)` to a prefix. Concretely: tampering **below the newest retained checkpoint** is detected, but edits, deletions, or reordering of the **tail after that checkpoint** are not — unless a newer checkpoint is anchored externally (a second machine, a transparency log). Delete the newer `<log>.checkpoint.*` files, rewrite the tail, and `audit verify` passes. Store checkpoints somewhere the log writer can't reach if you need tail integrity.
 
-`panic` freezes a log by appending a `deny-all` event and a `.tainted` marker.
+`panic` freezes a log for real: it appends a terminal `deny-all` event and a `<log>.tainted` marker, and from then on the writer refuses the log — which is what stops every subsequent action, since each one opens the writer first (the write-ahead gate). The freeze is enforced by the chain, not the marker: deleting `<log>.tainted` thaws nothing, an event appended behind the freeze fails `audit verify` with `log extended after panic freeze`, and a marker placed on a healthy log is honored too (operator taint stands).
 
 ## CLI reference
 
