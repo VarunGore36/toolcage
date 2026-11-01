@@ -82,14 +82,39 @@ pub struct Writer {
     head: String,
 }
 
+/// The taint marker written next to a frozen log: `<log>.tainted`.
+pub fn tainted_marker(path: &Path) -> std::path::PathBuf {
+    let mut o = path.as_os_str().to_owned();
+    o.push(".tainted");
+    std::path::PathBuf::from(o)
+}
+
 impl Writer {
     pub fn open(path: &Path) -> anyhow::Result<Self> {
+        // A frozen log accepts nothing more. Every supervisor action opens
+        // the writer before acting (the I4 write-ahead gate), so refusing
+        // here is what makes `panic freeze` an actual freeze instead of a
+        // note in the log. The marker is a convenience; the terminal
+        // deny-all inside the chain is the enforcement, so deleting the
+        // marker does not thaw anything.
+        let taint = tainted_marker(path);
+        anyhow::ensure!(
+            !taint.exists(),
+            "audit log {} is frozen ({} present)",
+            path.display(),
+            taint.display()
+        );
         let mut next_seq = 0u64;
         let mut head = "GENESIS".to_string();
         if path.exists() {
             // Verify existing chain before appending: never extend a corrupt log.
             if std::fs::metadata(path)?.len() > 0 {
-                let (n, h) = verify(path)?;
+                let (n, h, frozen) = verify_chain(path)?;
+                anyhow::ensure!(
+                    !frozen,
+                    "audit log {} is frozen by a deny-all panic event",
+                    path.display()
+                );
                 next_seq = n;
                 head = h;
             }
@@ -129,14 +154,26 @@ impl Writer {
 }
 
 pub fn verify(path: &Path) -> anyhow::Result<(u64, String)> {
+    let (count, head, _frozen) = verify_chain(path)?;
+    Ok((count, head))
+}
+
+/// Verify the chain and report whether it ends in a panic freeze. A frozen
+/// log is a legitimate terminal state (it verifies fine) — but NOTHING may
+/// follow the freeze event, or the "frozen" claim is a lie.
+fn verify_chain(path: &Path) -> anyhow::Result<(u64, String, bool)> {
     let f = File::open(path)?;
     let mut expect_prev = "GENESIS".to_string();
     let mut expect_seq = 0u64;
     let mut count = 0u64;
+    let mut frozen_at: Option<u64> = None;
     for line in BufReader::new(f).lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
+        }
+        if let Some(pseq) = frozen_at {
+            anyhow::bail!("log extended after panic freeze at seq {pseq}");
         }
         let e: Event = serde_json::from_str(&line)?;
         anyhow::ensure!(
@@ -148,11 +185,14 @@ pub fn verify(path: &Path) -> anyhow::Result<(u64, String)> {
         anyhow::ensure!(e.prev_hash == expect_prev, "chain break at seq {}", e.seq);
         let recomputed = hash_for(&e.prev_hash, &event_body(&e));
         anyhow::ensure!(recomputed == e.hash, "hash mismatch at seq {}", e.seq);
+        if e.decision == "deny-all" {
+            frozen_at = Some(e.seq);
+        }
         expect_prev = e.hash.clone();
         expect_seq += 1;
         count += 1;
     }
-    Ok((count, expect_prev))
+    Ok((count, expect_prev, frozen_at.is_some()))
 }
 
 // REVIEW: checkpoints bind (seq, head, time) with Ed25519. Key lives outside

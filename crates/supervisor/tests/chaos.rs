@@ -328,3 +328,78 @@ fn panic_freeze_taints_and_keeps_the_chain_verifiable() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn panic_freeze_blocks_writes_and_cannot_be_erased() {
+    // VULN-03 reproduction: `panic freeze` wrote a deny-all event and a
+    // .tainted marker, but nothing ever LOOKED at them — the "frozen" log
+    // kept accepting and running actions (every action opens Writer first,
+    // so enforcing there freezes all execution fail-closed). And an attacker
+    // who deleted the marker could extend the log; verify still passed.
+    let dir = std::env::temp_dir().join(format!("tc-panic-block-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("a.jsonl");
+    toolcage_supervisor::panic_freeze(&log, "suspected compromise").unwrap();
+
+    // The freeze must refuse further writes while the marker stands ...
+    assert!(
+        toolcage_audit::Writer::open(&log).is_err(),
+        "a frozen log must not accept writes"
+    );
+    // ... and even if the marker is deleted, the terminal deny-all inside the
+    // chain must still refuse them (the marker is a convenience; the chain is
+    // the enforcement).
+    std::fs::remove_file(dir.join("a.jsonl.tainted")).unwrap();
+    assert!(
+        toolcage_audit::Writer::open(&log).is_err(),
+        "a frozen log must not accept writes with the marker deleted"
+    );
+    // The marker alone must also refuse: an operator can taint a log whose
+    // chain is perfectly healthy ("this record is suspect"), and that stands.
+    let other = dir.join("b.jsonl");
+    let mut w = toolcage_audit::Writer::open(&other).unwrap();
+    w.append(toolcage_audit::Event {
+        seq: 0,
+        ts_wall: "t".into(),
+        session: "s".into(),
+        actor: "agent".into(),
+        action: "proc.exec".into(),
+        request_hash: "h".into(),
+        decision: "allow".into(),
+        rule_ids: vec![],
+        token_rev_id: String::new(),
+        result: "ok".into(),
+        bytes: 0,
+        claimed_by: "host".into(),
+        prev_hash: String::new(),
+        hash: String::new(),
+    })
+    .unwrap();
+    drop(w);
+    std::fs::write(dir.join("b.jsonl.tainted"), "operator taint\n").unwrap();
+    assert!(
+        toolcage_audit::Writer::open(&other).is_err(),
+        "a tainted log must refuse writes even with a healthy chain"
+    );
+
+    // And an event appended behind the freeze (bypassing Writer) must break
+    // verification rather than blend in.
+    let mut raw = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+    let _line = concat!(
+        "{\"seq\":1,\"ts_wall\":\"t\",\"session\":\"s\",\"actor\":\"agent\",",
+        "\"action\":\"proc.exec\",\"request_hash\":\"h\",\"decision\":\"allow\",",
+        "\"rule_ids\":[],\"token_rev_id\":\"\",\"result\":\"ok\",\"bytes\":0,",
+        "\"claimed_by\":\"host\",\"prev_hash\":\"x\",\"hash\":\"y\"}\n"
+    );
+    std::io::Write::write_all(&mut raw, _line.as_bytes()).unwrap();
+    let err = match toolcage_audit::verify(&log) {
+        Err(e) => format!("{e:#}"),
+        Ok(_) => panic!("events after the freeze must fail verification"),
+    };
+    assert!(
+        err.contains("panic freeze"),
+        "the failure must be about the freeze, not just a chain break: {err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -752,10 +752,10 @@ pub fn panic_freeze(audit_path: &std::path::Path, reason: &str) -> anyhow::Resul
     // APPEND the suffix: with_extension replaces the last one, so two logs
     // a.jsonl and a.log would collide on one a.tainted marker (the same bug
     // the budget store's naming had).
-    let mut taint_os = audit_path.as_os_str().to_owned();
-    taint_os.push(".tainted");
+    // Marker name lives in the audit crate: Writer::open refuses on it, so
+    // the writer and the freezer must never disagree about what it is called.
     std::fs::write(
-        PathBuf::from(taint_os),
+        toolcage_audit::tainted_marker(audit_path),
         format!("tainted at {} head {}\n", e.ts_wall, e.hash),
     )?;
     Ok(e.hash)
