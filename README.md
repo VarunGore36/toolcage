@@ -180,7 +180,7 @@ $TC token attenuate --parent root.tok --rev child-1 --out child.tok \
 
 Tokens carry scoped, expiring authority and are revocable. Tags are **HMAC-SHA256 keyed with the host secret**, so a guest that reads a token can neither mint a sibling nor widen anything: forged and hand-edited tokens fail verification and are denied. Expiry is enforced, paths are traversal-normalized, and an empty rights list grants nothing on that axis. `fetch` requires a policy allow **and** a token that verifies against `--key-hex` — without a key, a presented token is denied, never waved through.
 
-Revocation covers the **whole subtree**: revoking a `rev_id` kills every token delegated from it, including ones that were never tracked explicitly, while revoking a child never affects its parent. The ancestor walk terminates even on hostile link shapes.
+Revocation covers the **whole subtree**: revoking a `rev_id` kills every token delegated from it, including ones that were never tracked explicitly, while revoking a child never affects its parent. This holds because every token carries its **signed lineage** (root first, immediate parent last) inside the HMAC — a holder cannot strip, hide, or pad an ancestor to survive its revocation — and the walk terminates even on hostile link shapes. The same `--revocation` flag is honored by `mcp serve`, `mcp call`, and `fetch`.
 
 ## Secrets
 
@@ -212,7 +212,7 @@ This is **tamper evidence, not tamper prevention.** An attacker who controls the
 | `$TC doctor` | Probe the namespace stack (userns/mount/net/ipc/pid/uts), cgroup v2, Landlock ABI, seccomp, `/dev/kvm` |
 | `$TC run --tier T -- <argv>` | Policy check, audit intent, exec with cleared env (1 MiB streaming output cap, 30 s kill), audit outcome. `--unsafe-no-isolation` opts out of the cage (tier0 only, audited) |
 | `$TC check-net --host H --method M --path P` | Proxy decision and upstream resolution, no network touched |
-| `$TC fetch [--token T] [--approve]` | Proxy + broker fetch with dual auth and approval pause; scrubbed body; both steps audited |
+| `$TC fetch [--token T] [--revocation R] [--approve]` | Proxy + broker fetch with dual auth and approval pause (revocation checked against the token and its signed ancestry); scrubbed body; both steps audited |
 | `$TC token keygen / mint / attenuate` | Host MAC key; create root tokens; delegate narrower ones |
 | `$TC image sign --dir D --key-hex K` | Ed25519-sign a golden image manifest (`signature.bin`) — what `GoldenImage::load` verifies before trusting the image |
 | `$TC mcp serve / call` | Stdio JSON-RPC front door |
