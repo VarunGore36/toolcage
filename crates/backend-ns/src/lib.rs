@@ -37,9 +37,9 @@
 
 use libc::{
     c_char, c_int, c_long, c_uint, c_ulong, c_void, getgid, getuid, prctl, sock_filter, sock_fprog,
-    syscall, BPF_ABS, BPF_JEQ, BPF_JMP, BPF_K, BPF_LD, BPF_RET, BPF_W, EPERM, SECCOMP_MODE_FILTER,
-    SECCOMP_RET_ALLOW, SECCOMP_RET_DATA, SECCOMP_RET_ERRNO, SIGKILL, STDERR_FILENO, STDIN_FILENO,
-    STDOUT_FILENO, WEXITSTATUS, WIFEXITED, WNOHANG,
+    syscall, BPF_ABS, BPF_JEQ, BPF_JGE, BPF_JMP, BPF_K, BPF_LD, BPF_RET, BPF_W, EPERM,
+    SECCOMP_MODE_FILTER, SECCOMP_RET_ALLOW, SECCOMP_RET_DATA, SECCOMP_RET_ERRNO, SIGKILL,
+    STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO, WEXITSTATUS, WIFEXITED, WNOHANG,
 };
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -95,6 +95,13 @@ const BLOCKED_SYSCALLS: &[c_int] = &[
     323, // userfaultfd
     435, // clone3
 ];
+
+/// `AUDIT_ARCH_X86_64` (`EM_X86_64 | __AUDIT_ARCH_64BIT | __AUDIT_ARCH_LE`).
+#[cfg(target_arch = "x86_64")]
+const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
+/// `__X32_SYSCALL_BIT`: x32 ABI syscalls share `AUDIT_ARCH_X86_64` with bit 30 set.
+#[cfg(target_arch = "x86_64")]
+const X32_SYSCALL_BIT: u32 = 0x4000_0000;
 
 // Landlock syscalls on this host's kernel (444/445/446; verified live:
 // create_ruleset returned fd 3). Not wrapped by libc.
@@ -990,20 +997,64 @@ fn close_all_except_stdio() {
 /// whose backing Vec was dropped here — a use-after-free.
 fn build_seccomp_insns() -> Vec<sock_filter> {
     let mut insns: Vec<sock_filter> = Vec::new();
-    // Load seccomp_data.nr into the accumulator. NOTE the addressing mode:
-    // this is BPF_ABS (load from an offset in the seccomp_data struct), NOT
-    // BPF_A (0x10, the MISC-A field — identical to BPF_B). BPF_LD|BPF_W|BPF_A
-    // assembles to opcode 0x10, i.e. BPF_LD|BPF_B|BPF_IMM ("load byte
-    // immediate"), which the kernel's classic-BPF validator rejects with
-    // EINVAL — so PR_SET_SECCOMP failed and apply_seccomp warned "seccomp
-    // unavailable, continuing without it" on every host. The syscall filter
-    // was never installed.
-    insns.push(sock_filter {
-        code: (BPF_LD | BPF_W | BPF_ABS) as u16,
-        jt: 0,
-        jf: 0,
-        k: 0, // A = seccomp_data.nr (offset 0)
-    });
+    let deny_eperm = SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA);
+
+    // 1. Validate seccomp_data.arch (offset 4) == AUDIT_ARCH_X86_64.
+    // Without this check, a 64-bit process on x86_64 can issue 32-bit IA-32
+    // syscalls via `int 0x80` (where mount=21, ptrace=26, socketcall=102) and
+    // bypass every x86_64 syscall number in BLOCKED_SYSCALLS.
+    #[cfg(target_arch = "x86_64")]
+    {
+        insns.push(sock_filter {
+            code: (BPF_LD | BPF_W | BPF_ABS) as u16,
+            jt: 0,
+            jf: 0,
+            k: 4, // A = seccomp_data.arch (offset 4)
+        });
+        insns.push(sock_filter {
+            code: (BPF_JMP | BPF_JEQ | BPF_K) as u16,
+            jt: 1, // arch == AUDIT_ARCH_X86_64 -> skip the RET ERRNO
+            jf: 0, // foreign arch -> fall through and deny
+            k: AUDIT_ARCH_X86_64,
+        });
+        insns.push(sock_filter {
+            code: (BPF_RET | BPF_K) as u16,
+            jt: 0,
+            jf: 0,
+            k: deny_eperm,
+        });
+
+        // 2. Load seccomp_data.nr (offset 0) and refuse the x32 ABI bit (bit 30).
+        insns.push(sock_filter {
+            code: (BPF_LD | BPF_W | BPF_ABS) as u16,
+            jt: 0,
+            jf: 0,
+            k: 0, // A = seccomp_data.nr (offset 0)
+        });
+        insns.push(sock_filter {
+            code: (BPF_JMP | BPF_JGE | BPF_K) as u16,
+            jt: 0, // nr >= X32_SYSCALL_BIT -> fall through and deny
+            jf: 1, // standard x86_64 nr -> continue to blocklist
+            k: X32_SYSCALL_BIT,
+        });
+        insns.push(sock_filter {
+            code: (BPF_RET | BPF_K) as u16,
+            jt: 0,
+            jf: 0,
+            k: deny_eperm,
+        });
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        insns.push(sock_filter {
+            code: (BPF_LD | BPF_W | BPF_ABS) as u16,
+            jt: 0,
+            jf: 0,
+            k: 0, // A = seccomp_data.nr (offset 0)
+        });
+    }
+
     for &nr in BLOCKED_SYSCALLS {
         // Match the syscall number in A. Jump offsets are counted from the
         // instruction AFTER this one: `jt` is taken when A == nr, `jf` when
@@ -1021,7 +1072,7 @@ fn build_seccomp_insns() -> Vec<sock_filter> {
             code: (BPF_RET | BPF_K) as u16,
             jt: 0,
             jf: 0,
-            k: SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA),
+            k: deny_eperm,
         });
     }
     insns.push(sock_filter {
@@ -1196,9 +1247,11 @@ fn apply_landlock(workspace: &str) {
             ok >= 0
         };
         let ok = add_rule(ruleset, workspace, ws_rights)
-            && ["/usr", "/bin", "/lib", "/lib64"]
+            && ["/usr", "/bin", "/lib"]
                 .iter()
-                .all(|p| add_rule(ruleset, p, sys_rights));
+                .all(|p| add_rule(ruleset, p, sys_rights))
+            && (unsafe { libc::access(c"/lib64".as_ptr(), libc::F_OK) } != 0
+                || add_rule(ruleset, "/lib64", sys_rights));
         if ok {
             let rc = unsafe { syscall(SYS_LANDLOCK_RESTRICT_SELF, ruleset, 0) };
             if rc < 0 {
@@ -1458,13 +1511,13 @@ mod tests {
         // (caller keeps it alive while the sock_fprog points into it). v0
         // returned a sock_fprog whose Vec was already dropped.
         let insns = build_seccomp_insns();
-        assert_eq!(insns.len(), 2 * BLOCKED_SYSCALLS.len() + 2);
-        // First insn loads seccomp_data.nr into the accumulator. Must be
+        assert_eq!(insns.len(), 2 * BLOCKED_SYSCALLS.len() + 7);
+        // First insn loads seccomp_data.arch into the accumulator. Must be
         // BPF_ABS (the seccomp_data offset addressing mode) — BPF_A is a
         // different constant (0x10 == BPF_B) that assembles to an invalid
         // opcode the kernel rejects with EINVAL.
         assert_eq!(insns[0].code, (BPF_LD | BPF_W | BPF_ABS) as u16);
-        assert_eq!(insns[0].k, 0, "loads seccomp_data.nr at offset 0");
+        assert_eq!(insns[0].k, 4, "loads seccomp_data.arch at offset 4");
         // Last insn is the fall-through allow; every blocked syscall is
         // matched in between and returns EPERM.
         assert_eq!(insns[insns.len() - 1].code, (BPF_RET | BPF_K) as u16);
@@ -1479,10 +1532,11 @@ mod tests {
     /// jt/jf pair or a mistyped addressing mode — the v0 filter was
     /// structurally perfect and semantically inverted.
     #[cfg(target_arch = "x86_64")]
-    fn run_filter(insns: &[sock_filter], nr: i32) -> u32 {
+    fn run_filter_with_arch(insns: &[sock_filter], arch: u32, nr: i32) -> u32 {
         // Exact opcodes as emitted by build_seccomp_insns.
         const OP_LD_W_ABS: u16 = (BPF_LD | BPF_W | BPF_ABS) as u16;
         const OP_JMP_JEQ_K: u16 = (BPF_JMP | BPF_JEQ | BPF_K) as u16;
+        const OP_JMP_JGE_K: u16 = (BPF_JMP | BPF_JGE | BPF_K) as u16;
         const OP_RET_K: u16 = (BPF_RET | BPF_K) as u16;
         let mut a: u32 = 0;
         let mut pc = 0usize;
@@ -1490,18 +1544,28 @@ mod tests {
             let ins = &insns[pc];
             match ins.code {
                 OP_LD_W_ABS => {
-                    // LD_W_ABS k=0 -> seccomp_data.nr
-                    assert_eq!(ins.k, 0, "only seccomp_data.nr is loaded");
-                    a = nr as u32;
+                    match ins.k {
+                        4 => a = arch,
+                        0 => a = nr as u32,
+                        k => panic!("unexpected offset {k}"),
+                    }
                     pc += 1;
                 }
                 OP_JMP_JEQ_K => {
                     pc += 1 + if a == ins.k { ins.jt } else { ins.jf } as usize;
                 }
+                OP_JMP_JGE_K => {
+                    pc += 1 + if a >= ins.k { ins.jt } else { ins.jf } as usize;
+                }
                 OP_RET_K => return ins.k,
                 c => panic!("unexpected opcode {c:#x} at pc {pc}"),
             }
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn run_filter(insns: &[sock_filter], nr: i32) -> u32 {
+        run_filter_with_arch(insns, AUDIT_ARCH_X86_64, nr)
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -1520,6 +1584,20 @@ mod tests {
                 "blocked syscall {nr} must be denied with EPERM"
             );
         }
+
+        // Foreign architectures (e.g., IA-32 `int 0x80`, arch = 0x4000_0003)
+        // and x32 ABI syscalls (bit 30 set) must be denied even if the numeric
+        // nr is not in the x86_64 blocklist.
+        assert_eq!(
+            run_filter_with_arch(&insns, 0x4000_0003, 21), // IA-32 mount
+            deny_verdict,
+            "IA-32 syscall must be denied"
+        );
+        assert_eq!(
+            run_filter(&insns, (X32_SYSCALL_BIT | 1) as i32),
+            deny_verdict,
+            "x32 ABI syscall must be denied"
+        );
 
         // A representative slice of the syscalls a workload actually needs.
         for nr in [
@@ -1545,9 +1623,9 @@ mod tests {
             );
         }
 
-        // And the whole rest of the space (aside from the blocklist) is open.
+        // And the whole rest of the standard x86_64 space (aside from the blocklist) is open.
         let blocked: Vec<u32> = BLOCKED_SYSCALLS.iter().map(|&n| n as u32).collect();
-        for nr in -2i32..512 {
+        for nr in 0i32..512 {
             if blocked.contains(&(nr as u32)) {
                 continue;
             }
@@ -1570,6 +1648,7 @@ mod tests {
             code,
             c if c == (BPF_LD | BPF_W | BPF_ABS) as u16
                 || c == (BPF_JMP | BPF_JEQ | BPF_K) as u16
+                || c == (BPF_JMP | BPF_JGE | BPF_K) as u16
                 || c == (BPF_RET | BPF_K) as u16
         )
     }
@@ -1584,18 +1663,24 @@ mod tests {
         // (every run logged "seccomp unavailable, continuing without it").
         let insns = build_seccomp_insns();
 
-        // The load: exact opcode, offset 0, and explicitly not the BPF_A form.
+        // The loads: exact opcode, offset 4 (arch) and offset 0 (nr), and explicitly not BPF_A.
         assert_eq!(
             insns[0].code,
             (BPF_LD | BPF_W | BPF_ABS) as u16,
-            "first insn must load seccomp_data.nr via BPF_ABS"
+            "first insn must load seccomp_data.arch via BPF_ABS"
         );
         assert_ne!(
             insns[0].code,
             (BPF_LD | BPF_W | libc::BPF_A) as u16,
             "BPF_A (== BPF_B) is not a load addressing mode; the kernel rejects it"
         );
-        assert_eq!(insns[0].k, 0, "loads seccomp_data.nr at offset 0");
+        assert_eq!(insns[0].k, 4, "loads seccomp_data.arch at offset 4");
+        assert_eq!(
+            insns[3].code,
+            (BPF_LD | BPF_W | BPF_ABS) as u16,
+            "fourth insn must load seccomp_data.nr via BPF_ABS"
+        );
+        assert_eq!(insns[3].k, 0, "loads seccomp_data.nr at offset 0");
 
         // Every instruction must be one the kernel will accept for seccomp.
         for (pc, ins) in insns.iter().enumerate() {
@@ -1607,12 +1692,11 @@ mod tests {
             );
         }
 
-        // And the structural shape: pairs of (JEQ, RET ERRNO) plus the two
-        // ends. Verified as exact opcodes, so a mistyped addressing mode or
-        // class cannot slip through.
+        // And the structural shape: arch/x32 prologue (6 insns), pairs of
+        // (JEQ, RET ERRNO) for BLOCKED_SYSCALLS, plus the trailing allow.
         assert_eq!(insns[insns.len() - 1].code, (BPF_RET | BPF_K) as u16);
         assert_eq!(insns[insns.len() - 1].k, SECCOMP_RET_ALLOW);
-        for chunk in insns[1..insns.len() - 1].chunks(2) {
+        for chunk in insns[6..insns.len() - 1].chunks(2) {
             assert_eq!(chunk[0].code, (BPF_JMP | BPF_JEQ | BPF_K) as u16);
             assert_eq!(chunk[1].code, (BPF_RET | BPF_K) as u16);
             assert_eq!(

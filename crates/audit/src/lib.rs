@@ -15,8 +15,13 @@
 //! - Canonical JSON: serde_json field order follows the struct, so re-hash is
 //!   deterministic today. Do not switch serializers without a schema version
 //!   bump and migration test.
-//! - Concurrency: one Writer per file. Multi-process appends interleave; use a
-//!   single audit writer process + file lock before scaling writers.
+//! - Concurrency: every append takes flock(LOCK_EX), re-reads the chain tail
+//!   if another process extended the file, then writes + fsyncs, so concurrent
+//!   writers serialize instead of forking the chain. The lock is never held
+//!   across the action itself.
+//! - Freeze: a `deny-all` event (panic_freeze) is terminal. Writer::open and
+//!   append refuse a log with a `.tainted` marker or a deny-all tail, and
+//!   verify() fails if anything follows a deny-all.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
@@ -78,47 +83,50 @@ fn event_body(e: &Event) -> serde_json::Value {
 
 pub struct Writer {
     file: File,
+    path: std::path::PathBuf,
     next_seq: u64,
     head: String,
+    /// File length after our last verify/append. If another process appended
+    /// in between, the length differs and the chain tail is re-read under the
+    /// lock before we extend it.
+    known_len: u64,
 }
 
-/// The taint marker written next to a frozen log: `<log>.tainted`.
-pub fn tainted_marker(path: &Path) -> std::path::PathBuf {
-    let mut o = path.as_os_str().to_owned();
-    o.push(".tainted");
-    std::path::PathBuf::from(o)
+/// Exclusive advisory lock on the audit file, released on drop. Held only for
+/// the verify-then-append critical section — never across the action itself,
+/// so a long exec cannot block another process (e.g. an operator `panic`).
+struct FlockGuard(std::os::unix::io::RawFd);
+
+impl FlockGuard {
+    fn lock(file: &File, path: &Path) -> anyhow::Result<Self> {
+        use std::os::unix::io::AsRawFd;
+        let fd = file.as_raw_fd();
+        loop {
+            // SAFETY: flock on a valid fd owned by `file`, which outlives the guard.
+            if unsafe { libc::flock(fd, libc::LOCK_EX) } == 0 {
+                return Ok(Self(fd));
+            }
+            let err = std::io::Error::last_os_error();
+            if err.kind() != std::io::ErrorKind::Interrupted {
+                anyhow::bail!("flock audit log {}: {err}", path.display());
+            }
+        }
+    }
+}
+
+impl Drop for FlockGuard {
+    fn drop(&mut self) {
+        // SAFETY: same fd the lock was taken on; still open (see lock()).
+        unsafe { libc::flock(self.0, libc::LOCK_UN) };
+    }
 }
 
 impl Writer {
     pub fn open(path: &Path) -> anyhow::Result<Self> {
-        // A frozen log accepts nothing more. Every supervisor action opens
-        // the writer before acting (the I4 write-ahead gate), so refusing
-        // here is what makes `panic freeze` an actual freeze instead of a
-        // note in the log. The marker is a convenience; the terminal
-        // deny-all inside the chain is the enforcement, so deleting the
-        // marker does not thaw anything.
-        let taint = tainted_marker(path);
-        anyhow::ensure!(
-            !taint.exists(),
-            "audit log {} is frozen ({} present)",
-            path.display(),
-            taint.display()
-        );
-        let mut next_seq = 0u64;
-        let mut head = "GENESIS".to_string();
-        if path.exists() {
-            // Verify existing chain before appending: never extend a corrupt log.
-            if std::fs::metadata(path)?.len() > 0 {
-                let (n, h, frozen) = verify_chain(path)?;
-                anyhow::ensure!(
-                    !frozen,
-                    "audit log {} is frozen by a deny-all panic event",
-                    path.display()
-                );
-                next_seq = n;
-                head = h;
-            }
-        }
+        // A panic-frozen log (`<log>.tainted` present) accepts no new events.
+        // Every supervisor action opens a Writer before acting (I4), so
+        // refusing here stops every execution path fail-closed.
+        ensure_not_tainted(path)?;
         let existed = path.exists();
         let file = OpenOptions::new().create(true).append(true).open(path)?;
         if !existed {
@@ -129,15 +137,53 @@ impl Writer {
             use std::os::unix::fs::PermissionsExt;
             file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
         }
-        Ok(Self {
+        let mut w = Self {
             file,
-            next_seq,
-            head,
-        })
+            path: path.to_path_buf(),
+            next_seq: 0,
+            head: "GENESIS".to_string(),
+            known_len: 0,
+        };
+        // Verify existing chain (under the lock) before appending: never
+        // extend a corrupt log, and never extend one frozen by `panic`.
+        let _g = FlockGuard::lock(&w.file, path)?;
+        w.resync()?;
+        Ok(w)
+    }
+
+    /// Re-read the chain tail (caller holds the lock). Fails on a corrupt or
+    /// panic-frozen log.
+    fn resync(&mut self) -> anyhow::Result<()> {
+        let len = self.file.metadata()?.len();
+        if len > 0 {
+            let (n, h, frozen) = verify_chain(&self.path)?;
+            anyhow::ensure!(
+                !frozen,
+                "audit log {} is frozen by a deny-all panic event",
+                self.path.display()
+            );
+            self.next_seq = n;
+            self.head = h;
+        } else {
+            self.next_seq = 0;
+            self.head = "GENESIS".to_string();
+        }
+        self.known_len = len;
+        Ok(())
     }
 
     /// Write-ahead append: fsync before returning, so caller may act only after Ok.
+    ///
+    /// Serialized across processes with flock: if another writer extended the
+    /// log since our last append, the new tail is verified and chained onto
+    /// (so concurrent sessions never fork the chain), and a freeze appended in
+    /// the meantime by `panic` makes this append fail.
     pub fn append(&mut self, mut e: Event) -> anyhow::Result<Event> {
+        ensure_not_tainted(&self.path)?;
+        let _g = FlockGuard::lock(&self.file, &self.path)?;
+        if self.file.metadata()?.len() != self.known_len {
+            self.resync()?;
+        }
         e.seq = self.next_seq;
         e.prev_hash = self.head.clone();
         let body = event_body(&e);
@@ -147,6 +193,7 @@ impl Writer {
         self.file.write_all(b"\n")?;
         self.file.flush()?;
         self.file.sync_all()?;
+        self.known_len = self.file.metadata()?.len();
         self.next_seq += 1;
         self.head = e.hash.clone();
         Ok(e)
@@ -158,9 +205,29 @@ pub fn verify(path: &Path) -> anyhow::Result<(u64, String)> {
     Ok((count, head))
 }
 
-/// Verify the chain and report whether it ends in a panic freeze. A frozen
-/// log is a legitimate terminal state (it verifies fine) — but NOTHING may
-/// follow the freeze event, or the "frozen" claim is a lie.
+/// Decision recorded by `panic_freeze`. It must be the terminal event of a
+/// log: anything appended after it means the freeze was bypassed.
+pub const FREEZE_DECISION: &str = "deny-all";
+
+/// `<log>.tainted` — appended suffix, matching `panic_freeze`'s naming.
+pub fn tainted_marker(path: &Path) -> std::path::PathBuf {
+    let mut os = path.as_os_str().to_owned();
+    os.push(".tainted");
+    std::path::PathBuf::from(os)
+}
+
+fn ensure_not_tainted(path: &Path) -> anyhow::Result<()> {
+    let taint = tainted_marker(path);
+    anyhow::ensure!(
+        !taint.exists(),
+        "audit log {} is frozen ({} present)",
+        path.display(),
+        taint.display()
+    );
+    Ok(())
+}
+
+/// Verify the chain; also report whether it ends in a panic freeze.
 fn verify_chain(path: &Path) -> anyhow::Result<(u64, String, bool)> {
     let f = File::open(path)?;
     let mut expect_prev = "GENESIS".to_string();
@@ -185,7 +252,7 @@ fn verify_chain(path: &Path) -> anyhow::Result<(u64, String, bool)> {
         anyhow::ensure!(e.prev_hash == expect_prev, "chain break at seq {}", e.seq);
         let recomputed = hash_for(&e.prev_hash, &event_body(&e));
         anyhow::ensure!(recomputed == e.hash, "hash mismatch at seq {}", e.seq);
-        if e.decision == "deny-all" {
+        if e.decision == FREEZE_DECISION {
             frozen_at = Some(e.seq);
         }
         expect_prev = e.hash.clone();
@@ -415,6 +482,87 @@ mod tests {
         bad.head_hash = "zzz".into();
         assert!(verify_checkpoint(&bad, &pk).is_err());
         assert!(verify_checkpoint(&cp, &[9u8; 32]).is_err());
+    }
+
+    fn ev(action: &str, decision: &str) -> Event {
+        Event {
+            seq: 0,
+            ts_wall: "2026-01-01T00:00:00Z".into(),
+            session: "s1".into(),
+            actor: "test".into(),
+            action: action.into(),
+            request_hash: "abc".into(),
+            decision: decision.into(),
+            rule_ids: vec![],
+            token_rev_id: "r".into(),
+            result: "ok".into(),
+            bytes: 0,
+            claimed_by: "host".into(),
+            prev_hash: String::new(),
+            hash: String::new(),
+        }
+    }
+
+    #[test]
+    fn interleaved_writers_never_fork_the_chain() {
+        // Two writers on one log (as two concurrent processes would be) used to
+        // each cache (next_seq, head) from open and write duplicate seqs. Each
+        // append now re-reads the tail under flock and chains onto it.
+        let dir = std::env::temp_dir().join(format!("toolcage-audit-ilv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("a.jsonl");
+        let mut a = Writer::open(&p).unwrap();
+        let mut b = Writer::open(&p).unwrap();
+        for i in 0..4 {
+            a.append(ev(&format!("a{i}"), "allow")).unwrap();
+            b.append(ev(&format!("b{i}"), "allow")).unwrap();
+        }
+        let (n, _) = verify(&p).expect("interleaved appends must keep the chain valid");
+        assert_eq!(n, 8);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn deny_all_freeze_is_terminal() {
+        // A panic freeze (deny-all) is the last event a log may hold: a writer
+        // that was already open must not extend it, a new writer must refuse
+        // to open it, and a log extended past it must fail verification.
+        let dir = std::env::temp_dir().join(format!("toolcage-audit-frz-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("a.jsonl");
+        let mut running = Writer::open(&p).unwrap();
+        running.append(ev("proc.exec", "allow")).unwrap();
+        let mut op = Writer::open(&p).unwrap();
+        op.append(ev("panic", FREEZE_DECISION)).unwrap();
+        drop(op);
+        verify(&p).expect("a frozen log still verifies");
+        assert!(running.append(ev("proc.exec", "allow")).is_err());
+        assert!(Writer::open(&p).is_err());
+        // Forge an extension past the freeze by hand: verify must reject it.
+        let text = std::fs::read_to_string(&p).unwrap();
+        let last: Event = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+        let mut forged = ev("proc.exec", "allow");
+        forged.seq = last.seq + 1;
+        forged.prev_hash = last.hash.clone();
+        forged.hash = hash_for(&forged.prev_hash, &event_body(&forged));
+        let mut f = OpenOptions::new().append(true).open(&p).unwrap();
+        writeln!(f, "{}", serde_json::to_string(&forged).unwrap()).unwrap();
+        let err = verify(&p).unwrap_err().to_string();
+        assert!(err.contains("after panic freeze"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tainted_marker_blocks_open() {
+        let dir = std::env::temp_dir().join(format!("toolcage-audit-tnt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("a.jsonl");
+        std::fs::write(tainted_marker(&p), "tainted\n").unwrap();
+        assert!(Writer::open(&p).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
     fn old_checkpoint_plus_truncated_tail_fails() {

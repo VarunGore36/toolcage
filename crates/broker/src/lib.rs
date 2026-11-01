@@ -23,10 +23,9 @@
 //! are safe with 192-bit nonce space). Associated data = credential name
 //! (binding ciphertext to its identity). Master key = 32 bytes.
 
-use chacha20poly1305::aead::{Aead, AeadCore};
-use chacha20poly1305::{KeyInit, XChaCha20Poly1305};
+use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
+use chacha20poly1305::XChaCha20Poly1305;
 use generic_array::GenericArray;
-use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -78,6 +77,43 @@ pub struct EncryptedCredential {
     pub paths: Vec<String>,
     pub expires_at: Option<u64>,
     pub encrypted_value: String, // base64(nonce || ciphertext)
+}
+
+/// Canonical AEAD associated data binding a credential's identity and scope
+/// (`name`, `use_with`, `methods`, `paths`, `expires_at`) to its ciphertext.
+/// Without this, an attacker with write access to the store file can edit
+/// `use_with` or swap ciphertexts across credentials without the master key.
+fn credential_aad(
+    name: &str,
+    use_with: &str,
+    methods: &[String],
+    paths: &[String],
+    expires_at: Option<u64>,
+) -> Vec<u8> {
+    let mut aad = Vec::new();
+    let push_lp = |buf: &mut Vec<u8>, s: &[u8]| {
+        buf.extend_from_slice(&(s.len() as u64).to_le_bytes());
+        buf.extend_from_slice(s);
+    };
+    push_lp(&mut aad, b"toolcage-broker-aad-v1");
+    push_lp(&mut aad, name.as_bytes());
+    push_lp(&mut aad, use_with.as_bytes());
+    aad.extend_from_slice(&(methods.len() as u64).to_le_bytes());
+    for m in methods {
+        push_lp(&mut aad, m.as_bytes());
+    }
+    aad.extend_from_slice(&(paths.len() as u64).to_le_bytes());
+    for p in paths {
+        push_lp(&mut aad, p.as_bytes());
+    }
+    match expires_at {
+        None => aad.push(0),
+        Some(ts) => {
+            aad.push(1);
+            aad.extend_from_slice(&ts.to_le_bytes());
+        }
+    }
+    aad
 }
 
 /// Master key holder: 32 bytes, zeroized on drop.
@@ -148,8 +184,15 @@ impl Broker {
             let (nonce_bytes, ct) = combined.split_at(24);
             let nonce: GenericArray<u8, <XChaCha20Poly1305 as AeadCore>::NonceSize> =
                 *GenericArray::from_slice(nonce_bytes);
+            let aad = credential_aad(
+                &ec.name,
+                &ec.use_with,
+                &ec.methods,
+                &ec.paths,
+                ec.expires_at,
+            );
             let pt = cipher
-                .decrypt(&nonce, ct)
+                .decrypt(&nonce, Payload { msg: ct, aad: &aad })
                 .map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
             let value = String::from_utf8(pt).map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
             creds.insert(
@@ -184,8 +227,9 @@ impl Broker {
             let mut rng = OsRng;
             let nonce = XChaCha20Poly1305::generate_nonce(&mut rng);
             let pt = c.value.as_bytes();
+            let aad = credential_aad(&c.name, &c.use_with, &c.methods, &c.paths, c.expires_at);
             let ct = cipher
-                .encrypt(&nonce, pt)
+                .encrypt(&nonce, Payload { msg: pt, aad: &aad })
                 .map_err(|e| anyhow::anyhow!("encrypt: {e}"))?;
             let mut combined = nonce.to_vec();
             combined.extend_from_slice(&ct);
@@ -201,6 +245,12 @@ impl Broker {
         let data =
             serde_json::to_vec_pretty(&encrypted).map_err(|e| anyhow::anyhow!("encrypt: {e}"))?;
         fs::write(path, data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .map_err(|e| anyhow::anyhow!("io: {e}"))?;
+        }
         Ok(())
     }
 
@@ -236,15 +286,28 @@ impl Broker {
             let (nonce_bytes, ct) = combined.split_at(24);
             let nonce: GenericArray<u8, <XChaCha20Poly1305 as AeadCore>::NonceSize> =
                 *GenericArray::from_slice(nonce_bytes);
+            let aad = credential_aad(
+                &ec.name,
+                &ec.use_with,
+                &ec.methods,
+                &ec.paths,
+                ec.expires_at,
+            );
             // Every entry must actually decrypt under the current key: a
             // rotation that cannot read the store must not rewrite it.
             let pt = old_cipher
-                .decrypt(&nonce, ct)
+                .decrypt(&nonce, Payload { msg: ct, aad: &aad })
                 .map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
             let mut rng = OsRng;
             let nonce = XChaCha20Poly1305::generate_nonce(&mut rng);
             let ct = new_cipher
-                .encrypt(&nonce, pt.as_ref())
+                .encrypt(
+                    &nonce,
+                    Payload {
+                        msg: pt.as_ref(),
+                        aad: &aad,
+                    },
+                )
                 .map_err(|e| anyhow::anyhow!("encrypt: {e}"))?;
             let mut combined = nonce.to_vec();
             combined.extend_from_slice(&ct);
@@ -257,7 +320,12 @@ impl Broker {
         let mut tmp = path.as_os_str().to_owned();
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
-        fs::write(&tmp, data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+        fs::write(&tmp, &data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
+        }
         fs::rename(&tmp, path).map_err(|e| anyhow::anyhow!("io: {e}"))?;
         self.master_key = Some(new_key);
         for c in self.creds.values_mut() {
@@ -599,12 +667,23 @@ mod tests {
         let (nonce_bytes, ct) = combined.split_at(24);
         let nonce: GenericArray<u8, <XChaCha20Poly1305 as AeadCore>::NonceSize> =
             *GenericArray::from_slice(nonce_bytes);
+        let aad = credential_aad(
+            &entries[0].name,
+            &entries[0].use_with,
+            &entries[0].methods,
+            &entries[0].paths,
+            entries[0].expires_at,
+        );
         let cipher_b = XChaCha20Poly1305::new_from_slice(&hex_decode(key_b).unwrap()).unwrap();
-        let pt = cipher_b.decrypt(&nonce, ct).unwrap();
+        let pt = cipher_b
+            .decrypt(&nonce, Payload { msg: ct, aad: &aad })
+            .unwrap();
         assert_eq!(pt, b"v1".to_vec(), "new key must read the rotated store");
         let cipher_a = XChaCha20Poly1305::new_from_slice(&hex_decode(key_a).unwrap()).unwrap();
         assert!(
-            cipher_a.decrypt(&nonce, ct).is_err(),
+            cipher_a
+                .decrypt(&nonce, Payload { msg: ct, aad: &aad })
+                .is_err(),
             "the old key must no longer decrypt the store"
         );
         std::fs::remove_dir_all(&dir).unwrap();
