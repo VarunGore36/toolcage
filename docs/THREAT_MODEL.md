@@ -18,7 +18,7 @@ Host kernel trusted with reservations — Tier 2 uses separate guest kernel.
 
 - I1 no guest net except via egress proxy — escape suite: raw/DNS/ICMP/IPv6/tunnels; **seccomp-BPF blocklist** covers x86_64 syscalls including `chroot`, `io_uring`, `fsopen`, `move_mount` in addition to the original blocklist
 - I2 no credential value in guest mem/files/env/args — canary scan
-- I3 token only narrows on delegate — property tests
+- I3 token only narrows on delegate — property tests (200-seed chains); **approval `needs_approval` now fails closed on unknown/empty method/host, preventing gate-dodging by omission**
 - I4 decision recorded before action — kill supervisor mid-action
 - I5 any log edit/delete/reorder detected by `audit verify` — mutation tests
 - I6 guest cannot loosen policy — adversarial guest
