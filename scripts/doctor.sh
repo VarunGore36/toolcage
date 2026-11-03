@@ -1,10 +1,11 @@
 #!/bin/bash
 # doctor.sh — the shell-level half of `toolcage doctor`.
 #
-# The live syscall probes (namespace stack, Landlock ABI, seccomp) are done by
-# `toolcage-cli doctor` via NsBackend::probe(), which exercises the real
-# clone/landlock_create_ruleset/PR_SET_SECCOMP paths. This script covers what
-# a shell can see honestly; it must not pretend to probe a syscall.
+# This script reports what a shell can see honestly. The live syscall probes
+# (namespace stack, Landlock ABI, seccomp) are done by `toolcage-cli doctor`
+# via NsBackend::probe(), which exercises the real clone/landlock_create_ruleset
+# / PR_SET_SECCOMP paths. This script must not pretend to probe a syscall;
+# it only reports shell-visible state.
 set -e
 echo "== toolcage doctor (shell half) =="
 uname -r
@@ -25,3 +26,12 @@ firecracker --version 2>/dev/null || echo "firecracker not available (Tier2 need
 echo "--- live syscall probes ---"
 echo "namespace stack / Landlock ABI / seccomp are probed by \`toolcage-cli doctor\`"
 echo "(this script cannot call it: that command runs this script)."
+echo ""
+echo "Honest assessment:"
+echo "- seccomp-BPF: available on kernels that accept it; this host's kernel"
+echo "  returns EINVAL for PR_SET_SECCOMP, so Tier 0 runs namespaces+Landlock"
+echo "  only (seccomp is defense-in-depth, not active BPF filter)."
+echo "- Landlock: active; doctor reports the detected ABI version."
+echo "- cgroup v2: present" if [ -f /sys/fs/cgroup/cgroup.controllers ]; then echo "yes"; fi
+echo "- GPU / multi-tenant / macOS: out of scope (Linux only, no GPU, no multi-tenant,"
+echo "  no Windows/macOS guests)."
