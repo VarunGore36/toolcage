@@ -1518,6 +1518,10 @@ mod tests {
         // (caller keeps it alive while the sock_fprog points into it). v0
         // returned a sock_fprog whose Vec was already dropped.
         let insns = build_seccomp_insns();
+        // 2 * BLOCKED_SYSCALLS.len() = per-syscall jt/jf jump insns.
+        // +7 = fixed overhead: 1 = load arch at offset 4, 2 = jt/jf jump
+        //      orientation for first syscall, 1 = final BPF_RET allow,
+        //      3 = fixed setup insns (total = 7, unchanged when adding syscalls).
         assert_eq!(insns.len(), 2 * BLOCKED_SYSCALLS.len() + 7);
         // First insn loads seccomp_data.arch into the accumulator. Must be
         // BPF_ABS (the seccomp_data offset addressing mode) — BPF_A is a
