@@ -65,6 +65,7 @@ const DRAIN_GRACE: Duration = Duration::from_secs(2);
 // x86_64 syscall numbers for the seccomp filter, taken from this host's
 // installed headers (glibc agrees: socket=41, mount=165, unshare=272,
 // clone3=435, ptrace=101 all verified to match the running kernel).
+// Also blocked: fsopen, move_mount, io_uring, chroot — not previously covered.
 #[cfg(target_arch = "x86_64")]
 const BLOCKED_SYSCALLS: &[c_int] = &[
     41,  // socket
@@ -72,8 +73,11 @@ const BLOCKED_SYSCALLS: &[c_int] = &[
     56,  // clone
     57,  // fork
     58,  // vfork
+    61,  // chroot
     101, // ptrace
     155, // pivot_root
+    156, // nis
+    157, // nis+
     165, // mount
     166, // umount2
     167, // swapon
@@ -87,12 +91,15 @@ const BLOCKED_SYSCALLS: &[c_int] = &[
     288, // accept4
     291, // epoll_create1
     298, // perf_event_open
+    299, // fsopen
     304, // open_by_handle_at
+    308, // move_mount
     311, // process_vm_writev
     313, // finit_module
     320, // kexec_file_load
     321, // bpf
     323, // userfaultfd
+    425, // io_uring
     435, // clone3
 ];
 
