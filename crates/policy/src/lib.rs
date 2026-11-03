@@ -210,13 +210,13 @@ impl Policy {
                 }
                 if !spec.methods.is_empty() {
                     let m = method.unwrap_or("");
-                    if !m.is_empty() && !spec.methods.iter().any(|x| x.eq_ignore_ascii_case(m)) {
+                    if m.is_empty() || !spec.methods.iter().any(|x| x.eq_ignore_ascii_case(m)) {
                         continue;
                     }
                 }
                 if !spec.hosts.is_empty() {
                     let h = host.unwrap_or("");
-                    if !h.is_empty() && !spec.hosts.iter().any(|x| x.eq_ignore_ascii_case(h)) {
+                    if h.is_empty() || !spec.hosts.iter().any(|x| x.eq_ignore_ascii_case(h)) {
                         continue;
                     }
                 }

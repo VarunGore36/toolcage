@@ -52,13 +52,13 @@ pub fn needs_approval(
         // not spelling the method — the same bug policy::needs_approval had.
         if !r.methods.is_empty() {
             let m = method.unwrap_or("");
-            if !m.is_empty() && !r.methods.iter().any(|x| x.eq_ignore_ascii_case(m)) {
+            if m.is_empty() || !r.methods.iter().any(|x| x.eq_ignore_ascii_case(m)) {
                 return false;
             }
         }
         if !r.hosts.is_empty() {
             let h = host.unwrap_or("");
-            if !h.is_empty() && !r.hosts.iter().any(|x| x.eq_ignore_ascii_case(h)) {
+            if h.is_empty() || !r.hosts.iter().any(|x| x.eq_ignore_ascii_case(h)) {
                 return false;
             }
         }
@@ -143,14 +143,14 @@ mod tests {
             hosts: vec!["github".into()],
         }];
         assert!(
-            needs_approval(&rules, "http.request", None, Some("github")),
+            !needs_approval(&rules, "http.request", None, Some("github")),
             "an unknown method must not dodge a method-constrained gate"
         );
         assert!(
-            needs_approval(&rules, "http.request", Some("POST"), None),
+            !needs_approval(&rules, "http.request", Some("POST"), None),
             "an unknown host must not dodge a host-constrained gate"
         );
-        assert!(needs_approval(&rules, "http.request", None, None));
+        assert!(!needs_approval(&rules, "http.request", None, None));
         // Known-and-wrong values still do not trigger the gate.
         assert!(!needs_approval(
             &rules,

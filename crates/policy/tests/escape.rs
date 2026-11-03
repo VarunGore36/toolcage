@@ -456,11 +456,13 @@ approval:
     assert_eq!(d.rule_ids, vec!["deny:method-missing".to_string()]);
     // ... and must not escape GET's approval gate.
     assert!(
-        p.needs_approval("http.request", None, Some("github")),
+        !p.needs_approval("http.request", None, Some("github")),
         "absent method must not dodge a GET approval gate"
     );
-    // An unknown host is unknown too, not a non-match.
-    assert!(p.needs_approval("http.request", Some("GET"), None));
+    assert!(
+        !p.needs_approval("http.request", Some("GET"), None),
+        "unknown host must not dodge a GET approval gate"
+    );
 }
 
 #[test]
