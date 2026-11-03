@@ -32,7 +32,7 @@ Five adversaries (A1–A5) and seven attack paths are modeled in `docs/THREAT_MO
 |----|-----------|------------|
 | I1 | No guest process reaches any network except through the egress proxy | Escape suite (raw sockets, DNS, ICMP, IPv6, tunnels), proxy alias/metadata/budget tests |
 | I2 | No credential value ever appears in guest memory, files, environment, or arguments | Credential canaries, broker encrypt/load/rotate |
-| I3 | A token can only be narrowed, never widened, when delegated | Capability property tests (200 seeds), narrow/widen/revoke/tamper |
+| I3 | A token can only be narrowed, never widened, when delegated | Capability property tests (200 seeds), narrow/widen/revoke/tamper, **approval `needs_approval` fail-closed on unknown/empty method/host preventing gate-dodging** |
 | I4 | Every decision and side effect is recorded before the action completes | Supervisor write-ahead intent logging, chaos tests |
 | I5 | Any edit/deletion/reordering of the audit log is detected by `audit verify` | Audit mutation tests, checkpoint truncation test |
 | I6 | The guest cannot loosen its own policy or reach the policy engine | `sh -c` denial, path traversal tests, fs mount checks |
@@ -96,7 +96,7 @@ cargo clippy --workspace --all-targets  # clean
 
 ## Known limitations (honest)
 
-- **Seccomp-BPF unavailable** on this host's kernel build (returns EINVAL). Namespaces + Landlock still enforce the Tier0 boundary; seccomp is defense-in-depth.
+- **Seccomp-BPF unavailable** on this host's kernel build (returns EINVAL). Namespaces + Landlock still enforce the Tier0 boundary; seccomp is defense-in-depth. **The BPF blocklist has been expanded to cover chroot, io_uring, fsopen, and move_mount in addition to the original syscalls**.
 - **Audit fsyncs per append** — crash-safe but ~hundreds/s throughput target not yet met with group commit (~270k eps measured is host/fs-dependent).
 - **Supervisor idle memory** not yet measured (< 100 MB target).
 - **Persistent budget counters** now implemented — per-destination byte/request budgets survive restart via fsync'd JSON.
