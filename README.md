@@ -7,7 +7,7 @@
 [![CI](https://github.com/VarunGore36/toolcage/actions/workflows/ci.yml/badge.svg)](https://github.com/VarunGore36/toolcage/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Status: alpha](https://img.shields.io/badge/status-alpha%20%C2%B7%20not%20independently%20reviewed-orange.svg)](docs/REVIEW.md)
-[![Tests](https://img.shields.io/badge/tests-211%20%C2%B7%200%20failures-brightgreen.svg)](docs/TEST_RESULTS.md)
+[![Tests](https://img.shields.io/badge/tests-212%20%C2%B7%200%20failures-brightgreen.svg)](docs/TEST_RESULTS.md)
 ![Rust](https://img.shields.io/badge/built%20with-Rust-black.svg)
 
 [Quickstart](#quickstart) · [Why](#why-toolcage) · [Architecture](#architecture) · [Invariants](#the-seven-invariants) · [Policy](#policy) · [CLI](#cli-reference) · [MCP](#mcp-front-door) · [Limits](#status-and-known-limits) · [Threat model](docs/THREAT_MODEL.md)

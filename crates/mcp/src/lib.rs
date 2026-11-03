@@ -802,6 +802,96 @@ net:
             .any(|f| f == "/etc/passwd"));
     }
     #[test]
+    fn learn_proposals_multiple_hosts_and_paths() {
+        // Additional learn scenarios: multiple hosts, multiple paths,
+        // and a host with only denied methods (should not appear in add_hosts).
+        let mut l = LearnMode::default();
+        // Host with only denied methods should NOT be proposed for add_hosts.
+        l.record(
+            "http_fetch",
+            &serde_json::json!({"host": "unknown", "method": "GET", "path": "/x"}),
+        );
+        // Host with mixed methods: some denied, some not recorded yet.
+        l.record(
+            "http_fetch",
+            &serde_json::json!({"host": "github", "method": "POST", "path": "/repo"}),
+        );
+        l.record(
+            "http_fetch",
+            &serde_json::json!({"host": "github", "method": "GET", "path": "/repo"}),
+        );
+        // New path with a denied method.
+        l.record(
+            "http_fetch",
+            &serde_json::json!({"host": "gitlab", "method": "PATCH", "path": "/proj"}),
+        );
+        // Read file denial.
+        l.record("read_file", &serde_json::json!({"path": "/tmp/secrets"}));
+        let p = l.propose();
+        let hosts = p["add_hosts"].as_array().unwrap();
+        // "unknown" host appears with its denied GET method (not widened to all).
+        let unknown = hosts.iter().find(|h| h["host"] == "unknown");
+        assert!(
+            unknown.is_some(),
+            "host with denied calls must appear in add_hosts"
+        );
+        let un_k_methods = unknown.unwrap()["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m.as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            un_k_methods,
+            vec!["GET"],
+            "host with only denied GET must propose only GET, not all methods"
+        );
+        // github should appear with its two methods.
+        let gh = hosts.iter().find(|h| h["host"] == "github").unwrap();
+        let mut ms: Vec<&str> = gh["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m.as_str().unwrap())
+            .collect();
+        ms.sort();
+        assert_eq!(
+            ms,
+            vec!["GET", "POST"],
+            "github must propose only its recorded methods"
+        );
+        // gitlab should appear with its one method.
+        let gl = hosts.iter().find(|h| h["host"] == "gitlab").unwrap();
+        assert_eq!(gl["methods"][0], "PATCH");
+        // /proj should have 1 method.
+        let paths = p["add_paths"].as_array().unwrap();
+        let proj = paths.iter().find(|x| x["path"] == "/proj").unwrap();
+        assert_eq!(proj["methods"].as_array().unwrap().len(), 1);
+        // /x appears with its denied GET method.
+        let x_path = paths.iter().find(|x| x["path"] == "/x");
+        assert!(
+            x_path.is_some(),
+            "path with denied calls must appear in add_paths"
+        );
+        let x_m = x_path.unwrap()["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m.as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            x_m,
+            vec!["GET"],
+            "path with only denied GET must propose only GET, not all methods"
+        );
+        // /tmp/secrets should be in add_fs.
+        assert!(p["add_fs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f == "/tmp/secrets"));
+    }
+    #[test]
     fn rpc_response_omits_absent_members() {
         // JSON-RPC 2.0: the error member MUST NOT exist on success (and
         // result must not exist on error). The old struct serialized both as
