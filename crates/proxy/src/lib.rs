@@ -1004,6 +1004,62 @@ mod tests {
 }
 
 #[cfg(test)]
+mod audit_tmp_tests {
+    use super::*;
+
+    // Finding candidate 1a: response with NO status line -> first header line
+    // (Content-Encoding) is swallowed by .skip(1) in header_values().
+    #[test]
+    fn tmp_status_less_response_hides_content_encoding() {
+        let head = b"Content-Encoding: gzip\r\n\r\n";
+        let vals = header_values(head, "content-encoding");
+        eprintln!("CE values seen (status-less): {vals:?}");
+        assert!(vals.is_empty(), "BUG CONFIRMED: CE header hidden: {vals:?}");
+        // End-to-end: gzip body passes decode_response_body (fail-open).
+        let raw: &[u8] = b"\x1f\x8b fake-gzip-with-secret";
+        let r = decode_response_body(head, raw);
+        eprintln!("decode_response_body result: {r:?}");
+        assert!(r.is_ok(), "gzip body was NOT refused");
+        assert_eq!(r.unwrap(), raw, "compressed body handed through un-decoded");
+    }
+
+    // Finding candidate 1b: same via Transfer-Encoding hidden on line 0 ->
+    // chunk framing (with the secret split across chunks) passes raw to scrub.
+    #[test]
+    fn tmp_status_less_response_hides_chunked_te() {
+        let head = b"Transfer-Encoding: chunked\r\n\r\n";
+        let raw = b"4\r\ns3cr\r\n9\r\n3t-secret\r\n0\r\n\r\n";
+        let r = decode_response_body(head, raw);
+        eprintln!("decode_response_body result: {r:?}");
+        assert!(r.is_ok(), "chunked body was NOT refused/decoded");
+        let body = r.unwrap();
+        // The framing was NOT decoded: secret is not contiguous, so scrub
+        // cannot match it.
+        assert_eq!(
+            std::str::from_utf8(&body).unwrap(),
+            "4\r\ns3cr\r\n9\r\n3t-secret\r\n0\r\n\r\n"
+        );
+        assert!(!body.windows(13).any(|w| w == b"s3cr3t-secret"));
+    }
+
+    // Finding candidate 2: chunk-size overflow -> panic (DoS by hostile upstream).
+    #[test]
+    #[should_panic]
+    fn tmp_chunk_size_overflow_panics() {
+        // pos advances to 6 after the first chunk; usize::MAX size wraps
+        // pos+size in a release build, then body[pos..pos+size] panics.
+        let raw = b"1\r\nA\r\nffffffffffffffff\r\nBBBBBBBBBBBBBBBBBB\r\n0\r\n\r\n";
+        let _ = decode_chunked(raw);
+    }
+
+    // Sanity: from_str_radix accepts "+f" as a chunk size (leniency note).
+    #[test]
+    fn tmp_plus_sign_chunk_size_accepted() {
+        assert_eq!(usize::from_str_radix("+f", 16), Ok(15));
+    }
+}
+
+#[cfg(test)]
 mod budget_tests {
     use super::*;
 
