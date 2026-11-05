@@ -3,6 +3,8 @@ use clap::{Parser, Subcommand};
 use sha2::Digest as _;
 use std::path::PathBuf;
 
+mod explain;
+
 #[derive(Parser)]
 #[command(name = "toolcage")]
 struct Cli {
@@ -501,7 +503,7 @@ fn main() -> anyhow::Result<()> {
             // Explicit: the exit() calls below skip Supervisor's Drop.
             sup.teardown();
             if !o.allowed {
-                eprintln!("denied: {:?}", o.rule_ids);
+                explain::report_denial(&o.rule_ids);
                 std::process::exit(2);
             }
             print!("{}", String::from_utf8_lossy(&o.stdout));
@@ -531,6 +533,7 @@ fn main() -> anyhow::Result<()> {
                 d.upstream
             );
             if !d.allow {
+                explain::report_denial(&d.rule_ids);
                 std::process::exit(2);
             }
         }
