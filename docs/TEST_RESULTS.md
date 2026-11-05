@@ -1,6 +1,6 @@
 # Test results — toolcage
 
-219 tests, 0 failures (`cargo test --workspace`). Clippy clean
+222 tests, 0 failures (`cargo test --workspace`). Clippy clean
 (`cargo clippy --workspace --all-targets`: 0 findings).
 
 Generated from the workspace run; re-run `cargo test --workspace` to

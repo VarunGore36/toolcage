@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use sha2::Digest as _;
 use std::path::PathBuf;
 
+mod demo;
 mod explain;
 
 #[derive(Parser)]
@@ -97,6 +98,12 @@ enum Cmd {
         op: McpOp,
     },
     Doctor,
+    /// Self-contained 60-second tour: allowed run, denied shell, tampered log.
+    Demo {
+        /// Scratch directory for the demo's policy, log, and keys.
+        #[arg(long, default_value = "/tmp/toolcage-demo")]
+        dir: PathBuf,
+    },
     Panic {
         #[arg(long)]
         audit: PathBuf,
@@ -994,6 +1001,9 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         },
+        Cmd::Demo { dir } => {
+            demo::run_demo(&dir)?;
+        }
         Cmd::Doctor => {
             let p = toolcage_backend_ns::NsBackend::probe();
             println!(
