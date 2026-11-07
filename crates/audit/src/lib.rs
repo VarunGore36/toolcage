@@ -347,6 +347,18 @@ pub fn pubkey_of(sk_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     Ok(sk.verifying_key().to_bytes().to_vec())
 }
 
+/// Verify an Ed25519 signature over arbitrary bytes against a pinned pubkey.
+/// Used by `image verify` to check a golden-image manifest signature.
+pub fn verify_bytes(sig: &[u8], msg: &[u8], pubkey: &[u8]) -> anyhow::Result<()> {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    anyhow::ensure!(pubkey.len() == 32, "pubkey must be 32 bytes");
+    anyhow::ensure!(sig.len() == 64, "signature must be 64 bytes");
+    let vk = VerifyingKey::from_bytes(pubkey.try_into().unwrap())?;
+    let sig = Signature::from_slice(sig)?;
+    vk.verify(msg, &sig)?;
+    Ok(())
+}
+
 /// Verify one checkpoint against a pinned pubkey (32 bytes).
 pub fn verify_checkpoint(cp: &Checkpoint, pubkey: &[u8]) -> anyhow::Result<()> {
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};

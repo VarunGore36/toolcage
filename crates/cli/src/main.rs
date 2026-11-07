@@ -81,6 +81,10 @@ enum Cmd {
         /// delegated from it.
         #[arg(long = "revocation")]
         revocations: Vec<String>,
+        /// Revocation list JSON file (as written by `token revoke`). Revoked
+        /// ids from the file are merged with --revocation ids.
+        #[arg(long)]
+        revocation_file: Option<PathBuf>,
     },
     /// Mint root token / attenuate child (never widens).
     Token {
@@ -136,6 +140,20 @@ enum Audit {
         #[arg(long)]
         out_prefix: PathBuf,
     },
+    /// List events from an audit log, newest first. Optional filters by
+    /// session, action, or decision; --limit caps the rows shown.
+    Events {
+        #[arg(long)]
+        log: PathBuf,
+        #[arg(long, default_value = "50")]
+        limit: usize,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        action: Option<String>,
+        #[arg(long)]
+        decision: Option<String>,
+    },
 }
 
 type AuditOp = Audit;
@@ -152,6 +170,16 @@ enum ImageOp {
         /// Ed25519 secret key file (32-byte hex), as written by `audit keygen`.
         #[arg(long)]
         key_hex: PathBuf,
+    },
+    /// Verify <dir>/signature.bin against <dir>/manifest.json using a pinned
+    /// public key. Fails if the signature does not verify or files are missing.
+    Verify {
+        /// Directory holding manifest.json and signature.bin.
+        #[arg(long)]
+        dir: PathBuf,
+        /// Pinned public key file (32-byte hex), as printed by `image sign`.
+        #[arg(long)]
+        pubkey: PathBuf,
     },
 }
 
@@ -184,6 +212,10 @@ enum McpOp {
         /// and its parent chain on every call.
         #[arg(long = "revocation")]
         revocations: Vec<String>,
+        /// Revocation list JSON file (as written by `token revoke`). Revoked
+        /// ids from the file are merged with --revocation ids.
+        #[arg(long)]
+        revocation_file: Option<PathBuf>,
         /// LEARN MODE: record each denial and print a proposed allowlist
         /// addition at exit. Proposals are for operator review — never
         /// auto-applied (an injected agent must not grow its own allowlist).
@@ -221,6 +253,10 @@ enum McpOp {
         /// and its parent chain on every call.
         #[arg(long = "revocation")]
         revocations: Vec<String>,
+        /// Revocation list JSON file (as written by `token revoke`). Revoked
+        /// ids from the file are merged with --revocation ids.
+        #[arg(long)]
+        revocation_file: Option<PathBuf>,
         /// LEARN MODE: if the call is denied, print a proposed allowlist
         /// addition. For operator review only — never auto-applied.
         #[arg(long, default_value_t = false)]
@@ -459,6 +495,17 @@ enum TokenOp {
         #[arg(long)]
         key_hex: PathBuf,
     },
+    /// Write a revocation list (revoked rev_ids) to a JSON file. Use the file
+    /// with --revocation-file on fetch/mcp to revoke tokens at check time.
+    Revoke {
+        /// Revoked rev_id (repeatable). Revoking a rev_id kills its whole
+        /// subtree, including descendants never tracked explicitly.
+        #[arg(long)]
+        rev: Vec<String>,
+        /// Output JSON file (array of revoked rev_ids).
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 fn load_key(p: &Option<PathBuf>) -> anyhow::Result<Option<toolcage_capability::Key>> {
@@ -557,6 +604,7 @@ fn main() -> anyhow::Result<()> {
             token,
             key_hex,
             revocations,
+            revocation_file,
         } => {
             let text = std::fs::read_to_string(&policy)?;
             let pol = toolcage_policy::load_yaml(&text)?;
@@ -619,10 +667,16 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             let tok = load_token(&token)?;
-            // Revocations were silently empty here: `fetch` had no --revocation
-            // flag at all, so a revoked token kept working on this path while
-            // `mcp` refused it.
-            let rl = build_revocations(&revocations, tok.as_ref());
+            let mut rl = build_revocations(&revocations, tok.as_ref());
+            // Merge revocations from a persisted file (token revoke output).
+            if let Some(f) = &revocation_file {
+                // Read the file's ids directly and re-revoke each one.
+                let data = std::fs::read_to_string(f)?;
+                let ids: Vec<String> = serde_json::from_str(&data)?;
+                for id in &ids {
+                    rl.revoke(id);
+                }
+            }
             let mut budgets =
                 toolcage_proxy::Budgets::with_path(&budget_file).unwrap_or_else(|e| {
                     eprintln!("warning: budget persistence unavailable (in-memory): {e}");
@@ -737,6 +791,15 @@ fn main() -> anyhow::Result<()> {
                 write_secret(&out, serde_json::to_string_pretty(&c)?.as_bytes())?;
                 println!("attenuated {} -> {rev}", p.rev_id);
             }
+            TokenOp::Revoke { rev, out } => {
+                let mut rl = toolcage_capability::RevocationList::default();
+                for id in &rev {
+                    toolcage_capability::validate_rev_id(id)?;
+                    rl.revoke(id);
+                }
+                rl.save(&out)?;
+                println!("revoked {} ids -> {}", rev.len(), out.display());
+            }
         },
         Cmd::Image { op } => match op {
             ImageOp::Sign { dir, key_hex } => {
@@ -754,6 +817,24 @@ fn main() -> anyhow::Result<()> {
                 let pk_hex: String = pk.iter().map(|b| format!("{b:02x}")).collect();
                 println!("signed {} (pubkey {pk_hex})", sig_path.display());
             }
+            ImageOp::Verify { dir, pubkey } => {
+                let manifest_path = dir.join("manifest.json");
+                let sig_path = dir.join("signature.bin");
+                let text = std::fs::read_to_string(&manifest_path)
+                    .with_context(|| format!("read {}", manifest_path.display()))?;
+                let sig_bytes = std::fs::read(&sig_path)
+                    .with_context(|| format!("read {}", sig_path.display()))?;
+                let pk_hex = std::fs::read_to_string(&pubkey)
+                    .with_context(|| format!("read {}", pubkey.display()))?;
+                let pk = parse_hex32(&pk_hex)?;
+                let hash = sha2::Sha256::digest(text.as_bytes());
+                toolcage_audit::verify_bytes(&sig_bytes, hash.as_slice(), &pk)?;
+                println!(
+                    "verified {} against {}",
+                    manifest_path.display(),
+                    sig_path.display()
+                );
+            }
         },
         Cmd::Mcp { op } => match op {
             McpOp::Serve {
@@ -765,6 +846,7 @@ fn main() -> anyhow::Result<()> {
                 key_hex,
                 token,
                 revocations,
+                revocation_file,
                 learn,
             } => {
                 let text = std::fs::read_to_string(&policy)?;
@@ -772,7 +854,14 @@ fn main() -> anyhow::Result<()> {
                 let t = toolcage_backend::Tier::parse(&tier)?;
                 let cap_key = load_key(&key_hex)?;
                 let tok = load_token(&token)?;
-                let rl = build_revocations(&revocations, tok.as_ref());
+                let mut rl = build_revocations(&revocations, tok.as_ref());
+                if let Some(f) = &revocation_file {
+                    let data = std::fs::read_to_string(f)?;
+                    let ids: Vec<String> = serde_json::from_str(&data)?;
+                    for id in &ids {
+                        rl.revoke(id);
+                    }
+                }
                 // Persistent egress budget store, derived from the audit log.
                 let budget_file = budget_file(&audit);
                 let workspace =
@@ -927,6 +1016,7 @@ fn main() -> anyhow::Result<()> {
                 key_hex,
                 token,
                 revocations,
+                revocation_file,
                 learn,
             } => {
                 let text = std::fs::read_to_string(&policy)?;
@@ -934,7 +1024,14 @@ fn main() -> anyhow::Result<()> {
                 let t = toolcage_backend::Tier::parse(&tier)?;
                 let cap_key = load_key(&key_hex)?;
                 let tok = load_token(&token)?;
-                let rl = build_revocations(&revocations, tok.as_ref());
+                let mut rl = build_revocations(&revocations, tok.as_ref());
+                if let Some(f) = &revocation_file {
+                    let data = std::fs::read_to_string(f)?;
+                    let ids: Vec<String> = serde_json::from_str(&data)?;
+                    for id in &ids {
+                        rl.revoke(id);
+                    }
+                }
                 // Persistent egress budget store, derived from the audit log.
                 let budget_file = budget_file(&audit);
                 let workspace =
@@ -1073,6 +1170,61 @@ fn main() -> anyhow::Result<()> {
                 write_secret(secret, sk_hex.as_bytes())?;
                 write_public(pubkey, cp.pubkey_hex.as_bytes())?;
                 println!("wrote {} + {}", secret.display(), pubkey.display());
+            }
+            Audit::Events {
+                log,
+                limit,
+                session,
+                action,
+                decision,
+            } => {
+                use std::io::BufRead;
+                let f = std::fs::File::open(&log)
+                    .with_context(|| format!("read audit log {}", log.display()))?;
+                let mut rows: Vec<toolcage_audit::Event> = Vec::new();
+                for line in std::io::BufReader::new(f).lines() {
+                    let line = line?;
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let e: toolcage_audit::Event = match serde_json::from_str(&line) {
+                        Ok(e) => e,
+                        Err(_) => continue, // skip malformed lines
+                    };
+                    if let Some(s) = &session {
+                        if e.session != *s {
+                            continue;
+                        }
+                    }
+                    if let Some(a) = &action {
+                        if e.action != *a {
+                            continue;
+                        }
+                    }
+                    if let Some(d) = &decision {
+                        if e.decision != *d {
+                            continue;
+                        }
+                    }
+                    rows.push(e);
+                }
+                // Newest first.
+                rows.reverse();
+                rows.truncate(limit);
+                let header = format!(
+                    "{:<6} {:<20} {:<16} {:<10} {:<10} {:<30} {}",
+                    "SEQ", "TS_WALL", "SESSION", "DECISION", "ACTOR", "ACTION", "RESULT"
+                );
+                println!("{header}");
+                for e in &rows {
+                    println!(
+                        "{:<6} {:<20} {:<16} {:<10} {:<10} {:<30} {}",
+                        e.seq, e.ts_wall, e.session, e.decision, e.actor, e.action, e.result
+                    );
+                }
+                if rows.is_empty() {
+                    println!("(no events)");
+                }
             }
         },
     }
