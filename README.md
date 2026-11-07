@@ -186,6 +186,7 @@ $TC token keygen    --out-prefix /tmp/k                          # host secret
 $TC token mint      --rev root-1  --out root.tok  --key-hex /tmp/k.key.hex
 $TC token attenuate --parent root.tok --rev child-1 --out child.tok \
                     --hosts github --key-hex /tmp/k.key.hex      # narrow only
+$TC token revoke    --rev root-1 --out revoked.json              # revocation list for --revocation-file
 ```
 
 Tokens carry scoped, expiring authority and are revocable. Tags are **HMAC-SHA256 keyed with the host secret**, so a guest that reads a token can neither mint a sibling nor widen anything: forged and hand-edited tokens fail verification and are denied. Expiry is enforced, paths are traversal-normalized, and an empty rights list grants nothing on that axis. `fetch` requires a policy allow **and** a token that verifies against `--key-hex` — without a key, a presented token is denied, never waved through.
@@ -215,6 +216,8 @@ This is **tamper evidence, not tamper prevention.** An attacker who controls the
 
 `panic` freezes a log for real: it appends a terminal `deny-all` event and a `<log>.tainted` marker, and from then on the writer refuses the log — which is what stops every subsequent action, since each one opens the writer first (the write-ahead gate). The freeze is enforced by the chain, not the marker: deleting `<log>.tainted` thaws nothing, an event appended behind the freeze fails `audit verify` with `log extended after panic freeze`, and a marker placed on a healthy log is honored too (operator taint stands).
 
+`audit events` lists log events newest-first, with optional `--session`, `--action`, `--decision`, and `--limit` filters — useful for reviewing what the agent actually did.
+
 ## CLI reference
 
 | Command | Purpose |
@@ -222,11 +225,12 @@ This is **tamper evidence, not tamper prevention.** An attacker who controls the
 | `$TC doctor` | Probe the namespace stack (userns/mount/net/ipc/pid/uts), cgroup v2, Landlock ABI, seccomp, `/dev/kvm` |
 | `$TC run --tier T -- <argv>` | Policy check, audit intent, exec with cleared env (1 MiB streaming output cap, 30 s kill), audit outcome. `--unsafe-no-isolation` opts out of the cage (tier0 only, audited) |
 | `$TC check-net --host H --method M --path P` | Proxy decision and upstream resolution, no network touched |
-| `$TC fetch [--token T] [--revocation R] [--approve]` | Proxy + broker fetch with dual auth and approval pause (revocation checked against the token and its signed ancestry); scrubbed body; both steps audited |
-| `$TC token keygen / mint / attenuate` | Host MAC key; create root tokens; delegate narrower ones |
+| `$TC fetch [--token T] [--revocation R] [--revocation-file F] [--approve]` | Proxy + broker fetch with dual auth and approval pause (revocation checked against the token, its signed ancestry, and a persisted revocation file); scrubbed body; both steps audited |
+| `$TC token keygen / mint / attenuate / revoke` | Host MAC key; create root tokens; delegate narrower ones; write a revocation list (JSON) for `--revocation-file` |
 | `$TC image sign --dir D --key-hex K` | Ed25519-sign a golden image manifest (`signature.bin`) — what `GoldenImage::load` verifies before trusting the image |
-| `$TC mcp serve / call` | Stdio JSON-RPC front door |
-| `$TC audit keygen / checkpoint / verify` | Keys, signed checkpoints, pinned-key verification |
+| `$TC image verify --dir D --pubkey P` | Verify a signed image manifest against a pinned Ed25519 public key |
+| `$TC mcp serve / call [--revocation-file F]` | Stdio JSON-RPC front door; `--revocation-file` merges a persisted revocation list with `--revocation` ids |
+| `$TC audit keygen / checkpoint / verify / events` | Keys, signed checkpoints, pinned-key verification; list audit log events (newest first) with optional filters |
 | `$TC panic --audit LOG` | Freeze a log after a suspected compromise |
 
 Guest-agent protocol (`Exec` / `PutFile` / `Heartbeat`): bounded argv, no NUL bytes, `env_refs` must be `secret:name`, writes confined to `/workspace`.
