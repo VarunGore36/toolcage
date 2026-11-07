@@ -2,7 +2,7 @@
 
 ![toolcage banner](assets/banner.svg)
 
-**A local-first Rust runtime that puts a policy engine, a credential broker, an egress proxy, and a tamper-evident audit log between an AI agent and everything it touches.**
+**A local-first security runtime for AI agents.** It puts policy enforcement, host-held credentials, controlled egress, isolation, and tamper-evident audit records between an agent and the systems it can affect.
 
 [![CI](https://github.com/VarunGore36/toolcage/actions/workflows/ci.yml/badge.svg)](https://github.com/VarunGore36/toolcage/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -10,7 +10,7 @@
 [![Tests](https://img.shields.io/badge/tests-222%20%C2%B7%200%20failures-brightgreen.svg)](docs/TEST_RESULTS.md)
 ![Rust](https://img.shields.io/badge/built%20with-Rust-black.svg)
 
-[Quickstart](#quickstart) · [Why](#why-toolcage) · [Architecture](#architecture) · [Invariants](#the-seven-invariants) · [Policy](#policy) · [CLI](#cli-reference) · [MCP](#mcp-front-door) · [Limits](#status-and-known-limits) · [Threat model](docs/THREAT_MODEL.md)
+[Start here](#quickstart) · [Why](#why-toolcage) · [Security model](#architecture) · [Policy](#policy) · [CLI](#cli-reference) · [MCP](#mcp-front-door) · [Limits](#status-and-known-limits) · [Threat model](docs/THREAT_MODEL.md)
 
 </div>
 
@@ -20,7 +20,9 @@
 
 ## Why toolcage
 
-A sandbox that only stops escapes misses what actually goes wrong with agents. Agents read untrusted content, call third-party tools, and install packages. The failure modes are:
+A sandbox that only stops escapes misses what actually goes wrong with agents. Agents read untrusted content, call third-party tools, and install packages. toolcage is the control plane for those actions: it makes each action explicitly allowed, bounded, attributable, and fail-closed when its requirements cannot be enforced.
+
+The failure modes are:
 
 - 🔑 A prompt injection in a web page or CSV tells the agent to **leak an API key**.
 - 📦 A malicious **MCP server or dependency** runs with the agent's privileges.
@@ -36,23 +38,27 @@ toolcage is the **policy, secrets, and evidence layer** on top of isolation. It 
 | Over-broad delegation | Capability tokens can only be **narrowed** when delegated, never widened. |
 | "What happened, and can I trust the record?" | Every decision is hash-chained and checkpoint-signed. `audit verify` fails on any edit, deletion, or reordering. |
 
+The last claim has an important boundary: signed checkpoints authenticate the log only through the newest retained checkpoint. See [Audit log](#audit-log) for how to protect the unchecked tail.
+
 ## Quickstart
 
-**Requirements:** Linux and a stable Rust toolchain. Tier 0 uses user namespaces, cgroup v2, Landlock, and seccomp; Tier 1 needs gVisor (`runsc`); Tier 2 needs Firecracker and `/dev/kvm`. Run `doctor` to see what your host supports.
+**Requirements:** Linux and a stable Rust toolchain. Tier 0 uses user namespaces, cgroup v2, Landlock, and seccomp; Tier 1 needs gVisor (`runsc`); Tier 2 needs Firecracker and `/dev/kvm`. Start with `doctor`: toolcage denies a request when its requested isolation cannot be provided.
 
 ```bash
 cargo build --release
-TC=./target/release/toolcage-cli      # adjust if your binary is named differently
+
+# The Cargo package produces this release binary.
+tc() { ./target/release/toolcage-cli "$@"; }
 
 # 1. Probe the host (prints userns, cgroup2, landlock_abi, seccomp, kvm)
-$TC doctor
+tc doctor
 
 # 2. Run under policy + audit (argv arrays only, no shell)
-$TC run --policy schemas/policy-v0.yaml --audit /tmp/tc.jsonl \
+tc run --policy schemas/policy-v0.yaml --audit /tmp/tc.jsonl \
         --tier tier0 -- /bin/echo hello
 
 # 3. The evil twin: denied, and the denial is logged
-$TC run --policy schemas/policy-v0.yaml --audit /tmp/tc.jsonl \
+tc run --policy schemas/policy-v0.yaml --audit /tmp/tc.jsonl \
         --tier tier0 -- sh -c 'echo pwned'
 # denied: ["deny:shell"]
 #   deny:shell:
@@ -61,9 +67,9 @@ $TC run --policy schemas/policy-v0.yaml --audit /tmp/tc.jsonl \
 #     If you trust this binary, allowlist it in the policy: ...
 
 # 4. Sign the log, verify it
-$TC audit keygen     --out-prefix /tmp/k
-$TC audit checkpoint --log /tmp/tc.jsonl --key-hex /tmp/k.secret.hex
-$TC audit verify     --log /tmp/tc.jsonl --pubkey  /tmp/k.pub.hex
+tc audit keygen     --out-prefix /tmp/k
+tc audit checkpoint --log /tmp/tc.jsonl --key-hex /tmp/k.secret.hex
+tc audit verify     --log /tmp/tc.jsonl --pubkey  /tmp/k.pub.hex
 # ok: N events, head ... (checkpoints verified)
 
 # 5. Flip one byte of /tmp/tc.jsonl and verify again: it fails.
@@ -72,19 +78,19 @@ $TC audit verify     --log /tmp/tc.jsonl --pubkey  /tmp/k.pub.hex
 Or watch the whole story in one command:
 
 ```bash
-$TC demo   # allowed run → denied shell (with explanation) → signed log → tamper → verify fails
+tc demo   # allowed run → denied shell (with explanation) → signed log → tamper → verify fails
 ```
 
 Secrets through the proxy:
 
 ```bash
-$TC fetch --policy schemas/policy-v0.yaml --audit /tmp/tc.jsonl \
+tc fetch --policy schemas/policy-v0.yaml --audit /tmp/tc.jsonl \
   --host github.internal --method GET --path /repos/acme/app/issues/1 \
   --cred github_token --secret-value s3cr3t
 # body: upstream api.github.com/... ok auth=[REDACTED]
 ```
 
-> `--secret-value` on the command line is a demo convenience. It ends up in shell history and the process list. Don't pass real credentials this way.
+> `--secret-value` on the command line is a demo convenience. It ends up in shell history and the process list. For real credentials, use `--secret-file`, which is read host-side and never placed on argv.
 
 The demo flow was last verified end to end on 2026-10-19 ([`docs/TEST_RESULTS.md`](docs/TEST_RESULTS.md)).
 
@@ -182,11 +188,11 @@ approval:
 ### Capability tokens
 
 ```bash
-$TC token keygen    --out-prefix /tmp/k                          # host secret
-$TC token mint      --rev root-1  --out root.tok  --key-hex /tmp/k.key.hex
-$TC token attenuate --parent root.tok --rev child-1 --out child.tok \
+tc token keygen    --out-prefix /tmp/k                          # host secret
+tc token mint      --rev root-1  --out root.tok  --key-hex /tmp/k.key.hex
+tc token attenuate --parent root.tok --rev child-1 --out child.tok \
                     --hosts github --key-hex /tmp/k.key.hex      # narrow only
-$TC token revoke    --rev root-1 --out revoked.json              # revocation list for --revocation-file
+tc token revoke    --rev root-1 --out revoked.json              # revocation list for --revocation-file
 ```
 
 Tokens carry scoped, expiring authority and are revocable. Tags are **HMAC-SHA256 keyed with the host secret**, so a guest that reads a token can neither mint a sibling nor widen anything: forged and hand-edited tokens fail verification and are denied. Expiry is enforced, paths are traversal-normalized, and an empty rights list grants nothing on that axis. `fetch` requires a policy allow **and** a token that verifies against `--key-hex` — without a key, a presented token is denied, never waved through.
@@ -222,16 +228,16 @@ This is **tamper evidence, not tamper prevention.** An attacker who controls the
 
 | Command | Purpose |
 |---|---|
-| `$TC doctor` | Probe the namespace stack (userns/mount/net/ipc/pid/uts), cgroup v2, Landlock ABI, seccomp, `/dev/kvm` |
-| `$TC run --tier T -- <argv>` | Policy check, audit intent, exec with cleared env (1 MiB streaming output cap, 30 s kill), audit outcome. `--unsafe-no-isolation` opts out of the cage (tier0 only, audited) |
-| `$TC check-net --host H --method M --path P` | Proxy decision and upstream resolution, no network touched |
-| `$TC fetch [--token T] [--revocation R] [--revocation-file F] [--approve]` | Proxy + broker fetch with dual auth and approval pause (revocation checked against the token, its signed ancestry, and a persisted revocation file); scrubbed body; both steps audited |
-| `$TC token keygen / mint / attenuate / revoke` | Host MAC key; create root tokens; delegate narrower ones; write a revocation list (JSON) for `--revocation-file` |
-| `$TC image sign --dir D --key-hex K` | Ed25519-sign a golden image manifest (`signature.bin`) — what `GoldenImage::load` verifies before trusting the image |
-| `$TC image verify --dir D --pubkey P` | Verify a signed image manifest against a pinned Ed25519 public key |
-| `$TC mcp serve / call [--revocation-file F]` | Stdio JSON-RPC front door; `--revocation-file` merges a persisted revocation list with `--revocation` ids |
-| `$TC audit keygen / checkpoint / verify / events` | Keys, signed checkpoints, pinned-key verification; list audit log events (newest first) with optional filters |
-| `$TC panic --audit LOG` | Freeze a log after a suspected compromise |
+| `tc doctor` | Probe the namespace stack (userns/mount/net/ipc/pid/uts), cgroup v2, Landlock ABI, seccomp, `/dev/kvm` |
+| `tc run --tier T -- <argv>` | Policy check, audit intent, exec with cleared env (1 MiB streaming output cap, 30 s kill), audit outcome. `--unsafe-no-isolation` opts out of the cage (tier0 only, audited) |
+| `tc check-net --host H --method M --path P` | Proxy decision and upstream resolution, no network touched |
+| `tc fetch [--token T] [--revocation R] [--revocation-file F] [--approve]` | Proxy + broker fetch with dual auth and approval pause (revocation checked against the token, its signed ancestry, and a persisted revocation file); scrubbed body; both steps audited |
+| `tc token keygen / mint / attenuate / revoke` | Host MAC key; create root tokens; delegate narrower ones; write a revocation list (JSON) for `--revocation-file` |
+| `tc image sign --dir D --key-hex K` | Ed25519-sign a golden image manifest (`signature.bin`) — what `GoldenImage::load` verifies before trusting the image |
+| `tc image verify --dir D --pubkey P` | Verify a signed image manifest against a pinned Ed25519 public key |
+| `tc mcp serve / call [--revocation-file F]` | Stdio JSON-RPC front door; `--revocation-file` merges a persisted revocation list with `--revocation` ids |
+| `tc audit keygen / checkpoint / verify / events` | Keys, signed checkpoints, pinned-key verification; list audit log events (newest first) with optional filters |
+| `tc panic --audit LOG` | Freeze a log after a suspected compromise |
 
 Guest-agent protocol (`Exec` / `PutFile` / `Heartbeat`): bounded argv, no NUL bytes, `env_refs` must be `secret:name`, writes confined to `/workspace`.
 
@@ -341,9 +347,9 @@ Apache-2.0. See [LICENSE](LICENSE).
 
 <sub>
 
-[Threat model](docs/THREAT_MODEL.md) · [Test results](docs/TEST_RESULTS.md) · [Review package](docs/REVIEW.md) · [Build plan](Agent%20Sandbox%20Analysis%20and%20Build%20Plan.md)
+[Threat model](docs/THREAT_MODEL.md) · [Test results](docs/TEST_RESULTS.md) · [Review package](docs/REVIEW.md)
 
-**Designed to be verified, not trusted.** Every claim above has a test; every test is listed.
+**Designed to be verified, not trusted.** The project's security properties are backed by an explicit test suite and a documented threat model.
 
 </sub>
 
