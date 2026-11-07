@@ -28,6 +28,7 @@
 //!   budgets matter.
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -405,11 +406,38 @@ impl Token {
 }
 
 /// Revocation: revoking a rev_id revokes its whole subtree.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct RevocationList {
     revoked: HashSet<String>,
     // child -> parent links seen (for subtree walk)
+    #[serde(skip_serializing)]
     parent_of: HashMap<String, String>,
+}
+
+impl RevocationList {
+    /// Save the revoked ids to a JSON file for later use with --revocation-file.
+    /// Only the revoked ids are persisted (parent links are rebuilt from
+    /// presented tokens' signed lineage at check time).
+    pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+        let data = serde_json::to_string_pretty(&self.revoked)?;
+        std::fs::write(path, data)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(())
+    }
+
+    /// Load a revocation list previously written by save().
+    pub fn load(path: &Path) -> anyhow::Result<Self> {
+        let data = std::fs::read_to_string(path)?;
+        let revoked: HashSet<String> = serde_json::from_str(&data)?;
+        Ok(Self {
+            revoked,
+            parent_of: HashMap::new(),
+        })
+    }
 }
 
 impl RevocationList {
@@ -976,5 +1004,70 @@ mod tests {
                 }
             )
             .is_err());
+    }
+    #[test]
+    fn revocation_list_save_load_roundtrip() {
+        let k = Key::from_bytes([7u8; 32]);
+        let root = Token::root(
+            &k,
+            "root-1",
+            Rights {
+                fs_prefixes: vec!["/workspace".into()],
+                net_hosts: vec![],
+                methods: vec![],
+                cred_use: vec![],
+                budget_bytes: 0,
+                expires_at: 0,
+            },
+        )
+        .unwrap();
+        let child = root
+            .attenuate(
+                &k,
+                "child-2",
+                Rights {
+                    fs_prefixes: vec![],
+                    net_hosts: vec![],
+                    methods: vec![],
+                    cred_use: vec![],
+                    budget_bytes: 0,
+                    expires_at: 0,
+                },
+            )
+            .unwrap();
+
+        let mut rl = RevocationList::default();
+        rl.track(&child);
+        rl.revoke("root-1");
+        rl.revoke("child-2");
+
+        let dir = std::env::temp_dir().join(format!("tc-revoke-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("revocation.json");
+
+        rl.save(&path).unwrap();
+
+        let loaded = RevocationList::load(&path).unwrap();
+        assert!(
+            loaded.is_revoked(&root),
+            "root-1 must be revoked after load"
+        );
+        assert!(
+            loaded.is_revoked(&child),
+            "child-2 must be revoked after load"
+        );
+
+        // Empty revocation list roundtrips.
+        let empty = RevocationList::default();
+        let empty_path = dir.join("empty.json");
+        empty.save(&empty_path).unwrap();
+        let loaded_empty = RevocationList::load(&empty_path).unwrap();
+        assert!(
+            !loaded_empty.is_revoked(&root),
+            "root-1 must not be revoked in empty list"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
