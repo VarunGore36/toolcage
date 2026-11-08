@@ -412,6 +412,22 @@ fn interpreter_inline_arg(arg: &str, flags: &[&str]) -> bool {
 fn exec_inline_denial(argv: &[String]) -> Option<&'static str> {
     let bin = argv[0].rsplit('/').next().unwrap_or(&argv[0]);
     let rest = &argv[1..];
+    // env(1) split-string: `-S` (also joined as `-S<value>`) hands env a
+    // whole command line to split at exec time, so neither a shell name nor
+    // an inline flag is ever a separate argv token — `env -S "sh -c id"`
+    // runs arbitrary shell while the scanner below sees an ordinary argv.
+    // Match env by basename wherever it appears and fail closed on ANY
+    // -S form: the value is an arbitrary command line the denylist cannot
+    // meaningfully scope. (`env -S` is rare in legitimate argv-array
+    // workloads; operators who need it have exec.allowlist.)
+    let env_here = bin_matches(bin, "env")
+        || rest.iter().any(|a| {
+            let name = a.rsplit('/').next().unwrap_or(a);
+            bin_matches(name, "env")
+        });
+    if env_here && rest.iter().any(|a| a == "-S" || a.starts_with("-S")) {
+        return Some("env split-string (-S) runs an inline command line; use argv arrays");
+    }
     // Strip the path in argv[1..] too: `bin_matches` compares basenames, and
     // `bin_matches("/bin/sh", "sh")` is false — so `env /bin/sh -c` and
     // `/bin/busybox /bin/sh evil.sh` would otherwise reach the gates below
@@ -884,12 +900,18 @@ mod exec_denylist_tests {
     // ---- vector flips its assertion to the safe direction) ----
 
     #[test]
-    fn known_bug_env_split_string_reassembles_shell() {
+    fn env_split_string_is_denied() {
         // env -S splits the single token into "sh -c id" at exec time; neither
-        // a shell name nor -c is ever a separate argv token, so the scanner
-        // sees an ordinary argv. Currently ALLOWED (bug); the env-split-string
-        // PR flips this to `denied`.
-        assert!(!denied(&["env", "-S", "sh -c id > /tmp/pwned"]));
+        // a shell name nor -c is ever a separate argv token, so the shell and
+        // interpreter gates never fire. Denied outright (fixed).
+        assert!(denied(&["env", "-S", "sh -c id > /tmp/pwned"]));
+        assert!(denied(&["/usr/bin/env", "-S", "sh -c id"]));
+        assert!(denied(&["env", "-Ssh -c id"])); // joined -S<value>
+        assert!(denied(&["env", "-i", "-S", "bash -c id"])); // env with other flags
+        assert!(!denied(&["env", "FOO=bar", "git", "status"])); // env without -S stays allowed
+        assert!(!denied(&["env", "-u", "SECRET", "git", "push"]));
+        // A -S-shaped data arg without env in argv is not denied.
+        assert!(!denied(&["grep", "-S", "pattern", "file"]));
     }
 
     #[test]
