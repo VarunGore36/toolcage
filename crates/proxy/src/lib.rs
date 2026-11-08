@@ -412,16 +412,17 @@ impl Proxy {
         }
 
         // Build HTTP request.
-        let mut req = String::new();
-        req.push_str(&format!("{method} {path} HTTP/1.1\r\n"));
-        req.push_str(&format!("Host: {}\r\n", host_header(host, port, scheme)));
+        use std::fmt::Write as _;
+        let mut req = String::with_capacity(256 + headers.len() * 48);
+        let _ = write!(req, "{method} {path} HTTP/1.1\r\n");
+        let _ = write!(req, "Host: {}\r\n", host_header(host, port, scheme));
         req.push_str("Connection: close\r\n");
         // Ask for an uncompressed body: the secret scrub downstream matches
         // literal bytes, and a compressed body cannot be scrubbed (see the
         // Content-Encoding check below).
         req.push_str("Accept-Encoding: identity\r\n");
         for (name, value) in headers {
-            req.push_str(&format!("{name}: {value}\r\n"));
+            let _ = write!(req, "{name}: {value}\r\n");
         }
         req.push_str("\r\n");
         stream
@@ -464,10 +465,11 @@ fn decode_response_body(head: &[u8], raw_body: &[u8]) -> Result<Vec<u8>, ProxyEr
     // Broker::scrub.
     for val in header_values(head, "content-encoding") {
         for tok in val.split(',') {
-            let enc = tok.trim().to_ascii_lowercase();
-            if !enc.is_empty() && enc != "identity" {
+            let enc = tok.trim();
+            if !enc.is_empty() && !enc.eq_ignore_ascii_case("identity") {
                 return Err(ProxyError::Policy(format!(
-                    "content-encoded response ({enc}) cannot be scrubbed; refusing"
+                    "content-encoded response ({}) cannot be scrubbed; refusing",
+                    enc.to_ascii_lowercase()
                 )));
             }
         }
@@ -478,15 +480,16 @@ fn decode_response_body(head: &[u8], raw_body: &[u8]) -> Result<Vec<u8>, ProxyEr
     let mut chunked_count = 0usize;
     for val in header_values(head, "transfer-encoding") {
         for tok in val.split(',') {
-            let te = tok.trim().to_ascii_lowercase();
-            match te.as_str() {
-                "" | "identity" => {}
-                "chunked" => chunked_count += 1,
-                other => {
-                    return Err(ProxyError::Policy(format!(
-                        "transfer-encoded response ({other}) cannot be scrubbed; refusing"
-                    )));
-                }
+            let te = tok.trim();
+            if te.is_empty() || te.eq_ignore_ascii_case("identity") {
+                // no-op
+            } else if te.eq_ignore_ascii_case("chunked") {
+                chunked_count += 1;
+            } else {
+                return Err(ProxyError::Policy(format!(
+                    "transfer-encoded response ({}) cannot be scrubbed; refusing",
+                    te.to_ascii_lowercase()
+                )));
             }
         }
     }
@@ -506,11 +509,10 @@ fn decode_response_body(head: &[u8], raw_body: &[u8]) -> Result<Vec<u8>, ProxyEr
 /// Extract all header values matching `name` (case-insensitive) in order.
 fn header_values(head: &[u8], name: &str) -> Vec<String> {
     let text = String::from_utf8_lossy(head);
-    let want = name.to_ascii_lowercase();
     let mut out = Vec::new();
     for line in text.split("\r\n").skip(1) {
         if let Some((k, v)) = line.split_once(':') {
-            if k.trim().eq_ignore_ascii_case(&want) {
+            if k.trim().eq_ignore_ascii_case(name) {
                 out.push(v.to_string());
             }
         }
@@ -527,7 +529,7 @@ fn header_value(head: &[u8], name: &str) -> Option<String> {
 /// malformed framing (fail closed: better to error than return bytes we
 /// cannot sanitize or account for).
 fn decode_chunked(body: &[u8]) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(body.len());
     let mut pos = 0usize;
     loop {
         // Chunk size line: "<hex>[;ext]\r\n".
@@ -570,12 +572,7 @@ fn find_body_start(buf: &[u8]) -> usize {
 fn parse_status(buf: &[u8]) -> Option<u16> {
     let head = String::from_utf8_lossy(&buf[..buf.len().min(200)]);
     let first_line = head.lines().next()?;
-    let parts: Vec<&str> = first_line.split_whitespace().collect();
-    if parts.len() >= 2 {
-        parts[1].parse().ok()
-    } else {
-        None
-    }
+    first_line.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// Per-destination budgets (M2 damage bound). Returns false when over budget.

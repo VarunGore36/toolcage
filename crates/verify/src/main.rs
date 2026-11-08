@@ -18,20 +18,33 @@ struct Args {
     pubkey: Option<PathBuf>,
 }
 
+#[inline]
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// Decode a 64-char (32-byte) hex string into [u8; 32]. Returns an error
 /// (never panics) on wrong length, odd length, or non-hex input.
 fn parse_hex32(s: &str) -> anyhow::Result<[u8; 32]> {
     let s = s.trim();
     let b = s.as_bytes();
     anyhow::ensure!(
-        b.len() == 64 && b.iter().all(|c| c.is_ascii_hexdigit()),
+        b.len() == 64,
         "expected 64 hex chars (32 bytes), got {} chars",
         b.len()
     );
     let mut out = [0u8; 32];
-    for (i, slot) in out.iter_mut().enumerate() {
-        *slot = u8::from_str_radix(&s[2 * i..2 * i + 2], 16)
-            .map_err(|_| anyhow::anyhow!("bad hex at position {}", 2 * i))?;
+    for (i, (slot, &[hi_b, lo_b])) in out.iter_mut().zip(b.as_chunks::<2>().0).enumerate() {
+        let hi =
+            hex_nibble(hi_b).ok_or_else(|| anyhow::anyhow!("bad hex at position {}", 2 * i))?;
+        let lo =
+            hex_nibble(lo_b).ok_or_else(|| anyhow::anyhow!("bad hex at position {}", 2 * i + 1))?;
+        *slot = (hi << 4) | lo;
     }
     Ok(out)
 }

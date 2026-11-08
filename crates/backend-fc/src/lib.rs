@@ -506,20 +506,25 @@ impl GoldenImage {
     }
 }
 
+#[inline]
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn hex_decode(s: &str) -> anyhow::Result<Vec<u8>> {
     anyhow::ensure!(s.len().is_multiple_of(2), "odd hex length");
-    // Strict hex digits only. This guards two sharp edges at once: every byte
-    // being a hex digit implies ASCII, so the byte slicing below cannot hit a
-    // multi-byte char boundary and panic (a crafted non-ASCII string used to
-    // abort the process); and it rejects sign-prefixed "digits" like "+a",
-    // which from_str_radix would accept.
-    anyhow::ensure!(
-        s.bytes().all(|b| b.is_ascii_hexdigit()),
-        "invalid hex digit"
-    );
+    // Strict hex digits only: operates on byte pairs directly, so non-ASCII
+    // input and sign-prefixed strings ("+a") are rejected without str slicing.
     let mut out = Vec::with_capacity(s.len() / 2);
-    for i in (0..s.len()).step_by(2) {
-        out.push(u8::from_str_radix(&s[i..i + 2], 16)?);
+    for &[hi_b, lo_b] in s.as_bytes().as_chunks::<2>().0 {
+        let hi = hex_nibble(hi_b).ok_or_else(|| anyhow::anyhow!("invalid hex digit"))?;
+        let lo = hex_nibble(lo_b).ok_or_else(|| anyhow::anyhow!("invalid hex digit"))?;
+        out.push((hi << 4) | lo);
     }
     Ok(out)
 }
@@ -559,7 +564,13 @@ pub fn verify_snapshot_hash(snapshot_path: &str, expected_hash: &str) -> anyhow:
 }
 
 fn hex_encode(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(b.len() * 2);
+    for &byte in b {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -674,11 +685,11 @@ fn http_status(resp: &[u8]) -> anyhow::Result<u16> {
         .split(|b| *b == b'\n')
         .next()
         .ok_or_else(|| anyhow::anyhow!("empty HTTP response"))?;
-    let parts: Vec<&[u8]> = first_line.splitn(3, |b| *b == b' ').collect();
-    if parts.len() < 2 {
-        bail("malformed status line");
-    }
-    let code = std::str::from_utf8(parts[1])?.parse::<u16>()?;
+    let code_bytes = first_line
+        .splitn(3, |b| *b == b' ')
+        .nth(1)
+        .ok_or_else(|| bail("malformed status line"))?;
+    let code = std::str::from_utf8(code_bytes)?.parse::<u16>()?;
     Ok(code)
 }
 
