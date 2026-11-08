@@ -75,10 +75,8 @@ const DRAIN_GRACE: Duration = Duration::from_secs(2);
 // Named constants make that class of bug impossible, and the pinning test
 // below ties every constant to the number in the kernel header. chroot(161)
 // and the open_tree/move_mount/fsopen/fsconfig/fsmount/fspick/mount_setattr
-// mount API (428-433, 442) are NOT yet listed here despite what older
-// comments claimed — 428-433 (open_tree/move_mount/fsopen/fsconfig/
-// fsmount/fspick) are added here; mount_setattr(442) follows. chroot(161) IS
-// blocked
+// comments claimed — the whole API (428-433, 442) is blocked here now.
+// chroot(161) IS blocked
 // here: the old table claimed chroot was covered but actually listed 61
 // (wait4). wait4 and prctl, which the old table blocked under those
 // labels, are unblocked: the workload cannot wait for children or name
@@ -133,6 +131,11 @@ const BLOCKED_SYSCALLS: &[c_int] = &[
     libc::SYS_fsconfig as c_int,
     libc::SYS_fsmount as c_int,
     libc::SYS_fspick as c_int,
+    // The new mount API, part 3 (final): change properties of an existing
+    // mount — including making previously read-only trees writable. Denied
+    // with the rest of the API; the mount API coverage the header always
+    // claimed is now real.
+    libc::SYS_mount_setattr as c_int,
     libc::SYS_process_vm_writev as c_int,
     libc::SYS_finit_module as c_int,
     libc::SYS_kexec_file_load as c_int,
@@ -1663,6 +1666,7 @@ mod tests {
             (libc::SYS_fsconfig as c_int, 431, "fsconfig"),
             (libc::SYS_fsmount as c_int, 432, "fsmount"),
             (libc::SYS_fspick as c_int, 433, "fspick"),
+            (libc::SYS_mount_setattr as c_int, 442, "mount_setattr"),
             (
                 libc::SYS_process_vm_writev as c_int,
                 311,
