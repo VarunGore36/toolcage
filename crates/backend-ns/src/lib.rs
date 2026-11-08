@@ -76,10 +76,11 @@ const DRAIN_GRACE: Duration = Duration::from_secs(2);
 // below ties every constant to the number in the kernel header. chroot(161)
 // and the open_tree/move_mount/fsopen/fsconfig/fsmount/fspick/mount_setattr
 // mount API (428-433, 442) are NOT yet listed here despite what older
-// comments claimed — they are added in follow-ups. wait4(61) and
-// prctl(157), which the old table blocked under "chroot"/"nis+" labels,
-// are unblocked again: the workload cannot wait for children or name its
-// threads without them, and neither call can weaken the cage
+// comments claimed — they are added in follow-ups. chroot(161) IS blocked
+// here: the old table claimed chroot was covered but actually listed 61
+// (wait4). wait4 and prctl, which the old table blocked under those
+// labels, are unblocked: the workload cannot wait for children or name
+// its threads without them, and neither call can weaken the cage
 // (no_new_privs cannot be unset, installed filters cannot be removed).
 #[cfg(target_arch = "x86_64")]
 const BLOCKED_SYSCALLS: &[c_int] = &[
@@ -90,6 +91,10 @@ const BLOCKED_SYSCALLS: &[c_int] = &[
     libc::SYS_vfork as c_int,
     libc::SYS_ptrace as c_int,
     libc::SYS_pivot_root as c_int,
+    // The old table claimed chroot was blocked while actually listing 61
+    // (wait4). Block the real number: chroot would let the workload rebuild
+    // its filesystem root from inside the mount namespace.
+    libc::SYS_chroot as c_int,
     // Removed API: ENOSYS since kernel 5.5; blocked as hardening.
     libc::SYS__sysctl as c_int,
     libc::SYS_mount as c_int,
@@ -1614,6 +1619,7 @@ mod tests {
             (libc::SYS_vfork as c_int, 58, "vfork"),
             (libc::SYS_ptrace as c_int, 101, "ptrace"),
             (libc::SYS_pivot_root as c_int, 155, "pivot_root"),
+            (libc::SYS_chroot as c_int, 161, "chroot"),
             (libc::SYS__sysctl as c_int, 156, "_sysctl"),
             (libc::SYS_mount as c_int, 165, "mount"),
             (libc::SYS_umount2 as c_int, 166, "umount2"),
