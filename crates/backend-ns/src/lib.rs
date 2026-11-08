@@ -539,6 +539,12 @@ fn isolated_exec(
     if argv.is_empty() {
         anyhow::bail!("empty argv");
     }
+    // An empty argv[0] is not a program: the resolution below would search
+    // for a file named "" and the old fallback would execve("") (ENOENT,
+    // child exit 127) — fail here with a nameable error instead.
+    if argv[0].is_empty() {
+        anyhow::bail!("empty argv[0]: no program to execute");
+    }
 
     // ------------------------------------------------------------------
     // Everything below allocates — do it BEFORE fork so the child path
@@ -2867,5 +2873,19 @@ mod exec_not_found_tests {
             msg.contains("definitely-not-a-toolcage-command-3f9a"),
             "error must name the command: {msg}"
         );
+    }
+
+    #[test]
+    fn empty_argv0_is_an_error_before_any_resolution() {
+        let spec = SessionSpec {
+            id: "t-nf".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: "/nonexistent-toolcage-workspace".into(),
+        };
+        let err = isolated_exec(&spec, &["".to_string()], 5, 1024).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("empty argv[0]"), "{msg}");
     }
 }
