@@ -12,19 +12,23 @@ echo "== policy decision p99 (target < 5 ms in-process) =="
 cargo test -p toolcage-policy --test timing --release -- --nocapture 2>&1 | grep -E "p50|p99|max|test result"
 
 echo "== audit append eps (target >= 10,000/s) =="
-cargo test -p toolcage-audit --test throughput --release -- --nocapture 2>&1 | grep -E "audit append|test result"
+cargo test -p toolcage-audit --test throughput --release -- --nocapture 2>&1 | grep -E "audit append|audit group commit|test result"
+
+echo "== supervisor idle memory (target < 100 MB) =="
+cargo test -p toolcage-supervisor --test memory --release -- --nocapture 2>&1 | grep -E "supervisor idle memory|test result"
 
 echo "== CLI run baseline (end-to-end Tier0 exec) =="
 cargo build -p toolcage-cli --release -q 2>&1 | tail -1
 LOG=${TMPDIR:-/tmp}/tc-bench.jsonl
-mkdir -p "$(dirname "$LOG")"
+WS=${TMPDIR:-/tmp}/tc-bench-ws
+mkdir -p "$(dirname "$LOG")" "$WS"
 rm -f "$LOG"
 # Probe run: Tier0 needs unprivileged userns + Landlock (e.g. GitHub's Ubuntu
 # 24.04 runners block userns via AppArmor). Skip the baseline there instead of
 # failing the job — policy and audit numbers above still measure. Any other
 # failure (real CLI regression, broken policy) is reported loud, not silently
 # disguised as "Tier0 unavailable".
-PROBE_OUT=$(./target/release/toolcage-cli run --policy schemas/policy-v0.yaml --audit "$LOG" -- /bin/true 2>&1) || PROBE_RC=$?
+PROBE_OUT=$(./target/release/toolcage-cli run --policy schemas/policy-v0.yaml --audit "$LOG" --workspace "$WS" -- /bin/true 2>&1) || PROBE_RC=$?
 if [ "${PROBE_RC:-0}" -ne 0 ]; then
   if echo "$PROBE_OUT" | grep -qiE "unprivileged|userns|landlock|seccomp|namespace|isolation|AppArmor"; then
     echo "skip: Tier0 exec unavailable on this host (needs unprivileged userns + Landlock) — no run baseline"
@@ -37,7 +41,7 @@ fi
 N=200
 start=$(date +%s.%N)
 for i in $(seq 1 "$N"); do
-  ./target/release/toolcage-cli run --policy schemas/policy-v0.yaml --audit "$LOG" -- /bin/true >/dev/null
+  ./target/release/toolcage-cli run --policy schemas/policy-v0.yaml --audit "$LOG" --workspace "$WS" -- /bin/true >/dev/null
 done
 end=$(date +%s.%N)
 python3 - "$start" "$end" "$N" "$LOG" <<'PY'

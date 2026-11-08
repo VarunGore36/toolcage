@@ -63,3 +63,44 @@ jobs:
       # the nightly fuzz targets could rot silently without these.
       - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
       - run: cargo check --manifest-path fuzz/Cargo.toml
+
+  tier1-gvisor:
+    name: Tier 1 (gVisor runsc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install runsc
+        run: |
+          set -e
+          curl -fsSL https://storage.googleapis.com/gvisor/releases/release/20250224.0/x86_64/runsc -o /tmp/runsc
+          chmod a+x /tmp/runsc
+          sudo mv /tmp/runsc /usr/local/bin/runsc
+          runsc --version
+      - name: Exercise Tier 1 gVisor driver and probe
+        run: |
+          cargo run --release -p toolcage-cli -- doctor
+          cargo test -p toolcage-backend-gv -- --nocapture
+
+  tier2-firecracker:
+    name: Tier 2 (Firecracker KVM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Firecracker & enable KVM access
+        run: |
+          set -e
+          FC_VER="v1.10.1"
+          ARCH="x86_64"
+          curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/${FC_VER}/firecracker-${FC_VER}-${ARCH}.tgz" -o /tmp/fc.tgz
+          tar -xzf /tmp/fc.tgz -C /tmp
+          sudo mv "/tmp/release-${FC_VER}-${ARCH}/firecracker-${FC_VER}-${ARCH}" /usr/local/bin/firecracker
+          sudo mv "/tmp/release-${FC_VER}-${ARCH}/jailer-${FC_VER}-${ARCH}" /usr/local/bin/jailer
+          sudo chmod a+x /usr/local/bin/firecracker /usr/local/bin/jailer
+          if [ -e /dev/kvm ]; then sudo chmod 0666 /dev/kvm || true; fi
+          firecracker --version
+      - name: Exercise Tier 2 Firecracker driver and warm-pool
+        run: |
+          cargo run --release -p toolcage-cli -- doctor
+          cargo test -p toolcage-backend-fc -- --nocapture

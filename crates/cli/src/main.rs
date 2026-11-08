@@ -670,12 +670,7 @@ fn main() -> anyhow::Result<()> {
             let mut rl = build_revocations(&revocations, tok.as_ref());
             // Merge revocations from a persisted file (token revoke output).
             if let Some(f) = &revocation_file {
-                // Read the file's ids directly and re-revoke each one.
-                let data = std::fs::read_to_string(f)?;
-                let ids: Vec<String> = serde_json::from_str(&data)?;
-                for id in &ids {
-                    rl.revoke(id);
-                }
+                rl.merge(toolcage_capability::RevocationList::load(f)?);
             }
             let mut budgets =
                 toolcage_proxy::Budgets::with_path(&budget_file).unwrap_or_else(|e| {
@@ -856,11 +851,7 @@ fn main() -> anyhow::Result<()> {
                 let tok = load_token(&token)?;
                 let mut rl = build_revocations(&revocations, tok.as_ref());
                 if let Some(f) = &revocation_file {
-                    let data = std::fs::read_to_string(f)?;
-                    let ids: Vec<String> = serde_json::from_str(&data)?;
-                    for id in &ids {
-                        rl.revoke(id);
-                    }
+                    rl.merge(toolcage_capability::RevocationList::load(f)?);
                 }
                 // Persistent egress budget store, derived from the audit log.
                 let budget_file = budget_file(&audit);
@@ -1026,11 +1017,7 @@ fn main() -> anyhow::Result<()> {
                 let tok = load_token(&token)?;
                 let mut rl = build_revocations(&revocations, tok.as_ref());
                 if let Some(f) = &revocation_file {
-                    let data = std::fs::read_to_string(f)?;
-                    let ids: Vec<String> = serde_json::from_str(&data)?;
-                    for id in &ids {
-                        rl.revoke(id);
-                    }
+                    rl.merge(toolcage_capability::RevocationList::load(f)?);
                 }
                 // Persistent egress budget store, derived from the audit log.
                 let budget_file = budget_file(&audit);
