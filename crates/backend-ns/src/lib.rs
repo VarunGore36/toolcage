@@ -51,7 +51,7 @@ use anyhow::Context;
 use nix::fcntl::{open, OFlag};
 use nix::sys::stat::Mode;
 use nix::unistd::{close, fork, pipe2, ForkResult};
-use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
+use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier, GUEST_PATH};
 
 // Test fixture value: exec() takes `cap` from the caller now, so the 1 MiB
 // default lives in the tests that exercise the cap.
@@ -1055,13 +1055,6 @@ fn close_all_except_stdio() {
         unsafe { libc::close(fd) };
     }
 }
-
-/// The fixed PATH the guest environment gets (and, in a follow-up, the only
-/// set the program-path search consults). A constant, not the supervisor's
-/// environment: what the child resolves must not depend on how the operator
-/// invoked the CLI, and policy's `trusted_exec_path` treats a bare argv[0]
-/// as trusted precisely because resolution is pinned to this set.
-const GUEST_PATH: &str = "/usr/bin:/bin";
 
 /// Outcome of resolving a slash-less argv[0] against a PATH-style search
 /// string.
