@@ -339,8 +339,11 @@ fn interpreter_flags(bin: &str) -> &'static [&'static str] {
     let known: &[(&str, &[&str])] = &[
         ("python", &["-c", "-C"]),
         ("python3", &["-c", "-C"]),
-        ("perl", &["-e", "-E"]),
-        ("ruby", &["-e", "-E"]),
+        // -x: perl/ruby extract the PROGRAM from a file (skipping leading
+        // garbage until #!): `perl -x /workspace/evil.pl` runs guest program
+        // text — same class as -e, just sourced from a file.
+        ("perl", &["-e", "-E", "-x"]),
+        ("ruby", &["-e", "-E", "-x"]),
         ("node", &["-e", "-E", "-p", "-P", "--eval", "--print"]),
         ("lua", &["-e", "-E"]),
         ("php", &["-r", "-R"]),
@@ -938,7 +941,14 @@ mod exec_denylist_tests {
         assert!(denied(&["perl", "-E", "say 1"]));
         assert!(denied(&["node", "--eval", "1+1"]));
         assert!(denied(&["env", "python3", "-c", "print(1)"]));
-        assert!(denied(&["python3", "-ic", "print(1)"])); // bundled short flags
+        // bundled short flags
+        assert!(denied(&["python3", "-ic", "print(1)"]));
+        // -x: perl/ruby extract the program from a file and run it.
+        assert!(denied(&["perl", "-x", "/workspace/evil.pl"]));
+        assert!(denied(&["ruby", "-x", "/workspace/evil.rb"]));
+        assert!(denied(&["perl", "-x/workspace", "evil.pl"])); // joined dir form
+        assert!(denied(&["perl5", "-x", "evil.pl"])); // version tolerance
+        assert!(denied(&["env", "perl", "-x", "evil.pl"])); // reached in rest
     }
 
     #[test]
