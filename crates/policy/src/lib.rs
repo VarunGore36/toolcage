@@ -461,6 +461,21 @@ fn exec_inline_denial(argv: &[String]) -> Option<&'static str> {
     {
         return Some("shell startup-file flags (--rcfile/--init-file) are not allowed");
     }
+    // Interpreters whose PROGRAM TEXT arrives as a positional argv token:
+    // every awk invocation executes code from argv (or -f file), and
+    // system() gives it the shell — there is no non-code-executing use to
+    // preserve, so the family is denied outright (version-tolerant:
+    // gawk-5.1 matches gawk). Not a shell and not in interpreter_flags,
+    // so nothing else fires for it.
+    const AWK_BINS: &[&str] = &["awk", "gawk", "mawk"];
+    let awk_here = AWK_BINS.iter().any(|s| bin_matches(bin, s))
+        || rest.iter().any(|a| {
+            let name = a.rsplit('/').next().unwrap_or(a);
+            AWK_BINS.iter().any(|s| bin_matches(name, s))
+        });
+    if awk_here {
+        return Some("awk program text is inline code; use argv arrays or an exec allowlist");
+    }
     for a in argv {
         let name = a.rsplit('/').next().unwrap_or(a);
         let flags = interpreter_flags(name);
@@ -951,12 +966,28 @@ mod exec_denylist_tests {
     }
 
     #[test]
+    fn awk_program_text_is_denied() {
+        // awk executes its program from a positional argv token (or -f file)
+        // and system() gives it the shell — there is no non-code-executing
+        // use, so the family is denied outright (fixed).
+        assert!(denied(&[
+            "awk",
+            "BEGIN{system(\"sh -c id\")}",
+            "/workspace/f"
+        ]));
+        assert!(denied(&["gawk", "'{print}'", "f"]));
+        assert!(denied(&["mawk", "-f", "evil.awk"]));
+        assert!(denied(&["/usr/bin/awk", "{print}"]));
+        assert!(denied(&["gawk-5.1", "{print}"])); // version tolerance
+        assert!(denied(&["env", "awk", "{print}"])); // reached in rest
+        assert!(denied(&["sort", "file", "awk"])); // awk-shaped token anywhere
+    }
+
+    #[test]
     fn known_bug_awk_program_text_is_inline_code() {
-        // awk executes its program from a positional argv token; system()
-        // gives it the shell. Not a shell and not in interpreter_flags, so
-        // nothing fires. Currently ALLOWED (bug); the awk PR flips this to
-        // `denied`.
-        assert!(!denied(&[
+        // SUPERSEDED by awk_program_text_is_denied; kept as a marker that the
+        // vector is closed.
+        assert!(denied(&[
             "awk",
             "BEGIN{system(\"sh -c id\")}",
             "/workspace/f"
