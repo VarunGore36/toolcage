@@ -783,3 +783,53 @@ mod tests {
         assert!(!bad.allow);
     }
 }
+
+#[cfg(test)]
+mod trusted_exec_path_tests {
+    use super::*;
+
+    /// The contract the backend's program-path resolution must uphold (and
+    /// now does): a bare argv[0] is trusted *because* the sandbox resolves
+    /// bare names only from its fixed PATH (GUEST_PATH, system tree). These
+    /// tests pin that reasoning so a change on either side fails here.
+    #[test]
+    fn bare_names_are_trusted() {
+        assert!(trusted_exec_path("git"));
+        assert!(trusted_exec_path("dependency-updater"));
+        assert!(trusted_exec_path("python3.12"));
+        assert!(!trusted_exec_path(""));
+    }
+
+    #[test]
+    fn absolute_system_tree_is_trusted() {
+        for p in [
+            "/bin/sh",
+            "/usr/bin/git",
+            "/sbin/mkfs",
+            "/lib64/ld-linux-x86-64.so.2",
+        ] {
+            assert!(trusted_exec_path(p), "{p} must be trusted");
+        }
+    }
+
+    #[test]
+    fn relative_and_traversal_forms_are_refused() {
+        for p in ["./git", "sub/git", "../git", "a/../evil", "/usr/../evil"] {
+            assert!(!trusted_exec_path(p), "{p} must be refused");
+        }
+    }
+
+    #[test]
+    fn guest_writable_locations_are_refused() {
+        for p in ["/workspace/git", "/tmp/git", "/home/user/tool", "/root/x"] {
+            assert!(!trusted_exec_path(p), "{p} must be refused");
+        }
+    }
+
+    #[test]
+    fn lookalike_prefixes_are_refused() {
+        // Not under /usr/ — "/usrfoo/" is a different directory.
+        assert!(!trusted_exec_path("/usrfoo/sh"));
+        assert!(!trusted_exec_path("/usrshare/tool"));
+    }
+}
