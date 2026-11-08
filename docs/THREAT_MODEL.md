@@ -21,5 +21,5 @@ Host kernel trusted with reservations — Tier 2 uses separate guest kernel.
 - I3 token only narrows on delegate — property tests (200-seed chains); **approval `needs_approval` now fails closed on unknown/empty method/host, preventing gate-dodging by omission**
 - I4 decision recorded before action — kill supervisor mid-action
 - I5 any log edit/delete/reorder detected by `audit verify` — mutation tests
-- I6 guest cannot loosen policy — adversarial guest
+- I6 guest cannot loosen policy — adversarial guest; **exec resolution is pinned to the sandbox's fixed PATH: bare `argv[0]` resolves only from `/usr/bin:/bin` (`GUEST_PATH`), not-found is a pre-fork error, and the guest-writable workspace is never consulted — a guest-written file cannot run under an allowlisted NAME**
 - I7 no cross-session state after teardown — canary tests
