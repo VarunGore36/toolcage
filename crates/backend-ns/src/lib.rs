@@ -76,7 +76,9 @@ const DRAIN_GRACE: Duration = Duration::from_secs(2);
 // below ties every constant to the number in the kernel header. chroot(161)
 // and the open_tree/move_mount/fsopen/fsconfig/fsmount/fspick/mount_setattr
 // mount API (428-433, 442) are NOT yet listed here despite what older
-// comments claimed — they are added in follow-ups.
+// comments claimed — they are added in follow-ups. wait4(61), which the
+// old table blocked under the "chroot" label, is unblocked again: the
+// workload cannot wait for its own children without it.
 #[cfg(target_arch = "x86_64")]
 const BLOCKED_SYSCALLS: &[c_int] = &[
     libc::SYS_socket as c_int,
@@ -84,9 +86,6 @@ const BLOCKED_SYSCALLS: &[c_int] = &[
     libc::SYS_clone as c_int,
     libc::SYS_fork as c_int,
     libc::SYS_vfork as c_int,
-    // Collateral: was listed as "chroot", but 61 is wait4 — every workload
-    // that spawns children needs it. Unblocked in a follow-up.
-    libc::SYS_wait4 as c_int,
     libc::SYS_ptrace as c_int,
     libc::SYS_pivot_root as c_int,
     // Removed API: ENOSYS since kernel 5.5; blocked as hardening.
@@ -1616,7 +1615,6 @@ mod tests {
             (libc::SYS_clone as c_int, 56, "clone"),
             (libc::SYS_fork as c_int, 57, "fork"),
             (libc::SYS_vfork as c_int, 58, "vfork"),
-            (libc::SYS_wait4 as c_int, 61, "wait4"),
             (libc::SYS_ptrace as c_int, 101, "ptrace"),
             (libc::SYS_pivot_root as c_int, 155, "pivot_root"),
             (libc::SYS__sysctl as c_int, 156, "_sysctl"),
@@ -1707,6 +1705,7 @@ mod tests {
             39,  // getpid
             59,  // execve   <-- v0 returned EPERM here: nothing could run
             60,  // exit
+            61,  // wait4    <-- was blocked as "chroot"; children are unwaitable without it
             231, // exit_group
             257, // openat
             262, // newfstatat
