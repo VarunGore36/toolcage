@@ -476,6 +476,27 @@ fn exec_inline_denial(argv: &[String]) -> Option<&'static str> {
     if awk_here {
         return Some("awk program text is inline code; use argv arrays or an exec allowlist");
     }
+    // python -m executes a module by name, and with -m the cwd is
+    // sys.path[0]: `python3 -m evil` imports and runs /workspace/evil.py —
+    // guest-written code under the trusted python3 name. Denied for
+    // python/python3 (version-tolerant) wherever python appears, including
+    // cluster forms (-Bm). This also denies legitimate module runs
+    // (python3 -m http.server); script-file form (python3 script.py) stays
+    // allowed, and operators who need -m have exec.allowlist.
+    const PYTHON_BINS: &[&str] = &["python", "python3"];
+    let python_here = PYTHON_BINS.iter().any(|s| bin_matches(bin, s))
+        || rest.iter().any(|a| {
+            let name = a.rsplit('/').next().unwrap_or(a);
+            PYTHON_BINS.iter().any(|s| bin_matches(name, s))
+        });
+    if python_here
+        && rest.iter().any(|a| {
+            let b = a.as_bytes();
+            b.len() >= 2 && b[0] == b'-' && b[1] != b'-' && b[1..].contains(&b'm')
+        })
+    {
+        return Some("python -m executes a module with the workspace on sys.path; use argv arrays");
+    }
     for a in argv {
         let name = a.rsplit('/').next().unwrap_or(a);
         let flags = interpreter_flags(name);
@@ -981,6 +1002,23 @@ mod exec_denylist_tests {
         assert!(denied(&["gawk-5.1", "{print}"])); // version tolerance
         assert!(denied(&["env", "awk", "{print}"])); // reached in rest
         assert!(denied(&["sort", "file", "awk"])); // awk-shaped token anywhere
+    }
+
+    #[test]
+    fn python_module_exec_is_denied() {
+        // python -m puts the cwd (the workspace) at sys.path[0]:
+        // `python3 -m evil` imports and runs /workspace/evil.py.
+        assert!(denied(&["python3", "-m", "evil"]));
+        assert!(denied(&["python3", "-m", "http.server"])); // legit module runs pay the same price
+        assert!(denied(&["/usr/bin/python3", "-m", "evil"]));
+        assert!(denied(&["python3.12", "-m", "evil"])); // version tolerance
+        assert!(denied(&["env", "python3", "-m", "evil"])); // reached in rest
+        assert!(denied(&["python3", "-Bm", "evil"])); // bundled short flags
+        assert!(!denied(&["python3", "script.py"]));
+        assert!(!denied(&["python3", "-u", "script.py"]));
+        assert!(denied(&["python", "script.py", "-m"]));
+        // Non-python argv with -m stays allowed.
+        assert!(!denied(&["grep", "-m", "5", "pattern", "file"]));
     }
 
     #[test]
