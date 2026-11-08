@@ -25,6 +25,9 @@ All notable changes to toolcage will be documented in this file.
 - `crates/supervisor`: budget check moved after proxy call so bytes are charged accurately
 - `README.md`: redesigned with hero banner, 60-second demo, four guarantees, tier chart, benchmark table
 
+### Fixed
+- `crates/backend-ns`: seccomp blocklist rewritten with named `libc::SYS_*` constants, pinned to the kernel's `asm/unistd_64.h` numbers by a test. The old bare-number table denied the wrong syscalls — `wait4` and `prctl` were blocked under "chroot"/"nis+" labels (workloads could not wait for children or name threads) — while `chroot` (161) and the entire new mount API (`open_tree`, `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`, `mount_setattr`) claimed coverage but were never listed. `chroot` and the mount API are now genuinely denied; `wait4`/`prctl` are unblocked.
+
 ## [v0.1.0] - Initial Release
 
 - Initial release of toolcage: local-first agent sandbox

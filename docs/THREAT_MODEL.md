@@ -16,7 +16,7 @@ Host kernel trusted with reservations — Tier 2 uses separate guest kernel.
 
 ## Invariants (testable)
 
-- I1 no guest net except via egress proxy — escape suite: raw/DNS/ICMP/IPv6/tunnels; **seccomp-BPF blocklist** covers x86_64 syscalls including `chroot`, `io_uring`, `fsopen`, `move_mount` in addition to the original blocklist
+- I1 no guest net except via egress proxy — escape suite: raw/DNS/ICMP/IPv6/tunnels; **seccomp-BPF blocklist** (named `libc::SYS_*` constants, pinned to the kernel header by test) denies `socket`/`socketpair`/`clone*`/`ptrace`/the mount family — `mount`, `umount2`, `pivot_root`, `chroot`, and the full new mount API (`open_tree`, `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`, `mount_setattr`) — plus `io_uring`, `bpf`, `userfaultfd`, `perf_event_open`, `process_vm_writev`, `open_by_handle_at`, module loading, `kexec`, `swapon`/`swapoff`/`reboot`, `setns`, and the x32 ABI / foreign-arch escapes
 - I2 no credential value in guest mem/files/env/args — canary scan
 - I3 token only narrows on delegate — property tests (200-seed chains); **approval `needs_approval` now fails closed on unknown/empty method/host, preventing gate-dodging by omission**
 - I4 decision recorded before action — kill supervisor mid-action
