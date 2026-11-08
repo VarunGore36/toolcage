@@ -425,7 +425,11 @@ fn exec_inline_denial(argv: &[String]) -> Option<&'static str> {
             let name = a.rsplit('/').next().unwrap_or(a);
             bin_matches(name, "env")
         });
-    if env_here && rest.iter().any(|a| a == "-S" || a.starts_with("-S")) {
+    if env_here
+        && rest
+            .iter()
+            .any(|a| a == "-S" || a.starts_with("-S") || a.starts_with("--split-string"))
+    {
         return Some("env split-string (-S) runs an inline command line; use argv arrays");
     }
     // Strip the path in argv[1..] too: `bin_matches` compares basenames, and
@@ -907,6 +911,9 @@ mod exec_denylist_tests {
         assert!(denied(&["env", "-S", "sh -c id > /tmp/pwned"]));
         assert!(denied(&["/usr/bin/env", "-S", "sh -c id"]));
         assert!(denied(&["env", "-Ssh -c id"])); // joined -S<value>
+        assert!(denied(&["env", "--split-string=sh -c id"])); // long form, =value
+        assert!(denied(&["env", "--split-string", "sh -c id"])); // long form, separate value
+        assert!(denied(&["/usr/bin/env", "--split-string=python3 -c id"]));
         assert!(denied(&["env", "-i", "-S", "bash -c id"])); // env with other flags
         assert!(!denied(&["env", "FOO=bar", "git", "status"])); // env without -S stays allowed
         assert!(!denied(&["env", "-u", "SECRET", "git", "push"]));
