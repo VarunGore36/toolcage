@@ -565,15 +565,15 @@ fn isolated_exec(
         c_args[0].clone()
     } else {
         let path_var = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
-        let mut found = None;
-        for dir in path_var.split(':') {
-            let candidate = format!("{dir}/{}", c_args[0].to_string_lossy());
-            if std::path::Path::new(&candidate).is_file() {
-                found = Some(CString::new(candidate)?);
-                break;
-            }
+        match resolve_program(&c_args[0].to_string_lossy(), &path_var)? {
+            Resolved::Found(p) => p,
+            // KNOWN BUG (fixed in a follow-up): falling back to the bare name
+            // makes execve resolve it against the child's cwd — the workspace,
+            // which the guest can write. A guest-written "git" then runs under
+            // the allowlisted NAME "git". The follow-up turns NotFound into a
+            // pre-fork error instead.
+            Resolved::NotFound => c_args[0].clone(),
         }
-        found.unwrap_or_else(|| c_args[0].clone())
     };
 
     let workspace_cstr = CString::new(spec.workspace.as_str())?;
@@ -1037,6 +1037,31 @@ fn close_all_except_stdio() {
     for fd in 3..=1024 {
         unsafe { libc::close(fd) };
     }
+}
+
+/// Outcome of resolving a slash-less argv[0] against a PATH-style search
+/// string.
+enum Resolved {
+    /// The first PATH entry holding an existing regular file, as an absolute
+    /// or entry-relative path string ready for execve.
+    Found(CString),
+    /// No entry produced an existing file. Callers must NOT fall back to the
+    /// bare name: execve would resolve it against the child's cwd.
+    NotFound,
+}
+
+/// Resolve a slash-less argv[0] against `path_var` the way exec-time PATH
+/// search would: first entry whose `dir/argv0` is an existing regular file
+/// wins. Pure and testable; called pre-fork (it allocates). An argv[0] that
+/// contains a slash never reaches this — the caller uses it verbatim.
+fn resolve_program(argv0: &str, path_var: &str) -> anyhow::Result<Resolved> {
+    for dir in path_var.split(':') {
+        let candidate = format!("{dir}/{argv0}");
+        if std::path::Path::new(&candidate).is_file() {
+            return Ok(Resolved::Found(CString::new(candidate)?));
+        }
+    }
+    Ok(Resolved::NotFound)
 }
 
 /// Build the seccomp-BPF filter instructions (allocates — call before fork).
@@ -2606,6 +2631,96 @@ mod tests {
             r.stdout.len()
         );
         b.destroy("t-cap").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod exec_path_tests {
+    use super::*;
+
+    /// Unique scratch dir under the system temp dir (same pattern the other
+    /// tests here use; no tempdir dependency).
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "toolcage-exec-path-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn resolves_first_existing_candidate() {
+        let dir = scratch_dir("found");
+        std::fs::write(dir.join("prog"), b"#!/bin/sh\n").unwrap();
+        match resolve_program("prog", &dir.to_string_lossy()).unwrap() {
+            Resolved::Found(p) => {
+                assert_eq!(p.to_bytes(), format!("{}/prog", dir.display()).as_bytes());
+            }
+            Resolved::NotFound => panic!("existing file must resolve"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn first_path_entry_wins() {
+        let a = scratch_dir("first");
+        let b = scratch_dir("second");
+        std::fs::write(a.join("prog"), b"x").unwrap();
+        std::fs::write(b.join("prog"), b"x").unwrap();
+        let path_var = format!("{}:{}", a.display(), b.display());
+        match resolve_program("prog", &path_var).unwrap() {
+            Resolved::Found(p) => assert!(p.to_bytes().starts_with(a.to_string_lossy().as_bytes())),
+            Resolved::NotFound => panic!("existing file must resolve"),
+        }
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
+    }
+
+    #[test]
+    fn later_entry_wins_when_earlier_misses() {
+        let a = scratch_dir("miss");
+        let b = scratch_dir("hit");
+        std::fs::write(b.join("prog"), b"x").unwrap();
+        let path_var = format!("{}:{}", a.display(), b.display());
+        match resolve_program("prog", &path_var).unwrap() {
+            Resolved::Found(p) => assert!(p.to_bytes().starts_with(b.to_string_lossy().as_bytes())),
+            Resolved::NotFound => panic!("existing file must resolve"),
+        }
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
+    }
+
+    #[test]
+    fn missing_everywhere_is_not_found() {
+        let dir = scratch_dir("empty");
+        let path_var = format!("{}:{}", dir.display(), "/nonexistent-toolcage-dir");
+        assert!(matches!(
+            resolve_program("prog", &path_var).unwrap(),
+            Resolved::NotFound
+        ));
+        assert!(matches!(
+            resolve_program("prog", "").unwrap(),
+            Resolved::NotFound
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn directory_is_not_a_candidate() {
+        // is_file() must not match a DIRECTORY named like the program.
+        let dir = scratch_dir("isdir");
+        std::fs::create_dir_all(dir.join("prog")).unwrap();
+        let path_var = dir.to_string_lossy().to_string();
+        assert!(matches!(
+            resolve_program("prog", &path_var).unwrap(),
+            Resolved::NotFound
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
