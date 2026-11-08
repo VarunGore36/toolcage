@@ -76,9 +76,11 @@ const DRAIN_GRACE: Duration = Duration::from_secs(2);
 // below ties every constant to the number in the kernel header. chroot(161)
 // and the open_tree/move_mount/fsopen/fsconfig/fsmount/fspick/mount_setattr
 // mount API (428-433, 442) are NOT yet listed here despite what older
-// comments claimed — they are added in follow-ups. wait4(61), which the
-// old table blocked under the "chroot" label, is unblocked again: the
-// workload cannot wait for its own children without it.
+// comments claimed — they are added in follow-ups. wait4(61) and
+// prctl(157), which the old table blocked under "chroot"/"nis+" labels,
+// are unblocked again: the workload cannot wait for children or name its
+// threads without them, and neither call can weaken the cage
+// (no_new_privs cannot be unset, installed filters cannot be removed).
 #[cfg(target_arch = "x86_64")]
 const BLOCKED_SYSCALLS: &[c_int] = &[
     libc::SYS_socket as c_int,
@@ -90,11 +92,6 @@ const BLOCKED_SYSCALLS: &[c_int] = &[
     libc::SYS_pivot_root as c_int,
     // Removed API: ENOSYS since kernel 5.5; blocked as hardening.
     libc::SYS__sysctl as c_int,
-    // Collateral: was listed as "nis+", but 157 is prctl — thread names,
-    // child subreapers, and other legitimate uses break without it.
-    // Unblocked in a follow-up (no_new_privs cannot be unset, and installed
-    // seccomp filters cannot be removed, so prctl cannot weaken the cage).
-    libc::SYS_prctl as c_int,
     libc::SYS_mount as c_int,
     libc::SYS_umount2 as c_int,
     libc::SYS_swapon as c_int,
@@ -1618,7 +1615,6 @@ mod tests {
             (libc::SYS_ptrace as c_int, 101, "ptrace"),
             (libc::SYS_pivot_root as c_int, 155, "pivot_root"),
             (libc::SYS__sysctl as c_int, 156, "_sysctl"),
-            (libc::SYS_prctl as c_int, 157, "prctl"),
             (libc::SYS_mount as c_int, 165, "mount"),
             (libc::SYS_umount2 as c_int, 166, "umount2"),
             (libc::SYS_swapon as c_int, 167, "swapon"),
@@ -1706,6 +1702,7 @@ mod tests {
             59,  // execve   <-- v0 returned EPERM here: nothing could run
             60,  // exit
             61,  // wait4    <-- was blocked as "chroot"; children are unwaitable without it
+            157, // prctl    <-- was blocked as "nis+"; thread names/subreapers need it
             231, // exit_group
             257, // openat
             262, // newfstatat
