@@ -17,14 +17,15 @@ cargo test -p toolcage-audit --test throughput --release -- --nocapture 2>&1 | g
 echo "== CLI run baseline (end-to-end Tier0 exec) =="
 cargo build -p toolcage-cli --release -q 2>&1 | tail -1
 LOG=${TMPDIR:-/tmp}/tc-bench.jsonl
-mkdir -p "$(dirname "$LOG")"
+WS=${TMPDIR:-/tmp}/tc-bench-ws
+mkdir -p "$(dirname "$LOG")" "$WS"
 rm -f "$LOG"
 # Probe run: Tier0 needs unprivileged userns + Landlock (e.g. GitHub's Ubuntu
 # 24.04 runners block userns via AppArmor). Skip the baseline there instead of
 # failing the job — policy and audit numbers above still measure. Any other
 # failure (real CLI regression, broken policy) is reported loud, not silently
 # disguised as "Tier0 unavailable".
-PROBE_OUT=$(./target/release/toolcage-cli run --policy schemas/policy-v0.yaml --audit "$LOG" -- /bin/true 2>&1) || PROBE_RC=$?
+PROBE_OUT=$(./target/release/toolcage-cli run --workspace "$WS" --policy schemas/policy-v0.yaml --audit "$LOG" -- /bin/true 2>&1) || PROBE_RC=$?
 if [ "${PROBE_RC:-0}" -ne 0 ]; then
   if echo "$PROBE_OUT" | grep -qiE "unprivileged|userns|landlock|seccomp|namespace|isolation|AppArmor"; then
     echo "skip: Tier0 exec unavailable on this host (needs unprivileged userns + Landlock) — no run baseline"
@@ -37,7 +38,7 @@ fi
 N=200
 start=$(date +%s.%N)
 for i in $(seq 1 "$N"); do
-  ./target/release/toolcage-cli run --policy schemas/policy-v0.yaml --audit "$LOG" -- /bin/true >/dev/null
+  ./target/release/toolcage-cli run --workspace "$WS" --policy schemas/policy-v0.yaml --audit "$LOG" -- /bin/true >/dev/null
 done
 end=$(date +%s.%N)
 python3 - "$start" "$end" "$N" "$LOG" <<'PY'
