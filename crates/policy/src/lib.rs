@@ -447,6 +447,20 @@ fn exec_inline_denial(argv: &[String]) -> Option<&'static str> {
     if shell_here && rest.iter().any(|a| !a.starts_with('-')) {
         return Some("shell script files are not allowed; use argv arrays");
     }
+    // Startup-file flags: `bash --rcfile=/workspace/evil.sh -i` sources the
+    // script at startup. The script-file rule above only rejects args NOT
+    // starting with '-', so the '=' form hides the path behind a dash.
+    // (--rcfile/--init-file with a separate path argument is already caught
+    // by that rule — the path is a non-dash arg.) Deny the flags outright:
+    // a shell that sources an operator-unspecified startup file is exactly
+    // the inline-command-text class.
+    if shell_here
+        && rest
+            .iter()
+            .any(|a| a.starts_with("--rcfile") || a.starts_with("--init-file"))
+    {
+        return Some("shell startup-file flags (--rcfile/--init-file) are not allowed");
+    }
     for a in argv {
         let name = a.rsplit('/').next().unwrap_or(a);
         let flags = interpreter_flags(name);
@@ -922,11 +936,18 @@ mod exec_denylist_tests {
     }
 
     #[test]
-    fn known_bug_shell_rcfile_equals_form() {
+    fn shell_startup_file_flags_are_denied() {
         // The script-file rule only rejects args NOT starting with '-'; the
-        // '=' form hides the script path behind a dash. Currently ALLOWED
-        // (bug); the rcfile PR flips this to `denied`.
-        assert!(!denied(&["bash", "--rcfile=/workspace/evil.sh", "-i"]));
+        // '=' form hides the script path behind a dash. Denied outright
+        // (fixed).
+        assert!(denied(&["bash", "--rcfile=/workspace/evil.sh", "-i"]));
+        assert!(denied(&["bash", "--init-file=/workspace/evil.sh", "-i"]));
+        assert!(denied(&["/bin/bash", "--rcfile=/workspace/evil.sh"]));
+        // The separate-path form was always caught (the path is a non-dash
+        // arg) — pinned so the new rule doesn't regress it.
+        assert!(denied(&["bash", "--rcfile", "/workspace/evil.sh"]));
+        // Non-shell argv with rcfile-shaped data args stays allowed.
+        assert!(!denied(&["grep", "--rcfile=x", "file"]));
     }
 
     #[test]
