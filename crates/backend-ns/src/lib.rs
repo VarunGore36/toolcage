@@ -62,45 +62,67 @@ const OUTPUT_CAP: usize = 1024 * 1024;
 /// open after the workload exits: the drain gives up instead of hanging.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
-// x86_64 syscall numbers for the seccomp filter, taken from this host's
-// installed headers (glibc agrees: socket=41, mount=165, unshare=272,
-// clone3=435, ptrace=101 all verified to match the running kernel).
-// Also blocked: fsopen, move_mount, io_uring, chroot — not previously covered.
+// x86_64 syscalls denied by the seccomp filter, named via libc's SYS_*
+// constants (values mirror the kernel's asm/unistd_64.h). The filter is a
+// denylist on top of the namespaces + Landlock boundary: socket(2) is denied
+// so the guest cannot dial anything (I1); mount-family, module-loading and
+// kernel-introspection syscalls are denied so the guest cannot re-attack the
+// host from inside its namespaces.
+//
+// History note: this table used to be bare numbers whose comments did not
+// match the syscalls they blocked (61 was labeled chroot but is wait4, 157
+// was labeled nis+ but is prctl, 299 was labeled fsopen but is recvmmsg).
+// Named constants make that class of bug impossible, and the pinning test
+// below ties every constant to the number in the kernel header. chroot(161)
+// and the open_tree/move_mount/fsopen/fsconfig/fsmount/fspick/mount_setattr
+// mount API (428-433, 442) are NOT yet listed here despite what older
+// comments claimed — they are added in follow-ups.
 #[cfg(target_arch = "x86_64")]
 const BLOCKED_SYSCALLS: &[c_int] = &[
-    41,  // socket
-    53,  // socketpair
-    56,  // clone
-    57,  // fork
-    58,  // vfork
-    61,  // chroot
-    101, // ptrace
-    155, // pivot_root
-    156, // nis
-    157, // nis+
-    165, // mount
-    166, // umount2
-    167, // swapon
-    168, // swapoff
-    169, // reboot
-    172, // iopl
-    173, // ioperm
-    175, // init_module
-    246, // kexec_load
-    272, // unshare
-    288, // accept4
-    291, // epoll_create1
-    298, // perf_event_open
-    299, // fsopen
-    304, // open_by_handle_at
-    308, // move_mount
-    311, // process_vm_writev
-    313, // finit_module
-    320, // kexec_file_load
-    321, // bpf
-    323, // userfaultfd
-    425, // io_uring
-    435, // clone3
+    libc::SYS_socket as c_int,
+    libc::SYS_socketpair as c_int,
+    libc::SYS_clone as c_int,
+    libc::SYS_fork as c_int,
+    libc::SYS_vfork as c_int,
+    // Collateral: was listed as "chroot", but 61 is wait4 — every workload
+    // that spawns children needs it. Unblocked in a follow-up.
+    libc::SYS_wait4 as c_int,
+    libc::SYS_ptrace as c_int,
+    libc::SYS_pivot_root as c_int,
+    // Removed API: ENOSYS since kernel 5.5; blocked as hardening.
+    libc::SYS__sysctl as c_int,
+    // Collateral: was listed as "nis+", but 157 is prctl — thread names,
+    // child subreapers, and other legitimate uses break without it.
+    // Unblocked in a follow-up (no_new_privs cannot be unset, and installed
+    // seccomp filters cannot be removed, so prctl cannot weaken the cage).
+    libc::SYS_prctl as c_int,
+    libc::SYS_mount as c_int,
+    libc::SYS_umount2 as c_int,
+    libc::SYS_swapon as c_int,
+    libc::SYS_swapoff as c_int,
+    libc::SYS_reboot as c_int,
+    libc::SYS_iopl as c_int,
+    libc::SYS_ioperm as c_int,
+    libc::SYS_init_module as c_int,
+    libc::SYS_kexec_load as c_int,
+    libc::SYS_unshare as c_int,
+    libc::SYS_accept4 as c_int,
+    libc::SYS_epoll_create1 as c_int,
+    libc::SYS_perf_event_open as c_int,
+    // Mislabeled as "fsopen" before; recvmmsg is blocked as hardening — the
+    // guest cannot create sockets in the first place.
+    libc::SYS_recvmmsg as c_int,
+    libc::SYS_open_by_handle_at as c_int,
+    // setns is blocked on purpose: joining another namespace is never
+    // legitimate for the workload (was mislabeled "move_mount" before).
+    libc::SYS_setns as c_int,
+    libc::SYS_process_vm_writev as c_int,
+    libc::SYS_finit_module as c_int,
+    libc::SYS_kexec_file_load as c_int,
+    libc::SYS_bpf as c_int,
+    libc::SYS_userfaultfd as c_int,
+    libc::SYS_io_uring_setup as c_int,
+    libc::SYS_clone3 as c_int,
 ];
 
 /// `AUDIT_ARCH_X86_64` (`EM_X86_64 | __AUDIT_ARCH_64BIT | __AUDIT_ARCH_LE`).
@@ -1577,6 +1599,69 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     fn run_filter(insns: &[sock_filter], nr: i32) -> u32 {
         run_filter_with_arch(insns, AUDIT_ARCH_X86_64, nr)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn seccomp_blocklist_matches_kernel_numbers() {
+        // Every entry ties a libc SYS_* constant to the number in the
+        // kernel's asm/unistd_64.h. A constant whose value drifts from the
+        // documented number — or a blocklist change made without updating
+        // this table — fails here. This is the guard for the bug where bare
+        // numbers blocked wait4/prctl/recvmmsg under the names chroot/
+        // nis+/fsopen while the intended syscalls stayed open.
+        let table: &[(c_int, c_int, &str)] = &[
+            (libc::SYS_socket as c_int, 41, "socket"),
+            (libc::SYS_socketpair as c_int, 53, "socketpair"),
+            (libc::SYS_clone as c_int, 56, "clone"),
+            (libc::SYS_fork as c_int, 57, "fork"),
+            (libc::SYS_vfork as c_int, 58, "vfork"),
+            (libc::SYS_wait4 as c_int, 61, "wait4"),
+            (libc::SYS_ptrace as c_int, 101, "ptrace"),
+            (libc::SYS_pivot_root as c_int, 155, "pivot_root"),
+            (libc::SYS__sysctl as c_int, 156, "_sysctl"),
+            (libc::SYS_prctl as c_int, 157, "prctl"),
+            (libc::SYS_mount as c_int, 165, "mount"),
+            (libc::SYS_umount2 as c_int, 166, "umount2"),
+            (libc::SYS_swapon as c_int, 167, "swapon"),
+            (libc::SYS_swapoff as c_int, 168, "swapoff"),
+            (libc::SYS_reboot as c_int, 169, "reboot"),
+            (libc::SYS_iopl as c_int, 172, "iopl"),
+            (libc::SYS_ioperm as c_int, 173, "ioperm"),
+            (libc::SYS_init_module as c_int, 175, "init_module"),
+            (libc::SYS_kexec_load as c_int, 246, "kexec_load"),
+            (libc::SYS_unshare as c_int, 272, "unshare"),
+            (libc::SYS_accept4 as c_int, 288, "accept4"),
+            (libc::SYS_epoll_create1 as c_int, 291, "epoll_create1"),
+            (libc::SYS_perf_event_open as c_int, 298, "perf_event_open"),
+            (libc::SYS_recvmmsg as c_int, 299, "recvmmsg"),
+            (
+                libc::SYS_open_by_handle_at as c_int,
+                304,
+                "open_by_handle_at",
+            ),
+            (libc::SYS_setns as c_int, 308, "setns"),
+            (
+                libc::SYS_process_vm_writev as c_int,
+                311,
+                "process_vm_writev",
+            ),
+            (libc::SYS_finit_module as c_int, 313, "finit_module"),
+            (libc::SYS_kexec_file_load as c_int, 320, "kexec_file_load"),
+            (libc::SYS_bpf as c_int, 321, "bpf"),
+            (libc::SYS_userfaultfd as c_int, 323, "userfaultfd"),
+            (libc::SYS_io_uring_setup as c_int, 425, "io_uring_setup"),
+            (libc::SYS_clone3 as c_int, 435, "clone3"),
+        ];
+        for (constant, nr, name) in table {
+            assert_eq!(*constant, *nr, "SYS_{name} must be syscall {nr}");
+        }
+        let blocked: std::collections::HashSet<c_int> = BLOCKED_SYSCALLS.iter().copied().collect();
+        let expected: std::collections::HashSet<c_int> = table.iter().map(|(c, _, _)| *c).collect();
+        assert_eq!(
+            blocked, expected,
+            "blocklist must equal the documented (name, number) table"
+        );
     }
 
     #[cfg(target_arch = "x86_64")]
