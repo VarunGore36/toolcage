@@ -70,16 +70,15 @@ const DRAIN_GRACE: Duration = Duration::from_secs(2);
 // host from inside its namespaces.
 //
 // History note: this table used to be bare numbers whose comments did not
-// match the syscalls they blocked (61 was labeled chroot but is wait4, 157
-// was labeled nis+ but is prctl, 299 was labeled fsopen but is recvmmsg).
-// Named constants make that class of bug impossible, and the pinning test
-// below ties every constant to the number in the kernel header. chroot(161)
-// and the open_tree/move_mount/fsopen/fsconfig/fsmount/fspick/mount_setattr
-// comments claimed — the whole API (428-433, 442) is blocked here now.
-// chroot(161) IS blocked
-// here: the old table claimed chroot was covered but actually listed 61
-// (wait4). wait4 and prctl, which the old table blocked under those
-// labels, are unblocked: the workload cannot wait for children or name
+// match the syscalls they blocked — 61 was labeled "chroot" but is wait4,
+// 157 was labeled "nis+" but is prctl, 299 was labeled "fsopen" but is
+// recvmmsg — while chroot(161) and the new mount API (open_tree/move_mount/
+// fsopen/fsconfig/fsmount/fspick/mount_setattr, 428-433 and 442) claimed
+// coverage in comments without ever being listed. That is fixed: constants
+// make the mislabeling class impossible, the pinning test below ties every
+// constant to its kernel number, and chroot + the whole mount API are
+// genuinely denied. wait4 and prctl, which the old table blocked by
+// accident, are unblocked: the workload cannot wait for children or name
 // its threads without them, and neither call can weaken the cage
 // (no_new_privs cannot be unset, installed filters cannot be removed).
 #[cfg(target_arch = "x86_64")]
