@@ -396,6 +396,50 @@ fn interpreter_inline_arg(arg: &str, flags: &[&str]) -> bool {
     false
 }
 
+/// Deny reason for argv shapes that smuggle inline command text past
+/// argv-array scrutiny, or None when the v0 denylist accepts the argv.
+/// Pure and testable; called from decide()'s proc.exec arm.
+///
+/// A shell binary anywhere in argv (argv[0] itself, or reached indirectly
+/// via `env sh -c`) running an inline-code string executes arbitrary command
+/// text outside argv-array scrutiny. Running a shell script file is the same
+/// class of risk as `sh -c`, so either form is denied. Interpreters given
+/// inline code are denied WHEREVER they appear in argv, not just argv[0]:
+/// `env python3 -c`, `nice perl -E` and `timeout 5 python3 -c` must be
+/// caught just like `python3 -c`. Every spelling of the inline-code flag is
+/// matched (see interpreter_flags): `-c`, `-e`, `-E`, `-p`, `--eval`, `-r`,
+/// `-R`, and the joined forms (`-ccode`).
+fn exec_inline_denial(argv: &[String]) -> Option<&'static str> {
+    let bin = argv[0].rsplit('/').next().unwrap_or(&argv[0]);
+    let rest = &argv[1..];
+    // Strip the path in argv[1..] too: `bin_matches` compares basenames, and
+    // `bin_matches("/bin/sh", "sh")` is false — so `env /bin/sh -c` and
+    // `/bin/busybox /bin/sh evil.sh` would otherwise reach the gates below
+    // with shell_here=false.
+    let shell_here = SHELL_BINS.iter().any(|s| bin_matches(bin, s))
+        || rest.iter().any(|a| {
+            let name = a.rsplit('/').next().unwrap_or(a);
+            SHELL_BINS.iter().any(|s| bin_matches(name, s))
+        });
+    if shell_here && rest.iter().any(|a| shell_inline_flag(a)) {
+        return Some("shell -c is not allowed; use argv arrays");
+    }
+    if shell_here && rest.iter().any(|a| !a.starts_with('-')) {
+        return Some("shell script files are not allowed; use argv arrays");
+    }
+    for a in argv {
+        let name = a.rsplit('/').next().unwrap_or(a);
+        let flags = interpreter_flags(name);
+        if flags.is_empty() {
+            continue;
+        }
+        if argv.iter().any(|b| interpreter_inline_arg(b, flags)) {
+            return Some("interpreter inline code is not allowed; use argv arrays");
+        }
+    }
+    None
+}
+
 /// True when `argv0` names a binary at a TRUSTED location: a bare name
 /// (resolved by the sandbox's fixed PATH) or an absolute path in the
 /// read-only system tree. Relative forms (`./git`, `sub/git`), traversal,
@@ -570,51 +614,8 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
             // fail-closed, since the guest could otherwise run arbitrary code
             // outside argv-array scrutiny. v0 has no shell policy, so deny here;
             // prefer an explicit exec allowlist in a later milestone.
-            {
-                let bin = argv[0].rsplit('/').next().unwrap_or(&argv[0]);
-                let rest = &argv[1..];
-                // A shell binary anywhere in argv (argv[0] itself, or reached
-                // indirectly via `env sh -c`) running an inline-code string
-                // executes arbitrary command text outside argv-array
-                // scrutiny. Running a shell script file is the same class of
-                // risk as `sh -c`, so either form is denied.
-                // Strip the path in argv[1..] too: `bin_matches` compares
-                // basenames, and `bin_matches("/bin/sh", "sh")` is false —
-                // so `env /bin/sh -c` and `/bin/busybox /bin/sh evil.sh`
-                // used to reach the gates below with shell_here=false.
-                let shell_here = SHELL_BINS.iter().any(|s| bin_matches(bin, s))
-                    || rest.iter().any(|a| {
-                        let name = a.rsplit('/').next().unwrap_or(a);
-                        SHELL_BINS.iter().any(|s| bin_matches(name, s))
-                    });
-                if shell_here && rest.iter().any(|a| shell_inline_flag(a)) {
-                    return deny("deny:shell", "shell -c is not allowed; use argv arrays");
-                }
-                if shell_here && rest.iter().any(|a| !a.starts_with('-')) {
-                    return deny(
-                        "deny:shell",
-                        "shell script files are not allowed; use argv arrays",
-                    );
-                }
-                // Interpreters given inline code are denied WHEREVER they
-                // appear in argv, not just argv[0]: `env python3 -c`, `nice
-                // perl -E` and `timeout 5 python3 -c` must be caught just
-                // like `python3 -c`. Every spelling of the inline-code flag
-                // is matched (see interpreter_flags): `-c`, `-e`, `-E`, `-p`,
-                // `--eval`, `-r`, `-R`, and the joined forms (`-ccode`).
-                for a in argv {
-                    let name = a.rsplit('/').next().unwrap_or(a);
-                    let flags = interpreter_flags(name);
-                    if flags.is_empty() {
-                        continue;
-                    }
-                    if argv.iter().any(|b| interpreter_inline_arg(b, flags)) {
-                        return deny(
-                            "deny:shell",
-                            "interpreter inline code is not allowed; use argv arrays",
-                        );
-                    }
-                }
+            if let Some(reason) = exec_inline_denial(argv) {
+                return deny("deny:shell", reason);
             }
             Decision {
                 allow: true,
@@ -831,5 +832,84 @@ mod trusted_exec_path_tests {
         // Not under /usr/ — "/usrfoo/" is a different directory.
         assert!(!trusted_exec_path("/usrfoo/sh"));
         assert!(!trusted_exec_path("/usrshare/tool"));
+    }
+}
+
+#[cfg(test)]
+mod exec_denylist_tests {
+    use super::*;
+
+    fn denied(argv: &[&str]) -> bool {
+        let owned: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+        exec_inline_denial(&owned).is_some()
+    }
+
+    // ---- pinned (working) denylist coverage ----
+
+    #[test]
+    fn shell_inline_code_is_denied() {
+        assert!(denied(&["sh", "-c", "id"]));
+        assert!(denied(&["/bin/sh", "-c", "id"]));
+        assert!(denied(&["bash", "-lc", "id"]));
+        assert!(denied(&["env", "sh", "-c", "id"]));
+        assert!(denied(&["timeout", "5", "python3", "-c", "print(1)"]));
+    }
+
+    #[test]
+    fn shell_script_files_are_denied() {
+        assert!(denied(&["bash", "evil.sh"]));
+        assert!(denied(&["sh", "/workspace/evil.sh"]));
+        assert!(denied(&["/bin/busybox", "/bin/sh", "evil.sh"]));
+    }
+
+    #[test]
+    fn interpreter_inline_code_is_denied() {
+        assert!(denied(&["python3", "-c", "print(1)"]));
+        assert!(denied(&["perl", "-E", "say 1"]));
+        assert!(denied(&["node", "--eval", "1+1"]));
+        assert!(denied(&["env", "python3", "-c", "print(1)"]));
+        assert!(denied(&["python3", "-ic", "print(1)"])); // bundled short flags
+    }
+
+    #[test]
+    fn ordinary_argv_is_allowed() {
+        assert!(!denied(&["/bin/echo", "hello"]));
+        assert!(!denied(&["git", "status"]));
+        assert!(!denied(&["env", "FOO=bar", "git", "status"]));
+        assert!(!denied(&["python3", "script.py"]));
+        assert!(!denied(&["ls", "-la"]));
+    }
+
+    // ---- KNOWN BUGS (each pinned in the buggy state; the fix PR for each
+    // ---- vector flips its assertion to the safe direction) ----
+
+    #[test]
+    fn known_bug_env_split_string_reassembles_shell() {
+        // env -S splits the single token into "sh -c id" at exec time; neither
+        // a shell name nor -c is ever a separate argv token, so the scanner
+        // sees an ordinary argv. Currently ALLOWED (bug); the env-split-string
+        // PR flips this to `denied`.
+        assert!(!denied(&["env", "-S", "sh -c id > /tmp/pwned"]));
+    }
+
+    #[test]
+    fn known_bug_shell_rcfile_equals_form() {
+        // The script-file rule only rejects args NOT starting with '-'; the
+        // '=' form hides the script path behind a dash. Currently ALLOWED
+        // (bug); the rcfile PR flips this to `denied`.
+        assert!(!denied(&["bash", "--rcfile=/workspace/evil.sh", "-i"]));
+    }
+
+    #[test]
+    fn known_bug_awk_program_text_is_inline_code() {
+        // awk executes its program from a positional argv token; system()
+        // gives it the shell. Not a shell and not in interpreter_flags, so
+        // nothing fires. Currently ALLOWED (bug); the awk PR flips this to
+        // `denied`.
+        assert!(!denied(&[
+            "awk",
+            "BEGIN{system(\"sh -c id\")}",
+            "/workspace/f"
+        ]));
     }
 }
