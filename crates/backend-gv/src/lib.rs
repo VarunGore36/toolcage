@@ -152,6 +152,12 @@ impl GvBackend {
                 "args": INIT_ARGS,
                 "cwd": "/",
                 "terminal": false,
+                // Same fixed PATH the Tier 0 environment carries: bare-name
+                // argv resolves identically across tiers. runsc exec builds
+                // the workload's envv from the container spec's process.env,
+                // so without this, slash-less argv[0] simply fails ENOENT
+                // under gVisor (no PATH anywhere to search).
+                "env": [format!("PATH={}", toolcage_backend::GUEST_PATH)],
                 "capabilities": {
                     "bounding": [],
                     "effective": [],
@@ -531,6 +537,20 @@ mod tests {
             0
         );
         assert_eq!(cfg["process"]["noNewPrivileges"], true);
+        // The spec env carries the shared GUEST_PATH: bare-name argv must
+        // resolve the same way it does under Tier 0 (runsc exec derives the
+        // workload envv from the container spec's process.env).
+        let env: Vec<&str> = cfg["process"]["env"]
+            .as_array()
+            .expect("process.env")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        let want_path = format!("PATH={}", toolcage_backend::GUEST_PATH);
+        assert!(
+            env.contains(&want_path.as_str()),
+            "process.env must carry the sandbox PATH: {env:?}"
+        );
         // runsc rejects a spec with no process.args ("Spec.Process.Arg must be
         // defined") — the container's long-running init is required.
         let args = cfg["process"]["args"].as_array().expect("process.args");
