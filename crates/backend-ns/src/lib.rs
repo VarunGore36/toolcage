@@ -1054,8 +1054,17 @@ enum Resolved {
 /// search would: first entry whose `dir/argv0` is an existing regular file
 /// wins. Pure and testable; called pre-fork (it allocates). An argv[0] that
 /// contains a slash never reaches this — the caller uses it verbatim.
+///
+/// Only ABSOLUTE entries participate. A relative entry (`bin`, `.`) or an
+/// empty entry (POSIX: "current directory") would be `is_file()`-checked
+/// against this process's cwd but exec'd against the child's — the
+/// workspace — a check-vs-use divergence that lets a guest-written file
+/// satisfy the search. Absolute candidates are immune to the chdir.
 fn resolve_program(argv0: &str, path_var: &str) -> anyhow::Result<Resolved> {
     for dir in path_var.split(':') {
+        if !dir.starts_with('/') {
+            continue;
+        }
         let candidate = format!("{dir}/{argv0}");
         if std::path::Path::new(&candidate).is_file() {
             return Ok(Resolved::Found(CString::new(candidate)?));
@@ -2709,6 +2718,41 @@ mod exec_path_tests {
             Resolved::NotFound
         ));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn relative_entries_are_skipped() {
+        let dir = scratch_dir("abs");
+        std::fs::write(dir.join("prog"), b"x").unwrap();
+        // A relative entry before the absolute one must not satisfy the
+        // search even if a matching relative path exists on disk.
+        let path_var = format!("relative-toolcage-bin:{}:.", dir.display());
+        match resolve_program("prog", &path_var).unwrap() {
+            Resolved::Found(p) => {
+                assert!(
+                    p.to_bytes().starts_with(b"/"),
+                    "candidate must be absolute: {p:?}"
+                );
+            }
+            Resolved::NotFound => panic!("absolute entry must still resolve"),
+        }
+        // And with only non-absolute entries, nothing resolves.
+        assert!(matches!(
+            resolve_program("prog", "bin:.").unwrap(),
+            Resolved::NotFound
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_entry_is_skipped_not_root() {
+        // A POSIX empty PATH entry means "current directory"; the old
+        // string-format produced "/{argv0}" (filesystem root) instead.
+        // Either way it must not participate.
+        assert!(matches!(
+            resolve_program("sh", ":").unwrap(),
+            Resolved::NotFound
+        ));
     }
 
     #[test]
