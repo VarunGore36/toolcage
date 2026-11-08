@@ -76,7 +76,9 @@ const DRAIN_GRACE: Duration = Duration::from_secs(2);
 // below ties every constant to the number in the kernel header. chroot(161)
 // and the open_tree/move_mount/fsopen/fsconfig/fsmount/fspick/mount_setattr
 // mount API (428-433, 442) are NOT yet listed here despite what older
-// comments claimed — they are added in follow-ups. chroot(161) IS blocked
+// comments claimed — open_tree/move_mount/fsopen are added here; the
+// remaining fsconfig/fsmount/fspick/mount_setattr follow. chroot(161) IS
+// blocked
 // here: the old table claimed chroot was covered but actually listed 61
 // (wait4). wait4 and prctl, which the old table blocked under those
 // labels, are unblocked: the workload cannot wait for children or name
@@ -117,6 +119,14 @@ const BLOCKED_SYSCALLS: &[c_int] = &[
     // setns is blocked on purpose: joining another namespace is never
     // legitimate for the workload (was mislabeled "move_mount" before).
     libc::SYS_setns as c_int,
+    // The new mount API, part 1: grab/publish mount trees and create
+    // superusers. The old table claimed fsopen was blocked but listed 299
+    // (recvmmsg) instead. The workload is root with CAP_SYS_ADMIN inside
+    // its userns, so old mount(165) being blocked is not enough — these
+    // would let it build mounts the Landlock rules never anticipated.
+    libc::SYS_open_tree as c_int,
+    libc::SYS_move_mount as c_int,
+    libc::SYS_fsopen as c_int,
     libc::SYS_process_vm_writev as c_int,
     libc::SYS_finit_module as c_int,
     libc::SYS_kexec_file_load as c_int,
@@ -1641,6 +1651,9 @@ mod tests {
                 "open_by_handle_at",
             ),
             (libc::SYS_setns as c_int, 308, "setns"),
+            (libc::SYS_open_tree as c_int, 428, "open_tree"),
+            (libc::SYS_move_mount as c_int, 429, "move_mount"),
+            (libc::SYS_fsopen as c_int, 430, "fsopen"),
             (
                 libc::SYS_process_vm_writev as c_int,
                 311,
