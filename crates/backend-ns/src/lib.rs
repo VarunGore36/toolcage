@@ -560,12 +560,15 @@ fn isolated_exec(
     let mut c_env_ptrs: Vec<*const c_char> = c_env.iter().map(|s| s.as_ptr()).collect();
     c_env_ptrs.push(std::ptr::null()); // execve expects NULL-terminated envp
 
-    // Resolve program path: if argv[0] has no slash, search PATH before fork.
+    // Resolve program path: if argv[0] has no slash, search the SANDBOX's
+    // PATH before fork — the same GUEST_PATH the child environment carries.
+    // The search used to consult the supervisor's own environment instead:
+    // what was checked depended on how the operator invoked the CLI, and
+    // could disagree with what the guest would resolve (check-vs-use).
     let prog_path = if c_args[0].as_bytes().contains(&b'/') {
         c_args[0].clone()
     } else {
-        let path_var = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
-        match resolve_program(&c_args[0].to_string_lossy(), &path_var)? {
+        match resolve_program(&c_args[0].to_string_lossy(), GUEST_PATH)? {
             Resolved::Found(p) => p,
             // KNOWN BUG (fixed in a follow-up): falling back to the bare name
             // makes execve resolve it against the child's cwd — the workspace,
