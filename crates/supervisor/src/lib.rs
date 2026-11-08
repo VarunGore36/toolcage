@@ -73,6 +73,16 @@ fn now_wall() -> String {
     format!("{t}")
 }
 
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
 fn hash_argv(argv: &[String]) -> String {
     let mut h = Sha256::new();
     for a in argv {
@@ -84,7 +94,7 @@ fn hash_argv(argv: &[String]) -> String {
         h.update(a.as_bytes());
         h.update([0u8]);
     }
-    h.finalize().iter().map(|x| format!("{:02x}", x)).collect()
+    hex_encode(&h.finalize())
 }
 
 /// Upper-bound estimate of the HTTP request bytes we are about to send to the
@@ -232,7 +242,7 @@ impl Supervisor {
                 session: self.session.clone(),
                 actor: "supervisor".into(),
                 action: "proc.exec".into(),
-                request_hash: hash_argv(argv),
+                request_hash: argv_hash,
                 decision: "allow".into(),
                 rule_ids: d.rule_ids.clone(),
                 token_rev_id: "root".into(),

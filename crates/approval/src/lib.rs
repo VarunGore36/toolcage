@@ -89,8 +89,8 @@ impl Queue {
         id
     }
     pub fn decide(&mut self, id: &str, v: Verdict) -> bool {
-        if self.pending.remove(id).is_some() {
-            self.decided.insert(id.to_string(), v);
+        if let Some((k, _)) = self.pending.remove_entry(id) {
+            self.decided.insert(k, v);
             true
         } else {
             false

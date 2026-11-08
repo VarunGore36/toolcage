@@ -229,7 +229,7 @@ impl Policy {
 
 /// Canonicalize fs path: resolve `.`, `..`, duplicate `/` lexically (no FS access).
 pub fn canonical_path(p: &str) -> String {
-    let mut parts: Vec<&str> = vec![];
+    let mut parts: Vec<&str> = Vec::new();
     for comp in p.split('/') {
         match comp {
             "" | "." => {}
@@ -239,16 +239,37 @@ pub fn canonical_path(p: &str) -> String {
             c => parts.push(c),
         }
     }
-    format!("/{}", parts.join("/"))
+    if parts.is_empty() {
+        return "/".to_string();
+    }
+    let cap: usize = parts.iter().map(|s| 1 + s.len()).sum();
+    let mut out = String::with_capacity(cap);
+    for part in parts {
+        out.push('/');
+        out.push_str(part);
+    }
+    out
 }
 
 fn path_match(pattern: &str, path: &str) -> bool {
     // Support trailing /** only (v0). Exact otherwise.
     if let Some(prefix) = pattern.strip_suffix("/**") {
-        path == prefix || path.starts_with(&format!("{}/", prefix))
+        path == prefix
+            || path
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('/'))
     } else {
         pattern == path
     }
+}
+
+#[inline]
+fn contains_ignore_ascii_case(haystack: &str, needle: &[u8]) -> bool {
+    !needle.is_empty()
+        && haystack
+            .as_bytes()
+            .windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle))
 }
 
 /// RFC 7230 token: the only shape allowed in a request method. Anything else
@@ -288,8 +309,12 @@ pub fn request_target_is_clean(p: &str) -> bool {
     // Traversal checks apply to the path component; the query is free-form and
     // the upstream does not resolve it as a path.
     let path = p.split('?').next().unwrap_or("");
-    let lower = path.to_ascii_lowercase();
-    if lower.contains("%2e") || lower.contains("%2f") || lower.contains("%5c") {
+    if path.as_bytes().windows(3).any(|w| {
+        w[0] == b'%'
+            && (w[1..].eq_ignore_ascii_case(b"2e")
+                || w[1..].eq_ignore_ascii_case(b"2f")
+                || w[1..].eq_ignore_ascii_case(b"5c"))
+    }) {
         return false;
     }
     path.split('/').all(|seg| seg != "." && seg != "..")
@@ -403,12 +428,11 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
     // Global forbid: cloud metadata / link-local, always denied.
     // Covers common forms so a string variant can't slip past (I1).
     if let Some(h) = &req.host {
-        let hl = h.to_ascii_lowercase();
-        if hl.contains("169.254.169.254")
-            || hl.contains("metadata")
-            || hl.contains("instance-data")
-            || hl.contains("100.100.100.200")
-            || hl.contains("metadata.google.internal")
+        if contains_ignore_ascii_case(h, b"169.254.169.254")
+            || contains_ignore_ascii_case(h, b"metadata")
+            || contains_ignore_ascii_case(h, b"instance-data")
+            || contains_ignore_ascii_case(h, b"100.100.100.200")
+            || contains_ignore_ascii_case(h, b"metadata.google.internal")
         {
             return deny("forbid:metadata", "metadata address is never reachable");
         }
@@ -425,14 +449,14 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
             // net.connect carries no method (absent/empty is fine there); any
             // method that IS present must be a clean token. Note an empty
             // method string is a malformed method, not a missing one.
-            let method = req.method.as_deref().unwrap_or("").to_ascii_uppercase();
-            let host = req.host.as_deref().unwrap_or("").to_ascii_lowercase();
+            let method = req.method.as_deref().unwrap_or("");
+            let host = req.host.as_deref().unwrap_or("");
             let path = req.path.as_deref().unwrap_or("/");
             // Request-line hygiene before any rule matching: the method and
             // path are forwarded verbatim upstream, so a guest must not be able
             // to smuggle a different resource or extra headers past the rule
             // that was checked (see request_target_is_clean).
-            if (req.method.is_some() && !method_is_token(&method)) || !request_target_is_clean(path)
+            if (req.method.is_some() && !method_is_token(method)) || !request_target_is_clean(path)
             {
                 return deny(
                     "deny:request-target",
@@ -444,22 +468,23 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
                 let rule_match = h
                     .host
                     .as_deref()
-                    .is_some_and(|x| x.to_ascii_lowercase() == host)
+                    .is_some_and(|x| x.eq_ignore_ascii_case(host))
                     || h.alias
                         .as_deref()
-                        .is_some_and(|x| x.to_ascii_lowercase() == host);
+                        .is_some_and(|x| x.eq_ignore_ascii_case(host));
                 if rule_match {
                     if !h.methods.is_empty()
-                        && !h.methods.iter().any(|m| m.to_ascii_uppercase() == method)
+                        && !h.methods.iter().any(|m| m.eq_ignore_ascii_case(method))
                     {
                         continue;
                     }
                     if !h.paths.is_empty() && !h.paths.iter().any(|p| path_match(p, path)) {
                         continue;
                     }
+                    let host_lower = host.to_ascii_lowercase();
                     return Decision {
                         allow: true,
-                        rule_ids: vec![format!("net:allow:{host}")],
+                        rule_ids: vec![format!("net:allow:{host_lower}")],
                         reason: "allowlisted".into(),
                     };
                 }
@@ -479,13 +504,11 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
             let mut write_denied_by: Option<String> = None;
             for m in &policy.fs.mounts {
                 let mount = canonical_path(&m.path);
-                let mount = mount.trim_end_matches('/').to_string();
-                let mount = if mount.is_empty() {
-                    "/".to_string()
-                } else {
-                    mount
-                };
-                if canon == mount || canon.starts_with(&format!("{mount}/")) {
+                if canon == mount
+                    || canon
+                        .strip_prefix(&mount)
+                        .is_some_and(|rest| rest.starts_with('/'))
+                {
                     if req.action == "fs.write"
                         && !mount_allows_write(&m.mode)
                         && write_denied_by.is_none()
