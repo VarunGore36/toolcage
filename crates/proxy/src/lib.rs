@@ -437,15 +437,22 @@ impl Proxy {
         let cap = max_response.min(MAX_RESPONSE_BYTES) as usize;
         let buf = read_capped(stream.as_mut(), cap)?;
 
+        // Fail closed unless the head parses as HTTP: without a status line
+        // the head structure is untrusted, and a hostile response could hide
+        // Content-Encoding / Transfer-Encoding on the first line, where the
+        // body-sanitization checks below could not see them (a status-less
+        // head used to slip compressed or chunk-split secrets past scrub).
+        // Refuse rather than guess.
+        let status = parse_status(&buf).ok_or_else(|| {
+            ProxyError::Policy("response has no parseable status line; refusing".into())
+        })?;
+
         // Split headers from body.
         let body_start = find_body_start(&buf);
         let head = &buf[..body_start];
         let raw_body = &buf[body_start..];
 
         let body = decode_response_body(head, raw_body)?;
-
-        // Extract status code.
-        let status = parse_status(&buf).unwrap_or(0);
 
         Ok(ProxyResponse { status, body })
     }
@@ -510,7 +517,15 @@ fn decode_response_body(head: &[u8], raw_body: &[u8]) -> Result<Vec<u8>, ProxyEr
 fn header_values(head: &[u8], name: &str) -> Vec<String> {
     let text = String::from_utf8_lossy(head);
     let mut out = Vec::new();
-    for line in text.split("\r\n").skip(1) {
+    for (i, line) in text.split("\r\n").enumerate() {
+        // Skip the status line — but only when line 0 actually IS one. The
+        // old unconditional `.skip(1)` swallowed the first header of a
+        // status-less response, hiding Content-Encoding/Transfer-Encoding
+        // from the body-sanitization checks. Defense in depth: fetch()
+        // already refuses a head with no parseable status line.
+        if i == 0 && is_status_line(line) {
+            continue;
+        }
         if let Some((k, v)) = line.split_once(':') {
             if k.trim().eq_ignore_ascii_case(name) {
                 out.push(v.to_string());
@@ -518,6 +533,18 @@ fn header_values(head: &[u8], name: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// True when `line` is a status line: the same shape `parse_status` accepts
+/// (an HTTP version token followed by a numeric status code). Kept in sync
+/// with `parse_status` so `header_values` skips exactly the line
+/// `parse_status` consumes — never a header.
+fn is_status_line(line: &str) -> bool {
+    let mut parts = line.split_whitespace();
+    match (parts.next(), parts.next()) {
+        (Some(proto), Some(code)) => proto.starts_with("HTTP/") && code.parse::<u16>().is_ok(),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -536,10 +563,18 @@ fn decode_chunked(body: &[u8]) -> Option<Vec<u8>> {
         let line_end = find_crlf(body, pos)?;
         let line = std::str::from_utf8(&body[pos..line_end]).ok()?;
         let size_str = line.split(';').next().unwrap_or("").trim();
+        // Strict hex digits only: `from_str_radix` also accepts a leading
+        // `+`, and chunk sizes are defined as HEXDIG. Refuse anything else.
+        if size_str.is_empty() || !size_str.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
         let size = usize::from_str_radix(size_str, 16).ok()?;
         pos = line_end + 2;
-        // Chunk data + CRLF.
-        if pos + size > body.len() {
+        // Checked bounds: a hostile size near usize::MAX used to wrap
+        // `pos + size` past this check and panic on the slice (a remote
+        // DoS of the egress chokepoint). `pos <= body.len()` always holds
+        // (find_crlf guarantees the CRLF fits), so subtract instead.
+        if size > body.len() - pos {
             return None;
         }
         out.extend_from_slice(&body[pos..pos + size]);
@@ -568,10 +603,16 @@ fn find_body_start(buf: &[u8]) -> usize {
         .unwrap_or(buf.len())
 }
 
-/// Parse the HTTP status code from the response head.
+/// Parse the HTTP status code from the response head. Requires a real
+/// status line ("HTTP/1.x <code> ..."): a header line whose second token
+/// happens to be numeric ("Content-Length: 404") is not a status line and
+/// must not pass the fail-closed gate in fetch().
 fn parse_status(buf: &[u8]) -> Option<u16> {
     let head = String::from_utf8_lossy(&buf[..buf.len().min(200)]);
     let first_line = head.lines().next()?;
+    if !is_status_line(first_line) {
+        return None;
+    }
     first_line.split_whitespace().nth(1)?.parse().ok()
 }
 
@@ -1001,58 +1042,87 @@ mod tests {
 }
 
 #[cfg(test)]
-mod audit_tmp_tests {
+mod response_parsing_tests {
     use super::*;
 
-    // Finding candidate 1a: response with NO status line -> first header line
-    // (Content-Encoding) is swallowed by .skip(1) in header_values().
+    // Regression: a status-less head must not hide its first header line.
+    // header_values used to `.skip(1)` unconditionally, so a hostile
+    // upstream could put Content-Encoding / Transfer-Encoding on line 0,
+    // invisible to the scrub gate.
     #[test]
-    fn tmp_status_less_response_hides_content_encoding() {
+    fn status_less_head_does_not_hide_first_header() {
         let head = b"Content-Encoding: gzip\r\n\r\n";
-        let vals = header_values(head, "content-encoding");
-        eprintln!("CE values seen (status-less): {vals:?}");
-        assert!(vals.is_empty(), "BUG CONFIRMED: CE header hidden: {vals:?}");
-        // End-to-end: gzip body passes decode_response_body (fail-open).
-        let raw: &[u8] = b"\x1f\x8b fake-gzip-with-secret";
-        let r = decode_response_body(head, raw);
-        eprintln!("decode_response_body result: {r:?}");
-        assert!(r.is_ok(), "gzip body was NOT refused");
-        assert_eq!(r.unwrap(), raw, "compressed body handed through un-decoded");
+        assert_eq!(header_values(head, "content-encoding"), vec![" gzip"]);
+        let head = b"Transfer-Encoding: chunked\r\n\r\n";
+        assert_eq!(header_values(head, "transfer-encoding"), vec![" chunked"]);
+        // Such a head has no parseable status line, so fetch() refuses it.
+        assert_eq!(parse_status(head), None);
     }
 
-    // Finding candidate 1b: same via Transfer-Encoding hidden on line 0 ->
-    // chunk framing (with the secret split across chunks) passes raw to scrub.
+    // A header line that is not a status line is never skipped, even when it
+    // contains something status-line-shaped (a numeric second token).
     #[test]
-    fn tmp_status_less_response_hides_chunked_te() {
+    fn header_line_with_numeric_token_is_not_a_status_line() {
+        let head = b"X-Error: 404\r\nContent-Encoding: gzip\r\n\r\n";
+        assert_eq!(parse_status(head), None);
+        assert_eq!(header_values(head, "x-error"), vec![" 404"]);
+        assert_eq!(header_values(head, "content-encoding"), vec![" gzip"]);
+    }
+
+    // Regression: with the header visible, a compressed body is refused —
+    // never handed to the guest un-decoded where scrub cannot see inside it.
+    #[test]
+    fn gzip_body_is_refused() {
+        let head = b"Content-Encoding: gzip\r\n\r\n";
+        let raw: &[u8] = b"\x1f\x8b fake-gzip-with-secret";
+        let r = decode_response_body(head, raw);
+        assert!(r.is_err(), "gzip body must be refused: {r:?}");
+    }
+
+    // Regression: chunk framing is decoded, so a secret split across chunk
+    // boundaries becomes contiguous for scrub — or the framing is refused.
+    // It is never passed through raw.
+    #[test]
+    fn chunked_body_is_decoded_secret_becomes_contiguous() {
         let head = b"Transfer-Encoding: chunked\r\n\r\n";
         let raw = b"4\r\ns3cr\r\n9\r\n3t-secret\r\n0\r\n\r\n";
         let r = decode_response_body(head, raw);
-        eprintln!("decode_response_body result: {r:?}");
-        assert!(r.is_ok(), "chunked body was NOT refused/decoded");
-        let body = r.unwrap();
-        // The framing was NOT decoded: secret is not contiguous, so scrub
-        // cannot match it.
-        assert_eq!(
-            std::str::from_utf8(&body).unwrap(),
-            "4\r\ns3cr\r\n9\r\n3t-secret\r\n0\r\n\r\n"
-        );
-        assert!(!body.windows(13).any(|w| w == b"s3cr3t-secret"));
+        let body = r.expect("valid chunked body must decode");
+        assert_eq!(std::str::from_utf8(&body).unwrap(), "s3cr3t-secret");
     }
 
-    // Finding candidate 2: chunk-size overflow -> panic (DoS by hostile upstream).
+    // A normal response still parses: the status line is skipped, the
+    // headers after it are found.
     #[test]
-    #[should_panic]
-    fn tmp_chunk_size_overflow_panics() {
-        // pos advances to 6 after the first chunk; usize::MAX size wraps
-        // pos+size in a release build, then body[pos..pos+size] panics.
+    fn normal_head_still_parses() {
+        let head = b"HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\nX-A: 1\r\n\r\n";
+        assert_eq!(parse_status(head), Some(200));
+        assert_eq!(header_values(head, "content-encoding"), vec![" identity"]);
+        assert_eq!(header_values(head, "x-a"), vec![" 1"]);
+    }
+
+    // Regression: a chunk size near usize::MAX must fail closed. It used to
+    // wrap the `pos + size` bounds check and panic on the slice — a remote
+    // DoS of the egress chokepoint.
+    #[test]
+    fn chunk_size_overflow_fails_closed() {
         let raw = b"1\r\nA\r\nffffffffffffffff\r\nBBBBBBBBBBBBBBBBBB\r\n0\r\n\r\n";
-        let _ = decode_chunked(raw);
+        assert_eq!(decode_chunked(raw), None);
     }
 
-    // Sanity: from_str_radix accepts "+f" as a chunk size (leniency note).
+    // Chunk sizes are HEXDIG: a leading '+' (which from_str_radix accepts)
+    // is not a legal size and must be refused.
     #[test]
-    fn tmp_plus_sign_chunk_size_accepted() {
-        assert_eq!(usize::from_str_radix("+f", 16), Ok(15));
+    fn plus_sign_chunk_size_refused() {
+        let raw = b"+f\r\nAAAA\r\n0\r\n\r\n";
+        assert_eq!(decode_chunked(raw), None);
+    }
+
+    // A size that would read past the body fails closed.
+    #[test]
+    fn chunk_size_past_body_refused() {
+        let raw = b"5\r\nabc\r\n0\r\n\r\n";
+        assert_eq!(decode_chunked(raw), None);
     }
 }
 
