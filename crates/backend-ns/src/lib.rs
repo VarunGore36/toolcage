@@ -565,17 +565,25 @@ fn isolated_exec(
     // The search used to consult the supervisor's own environment instead:
     // what was checked depended on how the operator invoked the CLI, and
     // could disagree with what the guest would resolve (check-vs-use).
+    //
+    // Not-found is an ERROR, never a fallback to the bare name: after the
+    // child chdirs into the workspace, execve resolves a bare name against
+    // the cwd — guest-writable — so a guest-written file would run under
+    // the allowlisted NAME. (The old code did exactly that.) Landlock still
+    // bounds what the resulting process could touch, but the policy
+    // decision and the audit argv hash were computed for a trusted binary
+    // the guest cannot substitute.
     let prog_path = if c_args[0].as_bytes().contains(&b'/') {
         c_args[0].clone()
     } else {
         match resolve_program(&c_args[0].to_string_lossy(), GUEST_PATH)? {
             Resolved::Found(p) => p,
-            // KNOWN BUG (fixed in a follow-up): falling back to the bare name
-            // makes execve resolve it against the child's cwd — the workspace,
-            // which the guest can write. A guest-written "git" then runs under
-            // the allowlisted NAME "git". The follow-up turns NotFound into a
-            // pre-fork error instead.
-            Resolved::NotFound => c_args[0].clone(),
+            Resolved::NotFound => {
+                anyhow::bail!(
+                    "command not found in the sandbox PATH ({GUEST_PATH}): {}",
+                    c_args[0].to_string_lossy()
+                );
+            }
         }
     };
 
@@ -2776,5 +2784,42 @@ mod exec_path_tests {
             Resolved::NotFound
         ));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod exec_not_found_tests {
+    use super::*;
+
+    /// The workspace-cwd exec bug: a bare argv[0] that resolves nowhere used
+    /// to fall back to the bare name, which execve then resolved against the
+    /// child's cwd — the guest-writable workspace — running a guest-written
+    /// file under an allowlisted NAME. Not-found must be a pre-fork error.
+    #[test]
+    fn bare_command_not_in_sandbox_path_is_an_error() {
+        let spec = SessionSpec {
+            id: "t-nf".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: "/nonexistent-toolcage-workspace".into(),
+        };
+        let err = isolated_exec(
+            &spec,
+            &["definitely-not-a-toolcage-command-3f9a".to_string()],
+            5,
+            1024,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("command not found"), "{msg}");
+        assert!(
+            msg.contains(GUEST_PATH),
+            "error must name the search set: {msg}"
+        );
+        assert!(
+            msg.contains("definitely-not-a-toolcage-command-3f9a"),
+            "error must name the command: {msg}"
+        );
     }
 }
