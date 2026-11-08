@@ -14,6 +14,14 @@
 //!   capabilities() is advisory data for the policy engine, not a guarantee.
 use serde::{Deserialize, Serialize};
 
+/// The fixed PATH a guest environment carries, and the only set the
+/// program-path search consults. A constant, not the supervisor's
+/// environment: what the guest resolves must not depend on how the operator
+/// invoked the CLI, and policy's `trusted_exec_path` treats a bare argv[0]
+/// as trusted precisely because resolution is pinned to this set. Shared by
+/// the Tier 0 driver (env + search) and the Tier 1 driver (OCI spec env).
+pub const GUEST_PATH: &str = "/usr/bin:/bin";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Tier {
     Tier0,
