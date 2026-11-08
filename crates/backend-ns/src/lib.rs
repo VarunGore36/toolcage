@@ -1069,24 +1069,38 @@ enum Resolved {
 }
 
 /// Resolve a slash-less argv[0] against `path_var` the way exec-time PATH
-/// search would: first entry whose `dir/argv0` is an existing regular file
-/// wins. Pure and testable; called pre-fork (it allocates). An argv[0] that
-/// contains a slash never reaches this — the caller uses it verbatim.
+/// search would: first entry whose `dir/argv0` is an existing, EXECUTABLE
+/// regular file wins. Pure and testable; called pre-fork (it allocates). An
+/// argv[0] that contains a slash never reaches this — the caller uses it
+/// verbatim.
 ///
 /// Only ABSOLUTE entries participate. A relative entry (`bin`, `.`) or an
-/// empty entry (POSIX: "current directory") would be `is_file()`-checked
-/// against this process's cwd but exec'd against the child's — the
-/// workspace — a check-vs-use divergence that lets a guest-written file
-/// satisfy the search. Absolute candidates are immune to the chdir.
+/// empty entry (POSIX: "current directory") would be stat-checked against
+/// this process's cwd but exec'd against the child's — the workspace — a
+/// check-vs-use divergence that lets a guest-written file satisfy the
+/// search. Absolute candidates are immune to the chdir.
+///
+/// The executable-bit check matches execve's own requirement: without it,
+/// the search would "find" a non-executable file and the child would die
+/// with EACCES (exit 127) instead of moving on to the next PATH entry the
+/// way execvp-style resolution does.
 fn resolve_program(argv0: &str, path_var: &str) -> anyhow::Result<Resolved> {
+    use std::os::unix::fs::PermissionsExt;
     for dir in path_var.split(':') {
         if !dir.starts_with('/') {
             continue;
         }
         let candidate = format!("{dir}/{argv0}");
-        if std::path::Path::new(&candidate).is_file() {
-            return Ok(Resolved::Found(CString::new(candidate)?));
+        let Ok(md) = std::fs::metadata(&candidate) else {
+            continue;
+        };
+        if !md.is_file() {
+            continue;
         }
+        if md.permissions().mode() & 0o111 == 0 {
+            continue;
+        }
+        return Ok(Resolved::Found(CString::new(candidate)?));
     }
     Ok(Resolved::NotFound)
 }
@@ -2665,6 +2679,12 @@ mod tests {
 #[cfg(test)]
 mod exec_path_tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn write_exec(path: &std::path::Path) {
+        std::fs::write(path, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
 
     /// Unique scratch dir under the system temp dir (same pattern the other
     /// tests here use; no tempdir dependency).
@@ -2684,7 +2704,7 @@ mod exec_path_tests {
     #[test]
     fn resolves_first_existing_candidate() {
         let dir = scratch_dir("found");
-        std::fs::write(dir.join("prog"), b"#!/bin/sh\n").unwrap();
+        write_exec(&dir.join("prog"));
         match resolve_program("prog", &dir.to_string_lossy()).unwrap() {
             Resolved::Found(p) => {
                 assert_eq!(p.to_bytes(), format!("{}/prog", dir.display()).as_bytes());
@@ -2698,8 +2718,8 @@ mod exec_path_tests {
     fn first_path_entry_wins() {
         let a = scratch_dir("first");
         let b = scratch_dir("second");
-        std::fs::write(a.join("prog"), b"x").unwrap();
-        std::fs::write(b.join("prog"), b"x").unwrap();
+        write_exec(&a.join("prog"));
+        write_exec(&b.join("prog"));
         let path_var = format!("{}:{}", a.display(), b.display());
         match resolve_program("prog", &path_var).unwrap() {
             Resolved::Found(p) => assert!(p.to_bytes().starts_with(a.to_string_lossy().as_bytes())),
@@ -2713,7 +2733,7 @@ mod exec_path_tests {
     fn later_entry_wins_when_earlier_misses() {
         let a = scratch_dir("miss");
         let b = scratch_dir("hit");
-        std::fs::write(b.join("prog"), b"x").unwrap();
+        write_exec(&b.join("prog"));
         let path_var = format!("{}:{}", a.display(), b.display());
         match resolve_program("prog", &path_var).unwrap() {
             Resolved::Found(p) => assert!(p.to_bytes().starts_with(b.to_string_lossy().as_bytes())),
@@ -2741,7 +2761,7 @@ mod exec_path_tests {
     #[test]
     fn relative_entries_are_skipped() {
         let dir = scratch_dir("abs");
-        std::fs::write(dir.join("prog"), b"x").unwrap();
+        write_exec(&dir.join("prog"));
         // A relative entry before the absolute one must not satisfy the
         // search even if a matching relative path exists on disk.
         let path_var = format!("relative-toolcage-bin:{}:.", dir.display());
@@ -2771,6 +2791,32 @@ mod exec_path_tests {
             resolve_program("sh", ":").unwrap(),
             Resolved::NotFound
         ));
+    }
+
+    #[test]
+    fn non_executable_file_is_skipped() {
+        // execvp-style resolution moves on to the next entry when a match
+        // lacks the execute bit; the old is_file() check "found" it and the
+        // child died with EACCES.
+        use std::os::unix::fs::PermissionsExt;
+        let a = scratch_dir("noexec");
+        let b = scratch_dir("exec");
+        std::fs::write(a.join("prog"), b"x").unwrap();
+        std::fs::set_permissions(a.join("prog"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::write(b.join("prog"), b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(b.join("prog"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path_var = format!("{}:{}", a.display(), b.display());
+        match resolve_program("prog", &path_var).unwrap() {
+            Resolved::Found(p) => assert!(p.to_bytes().starts_with(b.to_string_lossy().as_bytes())),
+            Resolved::NotFound => panic!("executable entry must resolve"),
+        }
+        // A non-executable match with no executable alternative is NotFound.
+        assert!(matches!(
+            resolve_program("prog", &a.to_string_lossy()).unwrap(),
+            Resolved::NotFound
+        ));
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
     }
 
     #[test]
