@@ -556,7 +556,7 @@ fn isolated_exec(
     c_args_ptrs.push(std::ptr::null()); // execve expects NULL-terminated argv
 
     // Minimal environment: only PATH, no secrets (I2).
-    let c_env: Vec<CString> = vec![CString::new("PATH=/usr/bin:/bin")?];
+    let c_env: Vec<CString> = vec![CString::new(format!("PATH={GUEST_PATH}"))?];
     let mut c_env_ptrs: Vec<*const c_char> = c_env.iter().map(|s| s.as_ptr()).collect();
     c_env_ptrs.push(std::ptr::null()); // execve expects NULL-terminated envp
 
@@ -1038,6 +1038,13 @@ fn close_all_except_stdio() {
         unsafe { libc::close(fd) };
     }
 }
+
+/// The fixed PATH the guest environment gets (and, in a follow-up, the only
+/// set the program-path search consults). A constant, not the supervisor's
+/// environment: what the child resolves must not depend on how the operator
+/// invoked the CLI, and policy's `trusted_exec_path` treats a bare argv[0]
+/// as trusted precisely because resolution is pinned to this set.
+const GUEST_PATH: &str = "/usr/bin:/bin";
 
 /// Outcome of resolving a slash-less argv[0] against a PATH-style search
 /// string.
