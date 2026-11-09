@@ -912,8 +912,8 @@ mod trusted_exec_path_tests {
 mod exec_denylist_tests {
     use super::*;
 
-    fn denied(argv: &[&str]) -> bool {
-        let owned: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+    fn denied<S: AsRef<str>>(argv: &[S]) -> bool {
+        let owned: Vec<String> = argv.iter().map(|s| s.as_ref().to_string()).collect();
         exec_inline_denial(&owned).is_some()
     }
 
@@ -1106,6 +1106,56 @@ mod exec_denylist_tests {
         assert!(!bin_matches("", "sh"));
         // An allowlisted name must not match a different known binary.
         assert!(!bin_matches("sh", "bash"));
+    }
+
+    #[test]
+    fn interpreter_flag_forms_deny_across_wrappers() {
+        // The scanner must be insensitive to WHERE the interpreter appears
+        // and HOW the flag is spelled. Build the cross product: wrapper x
+        // interpreter x the interpreter's OWN inline flags (from
+        // interpreter_flags, used as ground truth) x spelling forms (bare,
+        // joined-with-code, bundled-in-a-cluster). Every inline form denies;
+        // the same argv with a script file instead of a flag stays allowed.
+        let wrappers: &[&[&str]] = &[
+            &[],
+            &["env"],
+            &["nice", "-5"],
+            &["timeout", "5"],
+            &["nohup"],
+            &["env", "-u", "X"],
+        ];
+        let interpreters = ["python3", "python", "perl", "ruby", "node", "lua", "php"];
+        for i in interpreters {
+            let flags: Vec<String> = interpreter_flags(i).iter().map(|s| s.to_string()).collect();
+            assert!(!flags.is_empty(), "{i} should have inline flags");
+            for f in &flags {
+                for w in wrappers {
+                    let base: Vec<String> = w
+                        .iter()
+                        .map(|s| s.to_string())
+                        .chain([i.to_string()])
+                        .collect();
+
+                    let mut argv = base.clone();
+                    argv.push(f.clone());
+                    assert!(denied(&argv), "bare flag: {argv:?} must be denied");
+
+                    if f.len() == 2 {
+                        let mut argv = base.clone();
+                        argv.push(format!("{f}code"));
+                        assert!(denied(&argv), "joined flag: {argv:?} must be denied");
+
+                        let mut argv = base.clone();
+                        argv.push(format!("-v{}", &f[1..]));
+                        assert!(denied(&argv), "bundled flag: {argv:?} must be denied");
+                    }
+
+                    let mut argv = base.clone();
+                    argv.push("script.py".to_string());
+                    assert!(!denied(&argv), "no inline flag: {argv:?} must be allowed");
+                }
+            }
+        }
     }
 
     #[test]
