@@ -1032,6 +1032,18 @@ mod exec_denylist_tests {
     }
 
     #[test]
+    fn busybox_applet_forms_are_denied() {
+        // busybox is a shell-shaped multi-call binary: it is in SHELL_BINS,
+        // so ANY argument after it (applet names included) trips the
+        // script-file rule. Deliberately broad — busybox <applet> can be
+        // sh, awk, and more — and fail-closed.
+        assert!(denied(&["busybox", "sh", "-c", "id"]));
+        assert!(denied(&["/bin/busybox", "awk", "{print}"]));
+        assert!(denied(&["busybox", "echo", "hi"])); // over-broad by design
+        assert!(denied(&["busybox-1.35", "sh", "evil.sh"])); // version tolerance
+    }
+
+    #[test]
     fn known_bug_awk_program_text_is_inline_code() {
         // SUPERSEDED by awk_program_text_is_denied; kept as a marker that the
         // vector is closed.
