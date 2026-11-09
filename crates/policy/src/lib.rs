@@ -1044,6 +1044,42 @@ mod exec_denylist_tests {
     }
 
     #[test]
+    fn every_vector_denies_with_deny_shell_and_a_reason() {
+        // The rule id is part of the operator contract (explain.rs teaches
+        // it); the reason is operator-facing. Every vector must deny with
+        // exactly ['deny:shell'] and a non-empty reason.
+        let vectors: &[&[&str]] = &[
+            &["sh", "-c", "id"],
+            &["bash", "evil.sh"],
+            &["bash", "--rcfile=/workspace/evil.sh", "-i"],
+            &["env", "-S", "sh -c id"],
+            &["env", "--split-string=sh -c id"],
+            &["python3", "-c", "print(1)"],
+            &["awk", "{print}", "f"],
+            &["python3", "-m", "evil"],
+            &["perl", "-x", "evil.pl"],
+            &["busybox", "sh", "-c", "id"],
+        ];
+        let mut reasons = std::collections::HashSet::new();
+        for argv in vectors {
+            let owned: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+            let d = exec_inline_denial(&owned);
+            let reason = match d {
+                Some(r) => r,
+                None => panic!("{argv:?} must be denied"),
+            };
+            assert!(!reason.is_empty(), "{argv:?}: reason must not be empty");
+            reasons.insert(reason);
+        }
+        // Distinct classes give distinct reasons (an operator reading a
+        // denial should be able to tell which vector fired).
+        assert!(
+            reasons.len() >= 6,
+            "expected distinct reasons per vector class, got {reasons:?}"
+        );
+    }
+
+    #[test]
     fn known_bug_awk_program_text_is_inline_code() {
         // SUPERSEDED by awk_program_text_is_denied; kept as a marker that the
         // vector is closed.
