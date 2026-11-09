@@ -297,3 +297,56 @@ mod gate_semantics_matrix_tests {
         assert!(n(None, Some("github")));
     }
 }
+
+#[cfg(test)]
+mod queue_contract_tests {
+    use super::*;
+
+    /// The Queue contract the module header states and callers must be able
+    /// to rely on:
+    /// - resolve() on an unknown id is None (still waiting) — callers must
+    ///   map None-after-timeout to DENY, never to allow
+    /// - decide() on an unknown id returns false (nothing was decided)
+    /// - decide() on an already-decided id returns false (no re-deciding:
+    ///   the first verdict stands)
+    /// - a decided id resolves to its verdict forever
+    #[test]
+    fn queue_contract_pins() {
+        let mut q = Queue::default();
+
+        // Unknown id: nothing pending, nothing decided.
+        assert!(
+            !q.decide("appr-999", Verdict::Approve),
+            "unknown id must not decide"
+        );
+        assert_eq!(
+            q.resolve("appr-999"),
+            None,
+            "unknown id resolves to None (still waiting)"
+        );
+
+        // Approve path.
+        let a = q.request("http.request", Some("github"), Some("POST"));
+        assert_eq!(q.resolve(&a), None);
+        assert!(q.decide(&a, Verdict::Approve));
+        assert_eq!(q.resolve(&a), Some(true));
+        // Re-decide is refused: the first verdict stands.
+        assert!(
+            !q.decide(&a, Verdict::Deny),
+            "already-decided id must not re-decide"
+        );
+        assert_eq!(q.resolve(&a), Some(true));
+
+        // Deny path.
+        let d = q.request("http.request", Some("github"), Some("POST"));
+        assert!(q.decide(&d, Verdict::Deny));
+        assert_eq!(q.resolve(&d), Some(false));
+        assert!(!q.decide(&d, Verdict::Approve));
+        assert_eq!(q.resolve(&d), Some(false));
+
+        // Ids are monotonic: two requests never share an id.
+        let x = q.request("http.request", None, None);
+        let y = q.request("http.request", None, None);
+        assert_ne!(x, y);
+    }
+}
