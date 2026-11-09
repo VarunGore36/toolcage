@@ -56,8 +56,81 @@ fn host_default() -> String {
     "host".into()
 }
 
+const HEX_LOWER: &[u8; 16] = b"0123456789abcdef";
+
 fn hex_encode(b: impl AsRef<[u8]>) -> String {
-    b.as_ref().iter().map(|x| format!("{:02x}", x)).collect()
+    let bytes = b.as_ref();
+    let mut out = Vec::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        out.push(HEX_LOWER[(byte >> 4) as usize]);
+        out.push(HEX_LOWER[(byte & 0x0f) as usize]);
+    }
+    // SAFETY: `HEX_LOWER` contains only ASCII hex digits.
+    unsafe { String::from_utf8_unchecked(out) }
+}
+
+// Borrowed view of Event with fields in BTreeMap key order so to_writer
+// hashes the exact same bytes as event_body() without building a Value.
+#[derive(Serialize)]
+struct CanonicalEventBody<'a> {
+    action: &'a str,
+    actor: &'a str,
+    bytes: u64,
+    claimed_by: &'a str,
+    decision: &'a str,
+    prev_hash: &'a str,
+    request_hash: &'a str,
+    result: &'a str,
+    rule_ids: &'a [String],
+    seq: u64,
+    session: &'a str,
+    token_rev_id: &'a str,
+    ts_wall: &'a str,
+}
+
+impl<'a> From<&'a Event> for CanonicalEventBody<'a> {
+    #[inline]
+    fn from(e: &'a Event) -> Self {
+        Self {
+            action: &e.action,
+            actor: &e.actor,
+            bytes: e.bytes,
+            claimed_by: &e.claimed_by,
+            decision: &e.decision,
+            prev_hash: &e.prev_hash,
+            request_hash: &e.request_hash,
+            result: &e.result,
+            rule_ids: &e.rule_ids,
+            seq: e.seq,
+            session: &e.session,
+            token_rev_id: &e.token_rev_id,
+            ts_wall: &e.ts_wall,
+        }
+    }
+}
+
+struct Sha256Writer<'a>(&'a mut Sha256);
+
+impl std::io::Write for Sha256Writer<'_> {
+    #[inline]
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.update(buf);
+        Ok(buf.len())
+    }
+    #[inline]
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[inline]
+fn hash_event(e: &Event) -> String {
+    let mut h = Sha256::new();
+    h.update(e.prev_hash.as_bytes());
+    let body = CanonicalEventBody::from(e);
+    serde_json::to_writer(Sha256Writer(&mut h), &body)
+        .expect("infallible serialization into Sha256Writer");
+    hex_encode(h.finalize())
 }
 
 fn canonical(v: &serde_json::Value) -> Vec<u8> {
@@ -71,6 +144,7 @@ pub fn hash_for(prev_hash: &str, body: &serde_json::Value) -> String {
     hex_encode(h.finalize())
 }
 
+#[cfg(test)]
 fn event_body(e: &Event) -> serde_json::Value {
     serde_json::json!({
         "seq": e.seq, "ts_wall": e.ts_wall, "session": e.session,
@@ -186,17 +260,55 @@ impl Writer {
         }
         e.seq = self.next_seq;
         e.prev_hash = self.head.clone();
-        let body = event_body(&e);
-        e.hash = hash_for(&e.prev_hash, &body);
-        let line = serde_json::to_string(&e)?;
-        self.file.write_all(line.as_bytes())?;
-        self.file.write_all(b"\n")?;
-        self.file.flush()?;
-        self.file.sync_all()?;
-        self.known_len = self.file.metadata()?.len();
+        e.hash = hash_event(&e);
+        let mut line = Vec::with_capacity(256);
+        serde_json::to_writer(&mut line, &e)?;
+        line.push(b'\n');
+        self.file.write_all(&line)?;
+        self.file.sync_data()?;
+        self.known_len += line.len() as u64;
         self.next_seq += 1;
         self.head = e.hash.clone();
         Ok(e)
+    }
+
+    /// Group-commit append: chains and writes a batch of events in one buffer
+    /// with a single fdatasync (`sync_data`), preserving write-ahead order (I4).
+    pub fn append_batch(&mut self, mut events: Vec<Event>) -> anyhow::Result<Vec<Event>> {
+        if events.is_empty() {
+            return Ok(events);
+        }
+        ensure_not_tainted(&self.path)?;
+        let _g = FlockGuard::lock(&self.file, &self.path)?;
+        if self.file.metadata()?.len() != self.known_len {
+            self.resync()?;
+        }
+        let mut buf = Vec::with_capacity(events.len() * 256);
+        let mut seq = self.next_seq;
+        let mut head = self.head.clone();
+        let mut saw_freeze = false;
+        for e in &mut events {
+            anyhow::ensure!(
+                !saw_freeze,
+                "cannot append event after deny-all panic freeze in batch"
+            );
+            e.seq = seq;
+            e.prev_hash = head;
+            e.hash = hash_event(e);
+            serde_json::to_writer(&mut buf, &*e)?;
+            buf.push(b'\n');
+            if e.decision == FREEZE_DECISION {
+                saw_freeze = true;
+            }
+            seq += 1;
+            head = e.hash.clone();
+        }
+        self.file.write_all(&buf)?;
+        self.file.sync_data()?;
+        self.known_len += buf.len() as u64;
+        self.next_seq = seq;
+        self.head = head;
+        Ok(events)
     }
 }
 
@@ -230,19 +342,25 @@ fn ensure_not_tainted(path: &Path) -> anyhow::Result<()> {
 /// Verify the chain; also report whether it ends in a panic freeze.
 fn verify_chain(path: &Path) -> anyhow::Result<(u64, String, bool)> {
     let f = File::open(path)?;
+    let mut reader = BufReader::with_capacity(64 * 1024, f);
+    let mut line = String::with_capacity(512);
     let mut expect_prev = "GENESIS".to_string();
     let mut expect_seq = 0u64;
     let mut count = 0u64;
     let mut frozen_at: Option<u64> = None;
-    for line in BufReader::new(f).lines() {
-        let line = line?;
-        if line.trim().is_empty() {
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
             continue;
         }
         if let Some(pseq) = frozen_at {
             anyhow::bail!("log extended after panic freeze at seq {pseq}");
         }
-        let e: Event = serde_json::from_str(&line)?;
+        let e: Event = serde_json::from_str(trimmed)?;
         anyhow::ensure!(
             e.seq == expect_seq,
             "seq gap: got {} want {}",
@@ -250,12 +368,12 @@ fn verify_chain(path: &Path) -> anyhow::Result<(u64, String, bool)> {
             expect_seq
         );
         anyhow::ensure!(e.prev_hash == expect_prev, "chain break at seq {}", e.seq);
-        let recomputed = hash_for(&e.prev_hash, &event_body(&e));
+        let recomputed = hash_event(&e);
         anyhow::ensure!(recomputed == e.hash, "hash mismatch at seq {}", e.seq);
         if e.decision == FREEZE_DECISION {
             frozen_at = Some(e.seq);
         }
-        expect_prev = e.hash.clone();
+        expect_prev = e.hash;
         expect_seq += 1;
         count += 1;
     }
@@ -513,6 +631,48 @@ mod tests {
             prev_hash: String::new(),
             hash: String::new(),
         }
+    }
+
+    #[test]
+    fn append_batch_chains_properly_and_verifies() {
+        let dir = std::env::temp_dir().join(format!("toolcage-audit-batch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("batch.jsonl");
+        let mut w = Writer::open(&p).unwrap();
+
+        let batch1 = vec![
+            ev("act0", "allow"),
+            ev("act1", "allow"),
+            ev("act2", "allow"),
+        ];
+        let out1 = w.append_batch(batch1).unwrap();
+        assert_eq!(out1.len(), 3);
+        for (idx, item) in out1.iter().enumerate() {
+            assert_eq!(item.seq, idx as u64);
+            assert_eq!(item.hash, hash_for(&item.prev_hash, &event_body(item)));
+        }
+        assert_eq!(out1[1].prev_hash, out1[0].hash);
+        assert_eq!(out1[2].prev_hash, out1[1].hash);
+
+        let batch2 = vec![ev("act3", "allow"), ev("act4", "allow")];
+        let out2 = w.append_batch(batch2).unwrap();
+        assert_eq!(out2.len(), 2);
+        assert_eq!(out2[0].seq, 3);
+        assert_eq!(out2[1].seq, 4);
+        assert_eq!(out2[0].prev_hash, out1[2].hash);
+        assert_eq!(out2[1].prev_hash, out2[0].hash);
+
+        let (count, head) = verify(&p).expect("batch appends must verify cleanly");
+        assert_eq!(count, 5);
+        assert_eq!(head, out2[1].hash);
+
+        // Extending after a freeze inside a single batch must fail closed.
+        assert!(w
+            .append_batch(vec![ev("panic", FREEZE_DECISION), ev("act5", "allow")])
+            .is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

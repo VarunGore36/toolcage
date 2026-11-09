@@ -51,3 +51,35 @@ fn over_cap_output_does_not_sigpipe_the_writer() {
     assert_eq!(out.stdout.len(), 4096, "output is still capped");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn runaway_flood_writer_is_killed_on_overrun_before_timeout() {
+    let dir = std::env::temp_dir().join(format!("tc-overrun-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("flood.sh");
+    // 64 MiB stream from /dev/zero — exceeds OVERRUN_KILL_BYTES (16 MiB)
+    // and must trigger immediate killpg overrun termination rather than
+    // waiting for the 30-second timeout.
+    std::fs::write(&script, "#!/bin/bash\nhead -c 67108864 /dev/zero\n").unwrap();
+    let mut perm = std::fs::metadata(&script).unwrap().permissions();
+    perm.set_mode(0o755);
+    std::fs::set_permissions(&script, perm).unwrap();
+
+    let audit = dir.join("audit.jsonl");
+    let mut s = sup_at(&audit);
+    let start = std::time::Instant::now();
+    let out = s
+        .exec_limits(&[script.display().to_string()], 30, 1024)
+        .unwrap();
+    let elapsed = start.elapsed();
+    assert!(out.allowed);
+    assert_eq!(out.stdout.len(), 1024);
+    assert!(
+        elapsed.as_secs() < 10,
+        "runaway writer must be killed on overrun well before 30s timeout (took {:?})",
+        elapsed
+    );
+    let log = std::fs::read_to_string(&audit).unwrap();
+    assert!(log.contains("truncated=true"));
+    let _ = std::fs::remove_dir_all(&dir);
+}

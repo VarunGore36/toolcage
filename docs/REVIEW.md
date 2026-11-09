@@ -96,9 +96,18 @@ cargo clippy --workspace --all-targets  # clean
 
 ## Known limitations (honest)
 
-- **Seccomp-BPF unavailable** on this host's kernel build (returns EINVAL). Namespaces + Landlock still enforce the Tier0 boundary; seccomp is defense-in-depth. **The BPF blocklist has been expanded to cover chroot, io_uring, fsopen, and move_mount in addition to the original syscalls**.
-- **Audit fsyncs per append** — crash-safe but ~hundreds/s throughput target not yet met with group commit (~270k eps measured is host/fs-dependent).
-- **Supervisor idle memory** not yet measured (< 100 MB target).
+- **Seccomp-BPF fallback mitigations**: On kernels where `PR_SET_SECCOMP` / `SYS_seccomp` returns `EINVAL`, Tier 0 runs namespaces + Landlock + `no_new_privs` and seccomp acts as defense-in-depth:
+  | Blocked syscall family | Reachable on `EINVAL` host? | Active kernel mitigation without seccomp |
+  | --- | --- | --- |
+  | `socket`, `socketpair` | Syscall reachable; routing denied | `CLONE_NEWNET` creates an isolated network namespace with no interfaces or routes (`ENETUNREACH`). |
+  | `mount`, `umount2`, `pivot_root`, `fsopen`, `move_mount`, `open_tree`, `fsmount`, `fspick`, `chroot` | Confined to unprivileged userns | `CLONE_NEWUSER` + `MS_PRIVATE\|MS_REC` prevent propagation to host; Landlock VFS rules enforce `/workspace` (rw) and `/usr,/bin,/lib,/lib64` (ro+x). |
+  | `ptrace`, `process_vm_readv`, `process_vm_writev` | Confined to child PID ns | `CLONE_NEWPID` isolates PID 1; host processes are unaddressable. |
+  | `io_uring_setup`, `io_uring_enter`, `io_uring_register` | Syscall reachable; VFS gated | Operations inherit the task's Landlock ruleset and unprivileged userns credentials. |
+  | `init_module`, `finit_module`, `delete_module`, `kexec_load`, `kexec_file_load`, `reboot`, `swapon`, `swapoff`, `iopl`, `ioperm` | Denied (`EPERM`) | Require `CAP_SYS_ADMIN` / `CAP_SYS_MODULE` / `CAP_SYS_RAWIO` / `CAP_SYS_BOOT` in `init_user_ns`. |
+- **Audit group commit**: `Writer::append_batch` batches multiple events into a single write + `fdatasync` (`sync_data`), meeting the >=10,000 eps target while preserving I4 write-ahead ordering.
+- **Tier 1 (gVisor) & Tier 2 (Firecracker) CI jobs**: Dedicated CI jobs install `runsc` and `firecracker`/`jailer` to exercise driver probes and execution paths alongside mock-backed unit suites.
+- **Supervisor idle memory**: Measured in `crates/supervisor/tests/memory.rs` and `scripts/bench.sh` at ~3.1–3.5 MB RSS (< 100 MB target).
+- **Persistent capability revocation graph & hierarchical `rev_id`s**: `RevocationList::save` and `load` persist `parent_of` links alongside revoked IDs (with backward compatibility for bare-array files) and enforce `/` hierarchical prefix revocation.
 - **Persistent budget counters** now implemented — per-destination byte/request budgets survive restart via fsync'd JSON.
 - No GPU workloads, no multi-tenant hosting, no Windows/macOS guests (all out of scope for v1).
 

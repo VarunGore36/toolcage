@@ -28,10 +28,14 @@ echo "namespace stack / Landlock ABI / seccomp are probed by \`toolcage-cli doct
 echo "(this script cannot call it: that command runs this script)."
 echo ""
 echo "Honest assessment:"
-echo "- seccomp-BPF: available on kernels that accept it; this host's kernel"
-echo "  returns EINVAL for PR_SET_SECCOMP, so Tier 0 runs namespaces+Landlock"
-echo "  only (seccomp is defense-in-depth, not active BPF filter)."
+echo "- seccomp-BPF: available on kernels that accept it; on kernels that"
+echo "  return EINVAL for PR_SET_SECCOMP, Tier 0 runs namespaces+Landlock"
+echo "  only (seccomp is defense-in-depth; see fallback mitigations matrix in docs/REVIEW.md)."
 echo "- Landlock: active; doctor reports the detected ABI version."
-echo "- cgroup v2: present" if [ -f /sys/fs/cgroup/cgroup.controllers ]; then echo "yes"; fi
+if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+  echo "- cgroup v2: present"
+else
+  echo "- cgroup v2: missing"
+fi
 echo "- GPU / multi-tenant / macOS: out of scope (Linux only, no GPU, no multi-tenant,"
 echo "  no Windows/macOS guests)."

@@ -14,12 +14,13 @@
 //!   unconfined path is the explicit `allow_unisolated` operator opt-in, and it
 //!   is marked `isolation:unisolated` in the audit outcome so the log never
 //!   shows an unconfined run as a sandboxed one.
-//! - Output cap 1 MiB post-hoc: Command::output() buffers unbounded BEFORE
-//!   truncate, so a fork-bomb writer can OOM the supervisor. Next step is
-//!   streaming with take(CAP) + kill on overrun; truncation flag already logged.
-//! - No timeout/cgroup yet: exec blocks indefinitely and inherits no limits.
-//!   Add wall-clock kill (whole process group) + cgroup v2 caps before
-//!   untrusted workloads; enforce in supervisor, never trust guest rlimits.
+//! - Output cap streaming + overrun kill: stdout/stderr use `Read::take(cap)`
+//!   into a bounded buffer followed by a capped drain (`OVERRUN_KILL_BYTES`) that
+//!   SIGKILLs the workload process group (`killpg`) on runaway flood overrun;
+//!   truncation flag is logged in the audit outcome.
+//! - Wall-clock timeout & process-group reap: exec enforces a wall-clock deadline
+//!   and reaps the whole workload process group (`killpg`) on timeout or child exit,
+//!   preventing background grandchildren from outliving the execution.
 //! - fetch_via_proxy: token deny and approval pause are audited as their own
 //!   events (token:deny / approval:required). approved=false + gated policy
 //!   returns need_approval (CLI exit 3), never proceeds. Timeout = deny.
@@ -108,26 +109,49 @@ fn request_size_estimate(method: &str, path: &str, headers: &[(String, String)])
     (n + 256) as u64 // safety margin
 }
 
-/// Read `r` to EOF, keeping at most `cap` bytes and reporting truncation.
-/// Drains past the cap on purpose: dropping the reader early closes the pipe
-/// and SIGPIPEs the workload still writing to it (its exit code comes back
-/// corrupted). Memory stays bounded — bytes past the cap are discarded, so a
-/// fork-bomb writer cannot OOM the supervisor. Read errors retry (EINTR);
-/// only EOF or a hard error ends the drain.
-fn read_capped_drain(mut r: impl std::io::Read, cap: usize) -> (Vec<u8>, bool) {
-    let mut buf = Vec::new();
-    let mut tmp = [0u8; 4096];
+/// Maximum bytes drained past `cap` before a runaway writer is treated as an
+/// unbounded flood (e.g. `yes`, `/dev/zero` fork-bomb) and its process group
+/// is SIGKILLed immediately rather than spinning until `timeout_secs`.
+const OVERRUN_KILL_BYTES: usize = 16 * 1024 * 1024;
+
+/// Read `r` with `Read::take(cap)`, keeping at most `cap` bytes in memory,
+/// then drain up to `OVERRUN_KILL_BYTES` before killing `pgid` on overrun.
+///
+/// Finite over-cap writers (below `OVERRUN_KILL_BYTES`) are drained to EOF so
+/// dropping the reader early does not SIGPIPE them and corrupt their exit code;
+/// runaway flooders are killed via `killpg(pgid, SIGKILL)` once they exceed the
+/// drain ceiling. Read errors retry on `EINTR`.
+fn read_capped_drain(mut r: impl std::io::Read, cap: usize, pgid: Option<i32>) -> (Vec<u8>, bool) {
+    use std::io::Read;
+    let mut buf = Vec::with_capacity(cap.min(64 * 1024));
+    let mut limited = r.by_ref().take(cap as u64);
+    let mut tmp = [0u8; 8192];
+    loop {
+        match limited.read(&mut tmp) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return (buf, false),
+        }
+    }
+    if buf.len() < cap {
+        return (buf, false);
+    }
     let mut truncated = false;
+    let mut drained: usize = 0;
     loop {
         match r.read(&mut tmp) {
             Ok(0) => break,
             Ok(n) => {
-                if buf.len() < cap {
-                    let take = (cap - buf.len()).min(n);
-                    buf.extend_from_slice(&tmp[..take]);
-                    truncated |= take < n;
-                } else {
-                    truncated = true;
+                truncated = true;
+                drained = drained.saturating_add(n);
+                if drained >= OVERRUN_KILL_BYTES {
+                    if let Some(pg) = pgid {
+                        if pg > 0 {
+                            unsafe { libc::killpg(pg, libc::SIGKILL) };
+                        }
+                    }
+                    break;
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -324,20 +348,21 @@ impl Supervisor {
             // everything the workload forks, not just the direct child.
             .process_group(0)
             .spawn()?;
+        let child_pgid = child.id() as i32;
         let (tx_out, rx_out) = channel();
         let (tx_err, rx_err) = channel();
         let mut co = child.stdout.take();
         let mut ce = child.stderr.take();
         std::thread::spawn(move || {
             let out = match co.take() {
-                Some(f) => read_capped_drain(f, cap),
+                Some(f) => read_capped_drain(f, cap, Some(child_pgid)),
                 None => (Vec::new(), false),
             };
             let _ = tx_out.send(out);
         });
         std::thread::spawn(move || {
             let out = match ce.take() {
-                Some(f) => read_capped_drain(f, cap),
+                Some(f) => read_capped_drain(f, cap, Some(child_pgid)),
                 None => (Vec::new(), false),
             };
             let _ = tx_err.send(out);

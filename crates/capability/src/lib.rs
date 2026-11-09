@@ -20,8 +20,9 @@
 //!   v0 made empty `methods` a wildcard, which let attenuate() widen a child
 //!   by narrowing methods to [] — found by the property test).
 //! - Revocation walks parent_of links: revoke(parent) kills subtree. Links are
-//!   tracked in-memory via track(); a restart forgets them — persist the graph
-//!   or use hierarchical rev_ids before relying on revoke across restarts.
+//!   tracked via track() and persisted alongside revoked IDs in save()/load()
+//!   (plus hierarchical `/` prefix matching and signed ancestor lineage) so
+//!   subtree revocation survives restarts.
 //! - Expiry 0 means "unbounded" only for roots; children of a bounded parent
 //!   must set expiry <= parent (enforced). System clock jumps forward can
 //!   prematurely expire; jumps backward extend — enforce monotonic time where
@@ -33,7 +34,7 @@ use std::path::Path;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Rights {
     #[serde(default)]
     pub fs_prefixes: Vec<String>,
@@ -151,8 +152,13 @@ fn hex_bytes(s: &str) -> Option<Vec<u8>> {
 pub fn validate_rev_id(rev: &str) -> anyhow::Result<()> {
     anyhow::ensure!(!rev.is_empty() && rev.len() <= 64, "rev_id bounds");
     anyhow::ensure!(
-        rev.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-'),
+        !rev.starts_with('/')
+            && !rev.ends_with('/')
+            && !rev.contains("//")
+            && rev.bytes().all(|b| {
+                b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-' || b == b'/'
+            })
+            && rev.split('/').all(|seg| seg != "." && seg != ".."),
         "bad rev_id charset"
     );
     Ok(())
@@ -438,20 +444,31 @@ impl Token {
 }
 
 /// Revocation: revoking a rev_id revokes its whole subtree.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct RevocationList {
     revoked: HashSet<String>,
-    // child -> parent links seen (for subtree walk)
-    #[serde(skip_serializing)]
+    // child -> parent links seen (persisted alongside `revoked` so subtree
+    // walks survive process restarts).
+    #[serde(default)]
     parent_of: HashMap<String, String>,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PersistedRevocation {
+    Graph {
+        revoked: HashSet<String>,
+        #[serde(default)]
+        parent_of: HashMap<String, String>,
+    },
+    LegacySet(HashSet<String>),
+}
+
 impl RevocationList {
-    /// Save the revoked ids to a JSON file for later use with --revocation-file.
-    /// Only the revoked ids are persisted (parent links are rebuilt from
-    /// presented tokens' signed lineage at check time).
+    /// Save the revoked ids and tracked parent links to a JSON file for later
+    /// use with --revocation-file.
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
-        let data = serde_json::to_string_pretty(&self.revoked)?;
+        let data = serde_json::to_string_pretty(self)?;
         std::fs::write(path, data)?;
         #[cfg(unix)]
         {
@@ -461,14 +478,23 @@ impl RevocationList {
         Ok(())
     }
 
-    /// Load a revocation list previously written by save().
+    /// Load a revocation list previously written by save(). Accepts both the
+    /// object format (`{revoked, parent_of}`) and legacy bare-array files.
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let data = std::fs::read_to_string(path)?;
-        let revoked: HashSet<String> = serde_json::from_str(&data)?;
-        Ok(Self {
-            revoked,
-            parent_of: HashMap::new(),
-        })
+        match serde_json::from_str::<PersistedRevocation>(&data)? {
+            PersistedRevocation::Graph { revoked, parent_of } => Ok(Self { revoked, parent_of }),
+            PersistedRevocation::LegacySet(revoked) => Ok(Self {
+                revoked,
+                parent_of: HashMap::new(),
+            }),
+        }
+    }
+
+    /// Merge another revocation list (revoked ids + parent links) into `self`.
+    pub fn merge(&mut self, other: Self) {
+        self.revoked.extend(other.revoked);
+        self.parent_of.extend(other.parent_of);
     }
 }
 
@@ -477,19 +503,38 @@ impl RevocationList {
         if let Some(p) = &t.parent {
             self.parent_of.insert(t.rev_id.clone(), p.clone());
         }
+        for pair in t.ancestors.windows(2) {
+            self.parent_of.insert(pair[1].clone(), pair[0].clone());
+        }
     }
     pub fn revoke(&mut self, rev_id: &str) {
         self.revoked.insert(rev_id.to_string());
     }
+
+    // Hierarchical `/` prefix match: revoking "org/team-a" revokes
+    // "org/team-a/sess-1" even without explicit link tracking.
+    #[inline]
+    fn has_revoked_prefix(&self, id: &str) -> bool {
+        for (idx, b) in id.bytes().enumerate() {
+            if b == b'/' && idx > 0 && self.revoked.contains(&id[..idx]) {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn is_revoked(&self, t: &Token) -> bool {
-        if self.revoked.contains(&t.rev_id) {
+        if self.revoked.contains(t.rev_id.as_str()) || self.has_revoked_prefix(&t.rev_id) {
             return true;
         }
         // The signed lineage covers every hop regardless of what was
         // track()ed: revoking any ancestor revokes the whole subtree, which
         // is the README's claim ("including ones that were never tracked
         // explicitly").
-        if t.ancestors.iter().any(|a| self.revoked.contains(a)) {
+        if t.ancestors
+            .iter()
+            .any(|a| self.revoked.contains(a.as_str()) || self.has_revoked_prefix(a))
+        {
             return true;
         }
         // Belt and braces: walk tracked links too (the token's own parent
@@ -498,17 +543,17 @@ impl RevocationList {
         // A seen set terminates the walk: track() records links from
         // UNVERIFIED input (it never checks the tag), so a hostile pair
         // a→b, b→a could make the walk spin forever.
-        let mut seen: HashSet<String> = HashSet::new();
-        seen.insert(t.rev_id.clone());
-        let mut next = t.parent.clone();
+        let mut seen: HashSet<&str> = HashSet::new();
+        seen.insert(t.rev_id.as_str());
+        let mut next = t.parent.as_deref();
         while let Some(p) = next {
-            if !seen.insert(p.clone()) {
+            if !seen.insert(p) {
                 break; // cycle: stop, don't loop forever
             }
-            if self.revoked.contains(&p) {
+            if self.revoked.contains(p) || self.has_revoked_prefix(p) {
                 return true;
             }
-            next = self.parent_of.get(&p).cloned();
+            next = self.parent_of.get(p).map(String::as_str);
         }
         false
     }
@@ -1101,5 +1146,87 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn persist_revocation_graph_across_restarts() {
+        let dir = std::env::temp_dir().join(format!("tc-revoke-graph-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("graph.json");
+
+        // Multi-hop legacy tokens without signed `ancestors`: relies on `parent_of`
+        // persisting across save()/load().
+        let child = Token {
+            rev_id: "c1".into(),
+            parent: Some("r0".into()),
+            ancestors: vec![],
+            rights: Rights::default(),
+            tag: String::new(),
+        };
+        let grandchild = Token {
+            rev_id: "c2".into(),
+            parent: Some("c1".into()),
+            ancestors: vec![],
+            rights: Rights::default(),
+            tag: String::new(),
+        };
+
+        let mut rl = RevocationList::default();
+        rl.track(&child);
+        rl.track(&grandchild);
+        rl.revoke("r0");
+        assert!(rl.is_revoked(&grandchild));
+
+        rl.save(&path).unwrap();
+        let loaded = RevocationList::load(&path).unwrap();
+        assert!(
+            loaded.is_revoked(&grandchild),
+            "persisted parent_of link graph must revoke 2-hop legacy grandchild after restart"
+        );
+
+        // Legacy bare-array format must still load cleanly.
+        let legacy_path = dir.join("legacy.json");
+        std::fs::write(&legacy_path, r#"["legacy-root"]"#).unwrap();
+        let loaded_legacy = RevocationList::load(&legacy_path).unwrap();
+        let tok = Token {
+            rev_id: "legacy-root".into(),
+            parent: None,
+            ancestors: vec![],
+            rights: Rights::default(),
+            tag: String::new(),
+        };
+        assert!(loaded_legacy.is_revoked(&tok));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hierarchical_rev_id_revokes_descendants_without_tracking() {
+        let mut rl = RevocationList::default();
+        rl.revoke("org/team-a");
+
+        let leaf = Token {
+            rev_id: "org/team-a/sess-9/leaf".into(),
+            parent: None,
+            ancestors: vec![],
+            rights: Rights::default(),
+            tag: String::new(),
+        };
+        let sibling = Token {
+            rev_id: "org/team-a-other/sess-1".into(),
+            parent: None,
+            ancestors: vec![],
+            rights: Rights::default(),
+            tag: String::new(),
+        };
+        assert!(
+            rl.is_revoked(&leaf),
+            "hierarchical prefix org/team-a must revoke org/team-a/sess-9/leaf cold"
+        );
+        assert!(
+            !rl.is_revoked(&sibling),
+            "prefix check must respect '/' boundary and not revoke org/team-a-other"
+        );
     }
 }

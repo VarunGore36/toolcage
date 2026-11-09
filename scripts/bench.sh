@@ -12,7 +12,10 @@ echo "== policy decision p99 (target < 5 ms in-process) =="
 cargo test -p toolcage-policy --test timing --release -- --nocapture 2>&1 | grep -E "p50|p99|max|test result"
 
 echo "== audit append eps (target >= 10,000/s) =="
-cargo test -p toolcage-audit --test throughput --release -- --nocapture 2>&1 | grep -E "audit append|test result"
+cargo test -p toolcage-audit --test throughput --release -- --nocapture 2>&1 | grep -E "audit append|audit group commit|test result"
+
+echo "== supervisor idle memory (target < 100 MB) =="
+cargo test -p toolcage-supervisor --test memory --release -- --nocapture 2>&1 | grep -E "supervisor idle memory|test result"
 
 echo "== CLI run baseline (end-to-end Tier0 exec) =="
 cargo build -p toolcage-cli --release -q 2>&1 | tail -1

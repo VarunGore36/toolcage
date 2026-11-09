@@ -34,6 +34,26 @@
 //!
 //! Landlock: /workspace gets full file rights; /usr /bin /lib /lib64 get
 //! read+execute only; everything else is inaccessible.
+//!
+//! Fallback mitigations on kernels where PR_SET_SECCOMP returns EINVAL
+//! (Tier 0 degrades to namespaces + Landlock + no_new_privs):
+//! - `socket`, `socketpair`: isolated `CLONE_NEWNET` has no routes or external
+//!   interfaces (even loopback is down), so `connect`/`sendto` fail `ENETUNREACH`.
+//! - `mount`, `umount2`, `pivot_root`, `fsopen`, `move_mount`, `open_tree`,
+//!   `fsmount`, `fspick`, `chroot`: confined to the unprivileged userns +
+//!   `MS_PRIVATE|MS_REC` mount tree, and Landlock path rules enforce the
+//!   `/workspace` (rw) + `/usr,/bin,/lib,/lib64` (ro+x) boundary at VFS check time.
+//! - `ptrace`, `process_vm_readv`, `process_vm_writev`: `CLONE_NEWPID` places
+//!   the workload as PID 1 of an isolated PID namespace; host PIDs are invisible.
+//! - `clone`, `fork`, `vfork`, `clone3`, `unshare`, `setns`: contained within
+//!   the child PID/user namespace and reaped when PID 1 exits; Landlock and
+//!   `no_new_privs` are inherited irreversibly across all descendants.
+//! - `io_uring_setup`, `io_uring_enter`, `io_uring_register`: file operations
+//!   submitted via io_uring inherit the task's Landlock domain and userns creds.
+//! - `init_module`, `finit_module`, `delete_module`, `kexec_load`, `kexec_file_load`,
+//!   `reboot`, `swapon`, `swapoff`, `iopl`, `ioperm`: require `CAP_SYS_ADMIN` /
+//!   `CAP_SYS_MODULE` / `CAP_SYS_RAWIO` / `CAP_SYS_BOOT` in `init_user_ns`, which
+//!   an unprivileged `CLONE_NEWUSER` child never possesses (`EPERM`).
 
 use libc::{
     c_char, c_int, c_long, c_uint, c_ulong, c_void, getgid, getuid, prctl, sock_filter, sock_fprog,
@@ -334,6 +354,9 @@ fn seccomp_works() -> bool {
             }
         }
         Ok(ForkResult::Child) => {
+            // Set PR_SET_NO_NEW_PRIVS (38) first so unprivileged callers do not
+            // fail PR_SET_SECCOMP with EACCES before the kernel checks the filter.
+            let _ = unsafe { prctl(38, 1, 0, 0, 0) };
             // Trivial allow-all filter: load seccomp_data.nr, return ALLOW.
             let filter = [sock_filter {
                 code: (BPF_RET | BPF_K) as u16,
@@ -345,7 +368,7 @@ fn seccomp_works() -> bool {
                 len: filter.len() as u16,
                 filter: filter.as_ptr() as *mut sock_filter,
             };
-            let rc = unsafe {
+            let mut rc = unsafe {
                 prctl(
                     22, // PR_SET_SECCOMP
                     SECCOMP_MODE_FILTER as c_ulong,
@@ -354,6 +377,16 @@ fn seccomp_works() -> bool {
                     0,
                 )
             };
+            if rc != 0 {
+                rc = unsafe {
+                    syscall(
+                        libc::SYS_seccomp,
+                        1 as c_long, // SECCOMP_SET_MODE_FILTER
+                        0 as c_long,
+                        &prog as *const sock_fprog as c_long,
+                    ) as c_int
+                };
+            }
             unsafe { libc::_exit(if rc == 0 { 0 } else { 1 }) };
         }
         Err(_) => false,
@@ -1247,7 +1280,7 @@ fn apply_seccomp(insns: &[sock_filter]) {
         };
         // no_new_privs is already set (see isolated_exec) — it is what makes
         // unprivileged seccomp installation work.
-        let rc = unsafe {
+        let mut rc = unsafe {
             prctl(
                 22, // PR_SET_SECCOMP
                 SECCOMP_MODE_FILTER as c_ulong,
@@ -1257,8 +1290,19 @@ fn apply_seccomp(insns: &[sock_filter]) {
             )
         };
         if rc != 0 {
+            rc = unsafe {
+                syscall(
+                    libc::SYS_seccomp,
+                    1 as c_long, // SECCOMP_SET_MODE_FILTER
+                    0 as c_long,
+                    &prog as *const sock_fprog as c_long,
+                ) as c_int
+            };
+        }
+        if rc != 0 {
             // Seccomp unavailable on this host (EINVAL on some kernels).
-            // Namespaces + Landlock still enforce the boundary.
+            // Namespaces + Landlock still enforce the boundary (see fallback
+            // mitigations matrix in the module header and docs/REVIEW.md).
             child_warn(b"toolcage: seccomp unavailable, continuing without it\n");
         }
     }
