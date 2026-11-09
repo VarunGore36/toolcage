@@ -48,17 +48,27 @@ pub fn needs_approval(
             return false;
         }
         // Fail closed on unknown: an absent/empty method or host is UNKNOWN,
-        // not "matches nothing". A gate written for GET must not be dodged by
-        // not spelling the method — the same bug policy::needs_approval had.
+        // not "matches nothing" — a method-less request could be the gated
+        // method, so the gate must fire and let the operator decide. Only a
+        // KNOWN-and-non-matching value (GET against a POST gate, evil
+        // against a github gate) proves the rule does not apply.
+        //
+        // History note: commit 4cf7729 got this right ("an unknown method or
+        // host cannot dodge a gate"); 5135ab7 — on a branch named
+        // fix/approval-fail-closed, with a message claiming the opposite —
+        // inverted the predicate into fail-open. The tests' MESSAGES
+        // described the correct behavior while their assertions had been
+        // flipped to pin the dodge. This restores 4cf7729's semantics and
+        // re-aligns the assertions with their own messages.
         if !r.methods.is_empty() {
             let m = method.unwrap_or("");
-            if m.is_empty() || !r.methods.iter().any(|x| x.eq_ignore_ascii_case(m)) {
+            if !m.is_empty() && !r.methods.iter().any(|x| x.eq_ignore_ascii_case(m)) {
                 return false;
             }
         }
         if !r.hosts.is_empty() {
             let h = host.unwrap_or("");
-            if h.is_empty() || !r.hosts.iter().any(|x| x.eq_ignore_ascii_case(h)) {
+            if !h.is_empty() && !r.hosts.iter().any(|x| x.eq_ignore_ascii_case(h)) {
                 return false;
             }
         }
@@ -135,22 +145,25 @@ mod tests {
     fn unknown_method_or_host_cannot_dodge_a_gate() {
         // An absent/empty method or host is UNKNOWN, not "matches nothing" —
         // a gate written for POST+github must not be escaped by simply not
-        // spelling the method or the host. (policy::needs_approval had the
-        // same bug; this is the same fix.)
+        // spelling the method or the host: the gate fires and the operator
+        // decides. (policy::needs_approval had the same bug; this is the
+        // same fix. 5135ab7 inverted this predicate while its message
+        // claimed the opposite — the assertions below now agree with their
+        // own messages.)
         let rules = vec![ApprovalRule {
             action: "http.request".into(),
             methods: vec!["POST".into()],
             hosts: vec!["github".into()],
         }];
         assert!(
-            !needs_approval(&rules, "http.request", None, Some("github")),
+            needs_approval(&rules, "http.request", None, Some("github")),
             "an unknown method must not dodge a method-constrained gate"
         );
         assert!(
-            !needs_approval(&rules, "http.request", Some("POST"), None),
+            needs_approval(&rules, "http.request", Some("POST"), None),
             "an unknown host must not dodge a host-constrained gate"
         );
-        assert!(!needs_approval(&rules, "http.request", None, None));
+        assert!(needs_approval(&rules, "http.request", None, None));
         // Known-and-wrong values still do not trigger the gate.
         assert!(!needs_approval(
             &rules,
