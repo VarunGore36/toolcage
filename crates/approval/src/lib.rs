@@ -49,6 +49,10 @@ pub struct Pending {
     pub action: String,
     pub host: Option<String>,
     pub method: Option<String>,
+    /// Wall-clock seconds at request() time. The crate has no clock of its
+    /// own — the caller's sweep passes `now` — but the timestamp is captured
+    /// here so "timeout = deny" is enforceable from the recorded data.
+    pub created_at: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +111,14 @@ impl Queue {
     pub fn request(&mut self, action: &str, host: Option<&str>, method: Option<&str>) -> String {
         self.counter += 1;
         let id = format!("appr-{}", self.counter);
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            // A pre-epoch clock yields 0: the entry simply never looks
+            // expired relative to a sane `now`, and the caller's timeout
+            // sweep stays the enforcement point. Fail-closed behavior on a
+            // broken clock belongs to the caller's timeout, not here.
+            .unwrap_or(0);
         self.pending.insert(
             id.clone(),
             Pending {
@@ -114,6 +126,7 @@ impl Queue {
                 action: action.into(),
                 host: host.map(|s| s.to_string()),
                 method: method.map(|s| s.to_string()),
+                created_at,
             },
         );
         id
