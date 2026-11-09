@@ -1,16 +1,36 @@
 //! Approval gates v0: actions matching require_for pause for out-of-band decision.
 //! Timeout = deny. Every pause + decision is audit-logged by the caller.
 //!
+//! GATE POLARITY (needs_approval): for a constrained axis, UNKNOWN fires the
+//! gate and KNOWN-WRONG passes it:
+//!   method/host = None or empty  -> UNKNOWN  -> gate FIRES (it could be the
+//!                                   gated value; the operator decides)
+//!   method/host = known, wrong   -> KNOWN-WRONG -> gate passes
+//!   list absent/empty            -> wildcard   -> matches everything
+//! An inversion of the first rule turns every gate into a rubber stamp for
+//! any request that omits the field the gate is written for.
+//!
+//! History: 4cf7729 established this polarity ("an unknown method or host
+//! cannot dodge a gate"); 5135ab7 — on a branch named fix/approval-fail-
+//! closed, with a message claiming the opposite — inverted it to fail-open;
+//! the tests' messages kept describing the correct behavior while their
+//! assertions pinned the dodge, and THREAT_MODEL I3 kept claiming the fix
+//! existed. Restored in the approval-gate series; the decision-table tests
+//! now pin it from both crates.
+//!
 //! REVIEW:
 //! - needs_approval() matches (action, method?, host?) with empty lists as
 //!   wildcards. Adding a path axis? Keep wildcard semantics explicit — an
 //!   absent list must mean "all", never "none", or gates silently stop firing.
+//!   Keep the UNKNOWN-fires rule per axis too: a new axis with the inverted
+//!   polarity is the same bug in a new place.
 //! - Queue is in-memory with monotonic appr-N ids. Restart loses pending +
 //!   decided maps: in-flight approvals resolve to deny on restart (fail-closed
 //!   only if callers treat unknown ids as deny — enforce that at call sites).
 //! - decide() on unknown id returns false; resolve() unknown returns None
 //!   (still waiting). Callers must map None-after-timeout to deny, never to
-//!   allow, and audit the timeout as its own event.
+//!   allow, and audit the timeout as its own event. decide() on an
+//!   already-decided id returns false: the first verdict stands.
 //! - No approver auth here: whoever calls decide() approves. Bind approver
 //!   identity + audit actor before exposing beyond local operator CLI.
 use serde::{Deserialize, Serialize};
