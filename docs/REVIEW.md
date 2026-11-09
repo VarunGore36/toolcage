@@ -91,7 +91,7 @@ cargo clippy --workspace --all-targets  # clean
 | Tokens cannot widen on delegate | I3 — 200-seed property test, narrow/widen/revoke/tamper unit tests |
 | Every action logged before it runs | I4 — write-ahead intent logging, chaos tests kill supervisor mid-action |
 | Log tampering detected | I5 — audit mutation tests flip/delete/reorder bytes; verify fails |
-| Shell strings blocked | I6 — `sh -c`/`bash -c` denied at policy and guest-agent level |
+| Shell strings blocked | I6 — `sh -c`/`bash -c` denied at policy and guest-agent level; the argv-shape bypasses are closed and pinned by the exec-denylist suite: `env -S`/`--split-string` reassembly, shell startup files (`--rcfile=`/`--init-file=`), the awk family, python `-m`, and perl/ruby `-x` all deny with `deny:shell`; the end-to-end matrix runs through the real YAML loader and the cross-product matrix covers wrapper x interpreter x flag-spelling forms |
 | Cross-session isolation | I7 — canary tests write marked data, confirm later sessions can't read it |
 
 ## Known limitations (honest)
