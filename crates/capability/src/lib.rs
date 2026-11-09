@@ -93,15 +93,15 @@ impl Key {
         let s = s.trim();
         let b = s.as_bytes();
         anyhow::ensure!(
-            b.len() == 64 && b.iter().all(|c| c.is_ascii_hexdigit()),
+            b.len() == 64,
             "key must be 64 hex chars, got {} chars",
             b.len()
         );
         let mut bytes = [0u8; 32];
-        for (i, slot) in bytes.iter_mut().enumerate() {
-            // Safe to slice: ASCII hexdigits only, even offsets.
-            *slot = u8::from_str_radix(&s[2 * i..2 * i + 2], 16)
-                .map_err(|_| anyhow::anyhow!("bad key hex"))?;
+        for (slot, &[hi_b, lo_b]) in bytes.iter_mut().zip(b.as_chunks::<2>().0) {
+            let hi = hex_nibble(hi_b).ok_or_else(|| anyhow::anyhow!("bad key hex"))?;
+            let lo = hex_nibble(lo_b).ok_or_else(|| anyhow::anyhow!("bad key hex"))?;
+            *slot = (hi << 4) | lo;
         }
         Ok(Self(bytes))
     }
@@ -111,18 +111,38 @@ impl Key {
     }
 }
 
+#[inline]
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn hex_lower(bytes: &[u8]) -> String {
-    bytes.iter().map(|x| format!("{:02x}", x)).collect()
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
 }
 
 fn hex_bytes(s: &str) -> Option<Vec<u8>> {
     let b = s.as_bytes();
-    if !b.len().is_multiple_of(2) || !b.iter().all(|c| c.is_ascii_hexdigit()) {
+    if !b.len().is_multiple_of(2) {
         return None;
     }
-    (0..b.len() / 2)
-        .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok())
-        .collect()
+    let mut out = Vec::with_capacity(b.len() / 2);
+    for &[hi_b, lo_b] in b.as_chunks::<2>().0 {
+        let hi = hex_nibble(hi_b)?;
+        let lo = hex_nibble(lo_b)?;
+        out.push((hi << 4) | lo);
+    }
+    Some(out)
 }
 
 /// A rev_id names a token in the audit trail and the revocation list: keep it
@@ -196,11 +216,15 @@ fn mac_for(
 /// token granted `fs_prefixes: ["/"]` allowed nothing and could not even be
 /// narrowed to a subpath.
 fn fs_prefix_covers(npp: &str, np: &str) -> bool {
-    npp == "/" || np == npp || np.starts_with(&format!("{npp}/"))
+    npp == "/"
+        || np == npp
+        || np
+            .strip_prefix(npp)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn normalize_fs(p: &str) -> String {
-    let mut parts: Vec<&str> = vec![];
+    let mut parts: Vec<&str> = Vec::new();
     for comp in p.split('/') {
         match comp {
             "" | "." => {}
@@ -210,7 +234,16 @@ fn normalize_fs(p: &str) -> String {
             c => parts.push(c),
         }
     }
-    format!("/{}", parts.join("/"))
+    if parts.is_empty() {
+        return "/".to_string();
+    }
+    let cap: usize = parts.iter().map(|s| 1 + s.len()).sum();
+    let mut out = String::with_capacity(cap);
+    for part in parts {
+        out.push('/');
+        out.push_str(part);
+    }
+    out
 }
 
 fn now_secs() -> u64 {
@@ -288,10 +321,9 @@ impl Token {
         }
         // net/methods: subsets, case-insensitive. creds: case-sensitive (identifiers).
         let sub_ins = |child: &[String], parent: &[String], what: &str| -> anyhow::Result<()> {
-            let ps: HashSet<_> = parent.iter().map(|s| s.to_ascii_lowercase()).collect();
             for c in child {
                 anyhow::ensure!(
-                    ps.contains(&c.to_ascii_lowercase()),
+                    parent.iter().any(|p| p.eq_ignore_ascii_case(c)),
                     "{what} {c} widens parent"
                 );
             }

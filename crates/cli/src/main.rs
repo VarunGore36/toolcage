@@ -439,6 +439,26 @@ fn write_public(path: &std::path::Path, bytes: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[inline]
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
 /// Decode a 64-char (32-byte) hex string into [u8; 32]. Returns an error
 /// (never panics) on wrong length, odd length, or non-hex input — replaces
 /// the old `hex[2*i..2*i+2]` slicing that panicked on short or non-ASCII input.
@@ -446,14 +466,17 @@ fn parse_hex32(s: &str) -> anyhow::Result<[u8; 32]> {
     let s = s.trim();
     let b = s.as_bytes();
     anyhow::ensure!(
-        b.len() == 64 && b.iter().all(|c| c.is_ascii_hexdigit()),
+        b.len() == 64,
         "expected 64 hex chars (32 bytes), got {} chars",
         b.len()
     );
     let mut out = [0u8; 32];
-    for (i, slot) in out.iter_mut().enumerate() {
-        *slot = u8::from_str_radix(&s[2 * i..2 * i + 2], 16)
-            .map_err(|_| anyhow::anyhow!("bad hex at position {}", 2 * i))?;
+    for (i, (slot, &[hi_b, lo_b])) in out.iter_mut().zip(b.as_chunks::<2>().0).enumerate() {
+        let hi =
+            hex_nibble(hi_b).ok_or_else(|| anyhow::anyhow!("bad hex at position {}", 2 * i))?;
+        let lo =
+            hex_nibble(lo_b).ok_or_else(|| anyhow::anyhow!("bad hex at position {}", 2 * i + 1))?;
+        *slot = (hi << 4) | lo;
     }
     Ok(out)
 }
@@ -809,7 +832,7 @@ fn main() -> anyhow::Result<()> {
                 let sig_path = dir.join("signature.bin");
                 write_public(&sig_path, &sig)?;
                 let pk = toolcage_audit::pubkey_of(&sk)?;
-                let pk_hex: String = pk.iter().map(|b| format!("{b:02x}")).collect();
+                let pk_hex = hex_encode(&pk);
                 println!("signed {} (pubkey {pk_hex})", sig_path.display());
             }
             ImageOp::Verify { dir, pubkey } => {
@@ -1144,8 +1167,8 @@ fn main() -> anyhow::Result<()> {
                 let mut rnd = std::fs::File::open("/dev/urandom")?;
                 let mut skb = [0u8; 32];
                 rnd.read_exact(&mut skb)?;
-                let sk_hex: String = skb.iter().map(|x| format!("{:02x}", x)).collect();
-                let sk = parse_hex32(&sk_hex)?;
+                let sk_hex = hex_encode(&skb);
+                let sk = skb;
                 // REVIEW: pubkey derived locally; secret never leaves host.
                 let cp = toolcage_audit::sign_checkpoint(0, "GENESIS", "0", &sk)?;
                 // Append instead of with_extension: out/a.v1 and out/a.v2 must

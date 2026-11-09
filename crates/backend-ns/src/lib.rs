@@ -71,7 +71,7 @@ use anyhow::Context;
 use nix::fcntl::{open, OFlag};
 use nix::sys::stat::Mode;
 use nix::unistd::{close, fork, pipe2, ForkResult};
-use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier};
+use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier, GUEST_PATH};
 
 // Test fixture value: exec() takes `cap` from the caller now, so the 1 MiB
 // default lives in the tests that exercise the cap.
@@ -82,45 +82,86 @@ const OUTPUT_CAP: usize = 1024 * 1024;
 /// open after the workload exits: the drain gives up instead of hanging.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
-// x86_64 syscall numbers for the seccomp filter, taken from this host's
-// installed headers (glibc agrees: socket=41, mount=165, unshare=272,
-// clone3=435, ptrace=101 all verified to match the running kernel).
-// Also blocked: fsopen, move_mount, io_uring, chroot — not previously covered.
+// x86_64 syscalls denied by the seccomp filter, named via libc's SYS_*
+// constants (values mirror the kernel's asm/unistd_64.h). The filter is a
+// denylist on top of the namespaces + Landlock boundary: socket(2) is denied
+// so the guest cannot dial anything (I1); mount-family, module-loading and
+// kernel-introspection syscalls are denied so the guest cannot re-attack the
+// host from inside its namespaces.
+//
+// History note: this table used to be bare numbers whose comments did not
+// match the syscalls they blocked — 61 was labeled "chroot" but is wait4,
+// 157 was labeled "nis+" but is prctl, 299 was labeled "fsopen" but is
+// recvmmsg — while chroot(161) and the new mount API (open_tree/move_mount/
+// fsopen/fsconfig/fsmount/fspick/mount_setattr, 428-433 and 442) claimed
+// coverage in comments without ever being listed. That is fixed: constants
+// make the mislabeling class impossible, the pinning test below ties every
+// constant to its kernel number, and chroot + the whole mount API are
+// genuinely denied. wait4 and prctl, which the old table blocked by
+// accident, are unblocked: the workload cannot wait for children or name
+// its threads without them, and neither call can weaken the cage
+// (no_new_privs cannot be unset, installed filters cannot be removed).
 #[cfg(target_arch = "x86_64")]
 const BLOCKED_SYSCALLS: &[c_int] = &[
-    41,  // socket
-    53,  // socketpair
-    56,  // clone
-    57,  // fork
-    58,  // vfork
-    61,  // chroot
-    101, // ptrace
-    155, // pivot_root
-    156, // nis
-    157, // nis+
-    165, // mount
-    166, // umount2
-    167, // swapon
-    168, // swapoff
-    169, // reboot
-    172, // iopl
-    173, // ioperm
-    175, // init_module
-    246, // kexec_load
-    272, // unshare
-    288, // accept4
-    291, // epoll_create1
-    298, // perf_event_open
-    299, // fsopen
-    304, // open_by_handle_at
-    308, // move_mount
-    311, // process_vm_writev
-    313, // finit_module
-    320, // kexec_file_load
-    321, // bpf
-    323, // userfaultfd
-    425, // io_uring
-    435, // clone3
+    libc::SYS_socket as c_int,
+    libc::SYS_socketpair as c_int,
+    libc::SYS_clone as c_int,
+    libc::SYS_fork as c_int,
+    libc::SYS_vfork as c_int,
+    libc::SYS_ptrace as c_int,
+    libc::SYS_pivot_root as c_int,
+    // The old table claimed chroot was blocked while actually listing 61
+    // (wait4). Block the real number: chroot would let the workload rebuild
+    // its filesystem root from inside the mount namespace.
+    libc::SYS_chroot as c_int,
+    // Removed API: ENOSYS since kernel 5.5; blocked as hardening.
+    libc::SYS__sysctl as c_int,
+    libc::SYS_mount as c_int,
+    libc::SYS_umount2 as c_int,
+    libc::SYS_swapon as c_int,
+    libc::SYS_swapoff as c_int,
+    libc::SYS_reboot as c_int,
+    libc::SYS_iopl as c_int,
+    libc::SYS_ioperm as c_int,
+    libc::SYS_init_module as c_int,
+    libc::SYS_kexec_load as c_int,
+    libc::SYS_unshare as c_int,
+    libc::SYS_accept4 as c_int,
+    libc::SYS_epoll_create1 as c_int,
+    libc::SYS_perf_event_open as c_int,
+    // Mislabeled as "fsopen" before; recvmmsg is blocked as hardening — the
+    // guest cannot create sockets in the first place.
+    libc::SYS_recvmmsg as c_int,
+    libc::SYS_open_by_handle_at as c_int,
+    // setns is blocked on purpose: joining another namespace is never
+    // legitimate for the workload (was mislabeled "move_mount" before).
+    libc::SYS_setns as c_int,
+    // The new mount API, part 1: grab/publish mount trees and create
+    // superusers. The old table claimed fsopen was blocked but listed 299
+    // (recvmmsg) instead. The workload is root with CAP_SYS_ADMIN inside
+    // its userns, so old mount(165) being blocked is not enough — these
+    // would let it build mounts the Landlock rules never anticipated.
+    libc::SYS_open_tree as c_int,
+    libc::SYS_move_mount as c_int,
+    libc::SYS_fsopen as c_int,
+    // The new mount API, part 2: configure/attach/pick superblocks. Without
+    // fsconfig/fsmount the fsopen fd above is inert, but deny them anyway —
+    // half-closed APIs rot.
+    libc::SYS_fsconfig as c_int,
+    libc::SYS_fsmount as c_int,
+    libc::SYS_fspick as c_int,
+    // The new mount API, part 3 (final): change properties of an existing
+    // mount — including making previously read-only trees writable. Denied
+    // with the rest of the API; the mount API coverage the header always
+    // claimed is now real.
+    libc::SYS_mount_setattr as c_int,
+    libc::SYS_process_vm_writev as c_int,
+    libc::SYS_finit_module as c_int,
+    libc::SYS_kexec_file_load as c_int,
+    libc::SYS_bpf as c_int,
+    libc::SYS_userfaultfd as c_int,
+    libc::SYS_io_uring_setup as c_int,
+    libc::SYS_clone3 as c_int,
 ];
 
 /// `AUDIT_ARCH_X86_64` (`EM_X86_64 | __AUDIT_ARCH_64BIT | __AUDIT_ARCH_LE`).
@@ -531,6 +572,12 @@ fn isolated_exec(
     if argv.is_empty() {
         anyhow::bail!("empty argv");
     }
+    // An empty argv[0] is not a program: the resolution below would search
+    // for a file named "" and the old fallback would execve("") (ENOENT,
+    // child exit 127) — fail here with a nameable error instead.
+    if argv[0].is_empty() {
+        anyhow::bail!("empty argv[0]: no program to execute");
+    }
 
     // ------------------------------------------------------------------
     // Everything below allocates — do it BEFORE fork so the child path
@@ -548,24 +595,35 @@ fn isolated_exec(
     c_args_ptrs.push(std::ptr::null()); // execve expects NULL-terminated argv
 
     // Minimal environment: only PATH, no secrets (I2).
-    let c_env: Vec<CString> = vec![CString::new("PATH=/usr/bin:/bin")?];
+    let c_env: Vec<CString> = vec![CString::new(format!("PATH={GUEST_PATH}"))?];
     let mut c_env_ptrs: Vec<*const c_char> = c_env.iter().map(|s| s.as_ptr()).collect();
     c_env_ptrs.push(std::ptr::null()); // execve expects NULL-terminated envp
 
-    // Resolve program path: if argv[0] has no slash, search PATH before fork.
+    // Resolve program path: if argv[0] has no slash, search the SANDBOX's
+    // PATH before fork — the same GUEST_PATH the child environment carries.
+    // The search used to consult the supervisor's own environment instead:
+    // what was checked depended on how the operator invoked the CLI, and
+    // could disagree with what the guest would resolve (check-vs-use).
+    //
+    // Not-found is an ERROR, never a fallback to the bare name: after the
+    // child chdirs into the workspace, execve resolves a bare name against
+    // the cwd — guest-writable — so a guest-written file would run under
+    // the allowlisted NAME. (The old code did exactly that.) Landlock still
+    // bounds what the resulting process could touch, but the policy
+    // decision and the audit argv hash were computed for a trusted binary
+    // the guest cannot substitute.
     let prog_path = if c_args[0].as_bytes().contains(&b'/') {
         c_args[0].clone()
     } else {
-        let path_var = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
-        let mut found = None;
-        for dir in path_var.split(':') {
-            let candidate = format!("{dir}/{}", c_args[0].to_string_lossy());
-            if std::path::Path::new(&candidate).is_file() {
-                found = Some(CString::new(candidate)?);
-                break;
+        match resolve_program(&c_args[0].to_string_lossy(), GUEST_PATH)? {
+            Resolved::Found(p) => p,
+            Resolved::NotFound => {
+                anyhow::bail!(
+                    "command not found in the sandbox PATH ({GUEST_PATH}): {}",
+                    c_args[0].to_string_lossy()
+                );
             }
         }
-        found.unwrap_or_else(|| c_args[0].clone())
     };
 
     let workspace_cstr = CString::new(spec.workspace.as_str())?;
@@ -1029,6 +1087,54 @@ fn close_all_except_stdio() {
     for fd in 3..=1024 {
         unsafe { libc::close(fd) };
     }
+}
+
+/// Outcome of resolving a slash-less argv[0] against a PATH-style search
+/// string.
+enum Resolved {
+    /// The first PATH entry holding an existing regular file, as an absolute
+    /// or entry-relative path string ready for execve.
+    Found(CString),
+    /// No entry produced an existing file. Callers must NOT fall back to the
+    /// bare name: execve would resolve it against the child's cwd.
+    NotFound,
+}
+
+/// Resolve a slash-less argv[0] against `path_var` the way exec-time PATH
+/// search would: first entry whose `dir/argv0` is an existing, EXECUTABLE
+/// regular file wins. Pure and testable; called pre-fork (it allocates). An
+/// argv[0] that contains a slash never reaches this — the caller uses it
+/// verbatim.
+///
+/// Only ABSOLUTE entries participate. A relative entry (`bin`, `.`) or an
+/// empty entry (POSIX: "current directory") would be stat-checked against
+/// this process's cwd but exec'd against the child's — the workspace — a
+/// check-vs-use divergence that lets a guest-written file satisfy the
+/// search. Absolute candidates are immune to the chdir.
+///
+/// The executable-bit check matches execve's own requirement: without it,
+/// the search would "find" a non-executable file and the child would die
+/// with EACCES (exit 127) instead of moving on to the next PATH entry the
+/// way execvp-style resolution does.
+fn resolve_program(argv0: &str, path_var: &str) -> anyhow::Result<Resolved> {
+    use std::os::unix::fs::PermissionsExt;
+    for dir in path_var.split(':') {
+        if !dir.starts_with('/') {
+            continue;
+        }
+        let candidate = format!("{dir}/{argv0}");
+        let Ok(md) = std::fs::metadata(&candidate) else {
+            continue;
+        };
+        if !md.is_file() {
+            continue;
+        }
+        if md.permissions().mode() & 0o111 == 0 {
+            continue;
+        }
+        return Ok(Resolved::Found(CString::new(candidate)?));
+    }
+    Ok(Resolved::NotFound)
 }
 
 /// Build the seccomp-BPF filter instructions (allocates — call before fork).
@@ -1625,6 +1731,75 @@ mod tests {
 
     #[cfg(target_arch = "x86_64")]
     #[test]
+    fn seccomp_blocklist_matches_kernel_numbers() {
+        // Every entry ties a libc SYS_* constant to the number in the
+        // kernel's asm/unistd_64.h. A constant whose value drifts from the
+        // documented number — or a blocklist change made without updating
+        // this table — fails here. This is the guard for the bug where bare
+        // numbers blocked wait4/prctl/recvmmsg under the names chroot/
+        // nis+/fsopen while the intended syscalls stayed open.
+        let table: &[(c_int, c_int, &str)] = &[
+            (libc::SYS_socket as c_int, 41, "socket"),
+            (libc::SYS_socketpair as c_int, 53, "socketpair"),
+            (libc::SYS_clone as c_int, 56, "clone"),
+            (libc::SYS_fork as c_int, 57, "fork"),
+            (libc::SYS_vfork as c_int, 58, "vfork"),
+            (libc::SYS_ptrace as c_int, 101, "ptrace"),
+            (libc::SYS_pivot_root as c_int, 155, "pivot_root"),
+            (libc::SYS_chroot as c_int, 161, "chroot"),
+            (libc::SYS__sysctl as c_int, 156, "_sysctl"),
+            (libc::SYS_mount as c_int, 165, "mount"),
+            (libc::SYS_umount2 as c_int, 166, "umount2"),
+            (libc::SYS_swapon as c_int, 167, "swapon"),
+            (libc::SYS_swapoff as c_int, 168, "swapoff"),
+            (libc::SYS_reboot as c_int, 169, "reboot"),
+            (libc::SYS_iopl as c_int, 172, "iopl"),
+            (libc::SYS_ioperm as c_int, 173, "ioperm"),
+            (libc::SYS_init_module as c_int, 175, "init_module"),
+            (libc::SYS_kexec_load as c_int, 246, "kexec_load"),
+            (libc::SYS_unshare as c_int, 272, "unshare"),
+            (libc::SYS_accept4 as c_int, 288, "accept4"),
+            (libc::SYS_epoll_create1 as c_int, 291, "epoll_create1"),
+            (libc::SYS_perf_event_open as c_int, 298, "perf_event_open"),
+            (libc::SYS_recvmmsg as c_int, 299, "recvmmsg"),
+            (
+                libc::SYS_open_by_handle_at as c_int,
+                304,
+                "open_by_handle_at",
+            ),
+            (libc::SYS_setns as c_int, 308, "setns"),
+            (libc::SYS_open_tree as c_int, 428, "open_tree"),
+            (libc::SYS_move_mount as c_int, 429, "move_mount"),
+            (libc::SYS_fsopen as c_int, 430, "fsopen"),
+            (libc::SYS_fsconfig as c_int, 431, "fsconfig"),
+            (libc::SYS_fsmount as c_int, 432, "fsmount"),
+            (libc::SYS_fspick as c_int, 433, "fspick"),
+            (libc::SYS_mount_setattr as c_int, 442, "mount_setattr"),
+            (
+                libc::SYS_process_vm_writev as c_int,
+                311,
+                "process_vm_writev",
+            ),
+            (libc::SYS_finit_module as c_int, 313, "finit_module"),
+            (libc::SYS_kexec_file_load as c_int, 320, "kexec_file_load"),
+            (libc::SYS_bpf as c_int, 321, "bpf"),
+            (libc::SYS_userfaultfd as c_int, 323, "userfaultfd"),
+            (libc::SYS_io_uring_setup as c_int, 425, "io_uring_setup"),
+            (libc::SYS_clone3 as c_int, 435, "clone3"),
+        ];
+        for (constant, nr, name) in table {
+            assert_eq!(*constant, *nr, "SYS_{name} must be syscall {nr}");
+        }
+        let blocked: std::collections::HashSet<c_int> = BLOCKED_SYSCALLS.iter().copied().collect();
+        let expected: std::collections::HashSet<c_int> = table.iter().map(|(c, _, _)| *c).collect();
+        assert_eq!(
+            blocked, expected,
+            "blocklist must equal the documented (name, number) table"
+        );
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
     fn seccomp_filter_denies_blocklist_and_allows_the_rest() {
         // Denylist semantics, executed: every blocked syscall must return
         // SECCOMP_RET_ERRNO|EPERM, and ordinary syscalls must be ALLOWED.
@@ -1666,6 +1841,8 @@ mod tests {
             39,  // getpid
             59,  // execve   <-- v0 returned EPERM here: nothing could run
             60,  // exit
+            61,  // wait4    <-- was blocked as "chroot"; children are unwaitable without it
+            157, // prctl    <-- was blocked as "nis+"; thread names/subreapers need it
             231, // exit_group
             257, // openat
             262, // newfstatat
@@ -2539,5 +2716,213 @@ mod tests {
         );
         b.destroy("t-cap").unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod exec_path_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn write_exec(path: &std::path::Path) {
+        std::fs::write(path, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Unique scratch dir under the system temp dir (same pattern the other
+    /// tests here use; no tempdir dependency).
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "toolcage-exec-path-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn resolves_first_existing_candidate() {
+        let dir = scratch_dir("found");
+        write_exec(&dir.join("prog"));
+        match resolve_program("prog", &dir.to_string_lossy()).unwrap() {
+            Resolved::Found(p) => {
+                assert_eq!(p.to_bytes(), format!("{}/prog", dir.display()).as_bytes());
+            }
+            Resolved::NotFound => panic!("existing file must resolve"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn first_path_entry_wins() {
+        let a = scratch_dir("first");
+        let b = scratch_dir("second");
+        write_exec(&a.join("prog"));
+        write_exec(&b.join("prog"));
+        let path_var = format!("{}:{}", a.display(), b.display());
+        match resolve_program("prog", &path_var).unwrap() {
+            Resolved::Found(p) => assert!(p.to_bytes().starts_with(a.to_string_lossy().as_bytes())),
+            Resolved::NotFound => panic!("existing file must resolve"),
+        }
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
+    }
+
+    #[test]
+    fn later_entry_wins_when_earlier_misses() {
+        let a = scratch_dir("miss");
+        let b = scratch_dir("hit");
+        write_exec(&b.join("prog"));
+        let path_var = format!("{}:{}", a.display(), b.display());
+        match resolve_program("prog", &path_var).unwrap() {
+            Resolved::Found(p) => assert!(p.to_bytes().starts_with(b.to_string_lossy().as_bytes())),
+            Resolved::NotFound => panic!("existing file must resolve"),
+        }
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
+    }
+
+    #[test]
+    fn missing_everywhere_is_not_found() {
+        let dir = scratch_dir("empty");
+        let path_var = format!("{}:{}", dir.display(), "/nonexistent-toolcage-dir");
+        assert!(matches!(
+            resolve_program("prog", &path_var).unwrap(),
+            Resolved::NotFound
+        ));
+        assert!(matches!(
+            resolve_program("prog", "").unwrap(),
+            Resolved::NotFound
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn relative_entries_are_skipped() {
+        let dir = scratch_dir("abs");
+        write_exec(&dir.join("prog"));
+        // A relative entry before the absolute one must not satisfy the
+        // search even if a matching relative path exists on disk.
+        let path_var = format!("relative-toolcage-bin:{}:.", dir.display());
+        match resolve_program("prog", &path_var).unwrap() {
+            Resolved::Found(p) => {
+                assert!(
+                    p.to_bytes().starts_with(b"/"),
+                    "candidate must be absolute: {p:?}"
+                );
+            }
+            Resolved::NotFound => panic!("absolute entry must still resolve"),
+        }
+        // And with only non-absolute entries, nothing resolves.
+        assert!(matches!(
+            resolve_program("prog", "bin:.").unwrap(),
+            Resolved::NotFound
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_entry_is_skipped_not_root() {
+        // A POSIX empty PATH entry means "current directory"; the old
+        // string-format produced "/{argv0}" (filesystem root) instead.
+        // Either way it must not participate.
+        assert!(matches!(
+            resolve_program("sh", ":").unwrap(),
+            Resolved::NotFound
+        ));
+    }
+
+    #[test]
+    fn non_executable_file_is_skipped() {
+        // execvp-style resolution moves on to the next entry when a match
+        // lacks the execute bit; the old is_file() check "found" it and the
+        // child died with EACCES.
+        use std::os::unix::fs::PermissionsExt;
+        let a = scratch_dir("noexec");
+        let b = scratch_dir("exec");
+        std::fs::write(a.join("prog"), b"x").unwrap();
+        std::fs::set_permissions(a.join("prog"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::write(b.join("prog"), b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(b.join("prog"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path_var = format!("{}:{}", a.display(), b.display());
+        match resolve_program("prog", &path_var).unwrap() {
+            Resolved::Found(p) => assert!(p.to_bytes().starts_with(b.to_string_lossy().as_bytes())),
+            Resolved::NotFound => panic!("executable entry must resolve"),
+        }
+        // A non-executable match with no executable alternative is NotFound.
+        assert!(matches!(
+            resolve_program("prog", &a.to_string_lossy()).unwrap(),
+            Resolved::NotFound
+        ));
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
+    }
+
+    #[test]
+    fn directory_is_not_a_candidate() {
+        // is_file() must not match a DIRECTORY named like the program.
+        let dir = scratch_dir("isdir");
+        std::fs::create_dir_all(dir.join("prog")).unwrap();
+        let path_var = dir.to_string_lossy().to_string();
+        assert!(matches!(
+            resolve_program("prog", &path_var).unwrap(),
+            Resolved::NotFound
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod exec_not_found_tests {
+    use super::*;
+
+    /// The workspace-cwd exec bug: a bare argv[0] that resolves nowhere used
+    /// to fall back to the bare name, which execve then resolved against the
+    /// child's cwd — the guest-writable workspace — running a guest-written
+    /// file under an allowlisted NAME. Not-found must be a pre-fork error.
+    #[test]
+    fn bare_command_not_in_sandbox_path_is_an_error() {
+        let spec = SessionSpec {
+            id: "t-nf".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: "/nonexistent-toolcage-workspace".into(),
+        };
+        let err = isolated_exec(
+            &spec,
+            &["definitely-not-a-toolcage-command-3f9a".to_string()],
+            5,
+            1024,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("command not found"), "{msg}");
+        assert!(
+            msg.contains(GUEST_PATH),
+            "error must name the search set: {msg}"
+        );
+        assert!(
+            msg.contains("definitely-not-a-toolcage-command-3f9a"),
+            "error must name the command: {msg}"
+        );
+    }
+
+    #[test]
+    fn empty_argv0_is_an_error_before_any_resolution() {
+        let spec = SessionSpec {
+            id: "t-nf".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            workspace_mb: 0,
+            workspace: "/nonexistent-toolcage-workspace".into(),
+        };
+        let err = isolated_exec(&spec, &["".to_string()], 5, 1024).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("empty argv[0]"), "{msg}");
     }
 }

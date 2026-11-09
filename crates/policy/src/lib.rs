@@ -229,7 +229,7 @@ impl Policy {
 
 /// Canonicalize fs path: resolve `.`, `..`, duplicate `/` lexically (no FS access).
 pub fn canonical_path(p: &str) -> String {
-    let mut parts: Vec<&str> = vec![];
+    let mut parts: Vec<&str> = Vec::new();
     for comp in p.split('/') {
         match comp {
             "" | "." => {}
@@ -239,16 +239,37 @@ pub fn canonical_path(p: &str) -> String {
             c => parts.push(c),
         }
     }
-    format!("/{}", parts.join("/"))
+    if parts.is_empty() {
+        return "/".to_string();
+    }
+    let cap: usize = parts.iter().map(|s| 1 + s.len()).sum();
+    let mut out = String::with_capacity(cap);
+    for part in parts {
+        out.push('/');
+        out.push_str(part);
+    }
+    out
 }
 
 fn path_match(pattern: &str, path: &str) -> bool {
     // Support trailing /** only (v0). Exact otherwise.
     if let Some(prefix) = pattern.strip_suffix("/**") {
-        path == prefix || path.starts_with(&format!("{}/", prefix))
+        path == prefix
+            || path
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('/'))
     } else {
         pattern == path
     }
+}
+
+#[inline]
+fn contains_ignore_ascii_case(haystack: &str, needle: &[u8]) -> bool {
+    !needle.is_empty()
+        && haystack
+            .as_bytes()
+            .windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle))
 }
 
 /// RFC 7230 token: the only shape allowed in a request method. Anything else
@@ -288,8 +309,12 @@ pub fn request_target_is_clean(p: &str) -> bool {
     // Traversal checks apply to the path component; the query is free-form and
     // the upstream does not resolve it as a path.
     let path = p.split('?').next().unwrap_or("");
-    let lower = path.to_ascii_lowercase();
-    if lower.contains("%2e") || lower.contains("%2f") || lower.contains("%5c") {
+    if path.as_bytes().windows(3).any(|w| {
+        w[0] == b'%'
+            && (w[1..].eq_ignore_ascii_case(b"2e")
+                || w[1..].eq_ignore_ascii_case(b"2f")
+                || w[1..].eq_ignore_ascii_case(b"5c"))
+    }) {
         return false;
     }
     path.split('/').all(|seg| seg != "." && seg != "..")
@@ -314,8 +339,11 @@ fn interpreter_flags(bin: &str) -> &'static [&'static str] {
     let known: &[(&str, &[&str])] = &[
         ("python", &["-c", "-C"]),
         ("python3", &["-c", "-C"]),
-        ("perl", &["-e", "-E"]),
-        ("ruby", &["-e", "-E"]),
+        // -x: perl/ruby extract the PROGRAM from a file (skipping leading
+        // garbage until #!): `perl -x /workspace/evil.pl` runs guest program
+        // text — same class as -e, just sourced from a file.
+        ("perl", &["-e", "-E", "-x"]),
+        ("ruby", &["-e", "-E", "-x"]),
         ("node", &["-e", "-E", "-p", "-P", "--eval", "--print"]),
         ("lua", &["-e", "-E"]),
         ("php", &["-r", "-R"]),
@@ -371,6 +399,120 @@ fn interpreter_inline_arg(arg: &str, flags: &[&str]) -> bool {
     false
 }
 
+/// Deny reason for argv shapes that smuggle inline command text past
+/// argv-array scrutiny, or None when the v0 denylist accepts the argv.
+/// Pure and testable; called from decide()'s proc.exec arm.
+///
+/// A shell binary anywhere in argv (argv[0] itself, or reached indirectly
+/// via `env sh -c`) running an inline-code string executes arbitrary command
+/// text outside argv-array scrutiny. Running a shell script file is the same
+/// class of risk as `sh -c`, so either form is denied. Interpreters given
+/// inline code are denied WHEREVER they appear in argv, not just argv[0]:
+/// `env python3 -c`, `nice perl -E` and `timeout 5 python3 -c` must be
+/// caught just like `python3 -c`. Every spelling of the inline-code flag is
+/// matched (see interpreter_flags): `-c`, `-e`, `-E`, `-p`, `--eval`, `-r`,
+/// `-R`, and the joined forms (`-ccode`).
+fn exec_inline_denial(argv: &[String]) -> Option<&'static str> {
+    let bin = argv[0].rsplit('/').next().unwrap_or(&argv[0]);
+    let rest = &argv[1..];
+    // env(1) split-string: `-S` (also joined as `-S<value>`) hands env a
+    // whole command line to split at exec time, so neither a shell name nor
+    // an inline flag is ever a separate argv token — `env -S "sh -c id"`
+    // runs arbitrary shell while the scanner below sees an ordinary argv.
+    // Match env by basename wherever it appears and fail closed on ANY
+    // -S form: the value is an arbitrary command line the denylist cannot
+    // meaningfully scope. (`env -S` is rare in legitimate argv-array
+    // workloads; operators who need it have exec.allowlist.)
+    let env_here = bin_matches(bin, "env")
+        || rest.iter().any(|a| {
+            let name = a.rsplit('/').next().unwrap_or(a);
+            bin_matches(name, "env")
+        });
+    if env_here
+        && rest
+            .iter()
+            .any(|a| a == "-S" || a.starts_with("-S") || a.starts_with("--split-string"))
+    {
+        return Some("env split-string (-S) runs an inline command line; use argv arrays");
+    }
+    // Strip the path in argv[1..] too: `bin_matches` compares basenames, and
+    // `bin_matches("/bin/sh", "sh")` is false — so `env /bin/sh -c` and
+    // `/bin/busybox /bin/sh evil.sh` would otherwise reach the gates below
+    // with shell_here=false.
+    let shell_here = SHELL_BINS.iter().any(|s| bin_matches(bin, s))
+        || rest.iter().any(|a| {
+            let name = a.rsplit('/').next().unwrap_or(a);
+            SHELL_BINS.iter().any(|s| bin_matches(name, s))
+        });
+    if shell_here && rest.iter().any(|a| shell_inline_flag(a)) {
+        return Some("shell -c is not allowed; use argv arrays");
+    }
+    if shell_here && rest.iter().any(|a| !a.starts_with('-')) {
+        return Some("shell script files are not allowed; use argv arrays");
+    }
+    // Startup-file flags: `bash --rcfile=/workspace/evil.sh -i` sources the
+    // script at startup. The script-file rule above only rejects args NOT
+    // starting with '-', so the '=' form hides the path behind a dash.
+    // (--rcfile/--init-file with a separate path argument is already caught
+    // by that rule — the path is a non-dash arg.) Deny the flags outright:
+    // a shell that sources an operator-unspecified startup file is exactly
+    // the inline-command-text class.
+    if shell_here
+        && rest
+            .iter()
+            .any(|a| a.starts_with("--rcfile") || a.starts_with("--init-file"))
+    {
+        return Some("shell startup-file flags (--rcfile/--init-file) are not allowed");
+    }
+    // Interpreters whose PROGRAM TEXT arrives as a positional argv token:
+    // every awk invocation executes code from argv (or -f file), and
+    // system() gives it the shell — there is no non-code-executing use to
+    // preserve, so the family is denied outright (version-tolerant:
+    // gawk-5.1 matches gawk). Not a shell and not in interpreter_flags,
+    // so nothing else fires for it.
+    const AWK_BINS: &[&str] = &["awk", "gawk", "mawk"];
+    let awk_here = AWK_BINS.iter().any(|s| bin_matches(bin, s))
+        || rest.iter().any(|a| {
+            let name = a.rsplit('/').next().unwrap_or(a);
+            AWK_BINS.iter().any(|s| bin_matches(name, s))
+        });
+    if awk_here {
+        return Some("awk program text is inline code; use argv arrays or an exec allowlist");
+    }
+    // python -m executes a module by name, and with -m the cwd is
+    // sys.path[0]: `python3 -m evil` imports and runs /workspace/evil.py —
+    // guest-written code under the trusted python3 name. Denied for
+    // python/python3 (version-tolerant) wherever python appears, including
+    // cluster forms (-Bm). This also denies legitimate module runs
+    // (python3 -m http.server); script-file form (python3 script.py) stays
+    // allowed, and operators who need -m have exec.allowlist.
+    const PYTHON_BINS: &[&str] = &["python", "python3"];
+    let python_here = PYTHON_BINS.iter().any(|s| bin_matches(bin, s))
+        || rest.iter().any(|a| {
+            let name = a.rsplit('/').next().unwrap_or(a);
+            PYTHON_BINS.iter().any(|s| bin_matches(name, s))
+        });
+    if python_here
+        && rest.iter().any(|a| {
+            let b = a.as_bytes();
+            b.len() >= 2 && b[0] == b'-' && b[1] != b'-' && b[1..].contains(&b'm')
+        })
+    {
+        return Some("python -m executes a module with the workspace on sys.path; use argv arrays");
+    }
+    for a in argv {
+        let name = a.rsplit('/').next().unwrap_or(a);
+        let flags = interpreter_flags(name);
+        if flags.is_empty() {
+            continue;
+        }
+        if argv.iter().any(|b| interpreter_inline_arg(b, flags)) {
+            return Some("interpreter inline code is not allowed; use argv arrays");
+        }
+    }
+    None
+}
+
 /// True when `argv0` names a binary at a TRUSTED location: a bare name
 /// (resolved by the sandbox's fixed PATH) or an absolute path in the
 /// read-only system tree. Relative forms (`./git`, `sub/git`), traversal,
@@ -403,12 +545,11 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
     // Global forbid: cloud metadata / link-local, always denied.
     // Covers common forms so a string variant can't slip past (I1).
     if let Some(h) = &req.host {
-        let hl = h.to_ascii_lowercase();
-        if hl.contains("169.254.169.254")
-            || hl.contains("metadata")
-            || hl.contains("instance-data")
-            || hl.contains("100.100.100.200")
-            || hl.contains("metadata.google.internal")
+        if contains_ignore_ascii_case(h, b"169.254.169.254")
+            || contains_ignore_ascii_case(h, b"metadata")
+            || contains_ignore_ascii_case(h, b"instance-data")
+            || contains_ignore_ascii_case(h, b"100.100.100.200")
+            || contains_ignore_ascii_case(h, b"metadata.google.internal")
         {
             return deny("forbid:metadata", "metadata address is never reachable");
         }
@@ -425,14 +566,14 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
             // net.connect carries no method (absent/empty is fine there); any
             // method that IS present must be a clean token. Note an empty
             // method string is a malformed method, not a missing one.
-            let method = req.method.as_deref().unwrap_or("").to_ascii_uppercase();
-            let host = req.host.as_deref().unwrap_or("").to_ascii_lowercase();
+            let method = req.method.as_deref().unwrap_or("");
+            let host = req.host.as_deref().unwrap_or("");
             let path = req.path.as_deref().unwrap_or("/");
             // Request-line hygiene before any rule matching: the method and
             // path are forwarded verbatim upstream, so a guest must not be able
             // to smuggle a different resource or extra headers past the rule
             // that was checked (see request_target_is_clean).
-            if (req.method.is_some() && !method_is_token(&method)) || !request_target_is_clean(path)
+            if (req.method.is_some() && !method_is_token(method)) || !request_target_is_clean(path)
             {
                 return deny(
                     "deny:request-target",
@@ -444,22 +585,23 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
                 let rule_match = h
                     .host
                     .as_deref()
-                    .is_some_and(|x| x.to_ascii_lowercase() == host)
+                    .is_some_and(|x| x.eq_ignore_ascii_case(host))
                     || h.alias
                         .as_deref()
-                        .is_some_and(|x| x.to_ascii_lowercase() == host);
+                        .is_some_and(|x| x.eq_ignore_ascii_case(host));
                 if rule_match {
                     if !h.methods.is_empty()
-                        && !h.methods.iter().any(|m| m.to_ascii_uppercase() == method)
+                        && !h.methods.iter().any(|m| m.eq_ignore_ascii_case(method))
                     {
                         continue;
                     }
                     if !h.paths.is_empty() && !h.paths.iter().any(|p| path_match(p, path)) {
                         continue;
                     }
+                    let host_lower = host.to_ascii_lowercase();
                     return Decision {
                         allow: true,
-                        rule_ids: vec![format!("net:allow:{host}")],
+                        rule_ids: vec![format!("net:allow:{host_lower}")],
                         reason: "allowlisted".into(),
                     };
                 }
@@ -479,13 +621,11 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
             let mut write_denied_by: Option<String> = None;
             for m in &policy.fs.mounts {
                 let mount = canonical_path(&m.path);
-                let mount = mount.trim_end_matches('/').to_string();
-                let mount = if mount.is_empty() {
-                    "/".to_string()
-                } else {
-                    mount
-                };
-                if canon == mount || canon.starts_with(&format!("{mount}/")) {
+                if canon == mount
+                    || canon
+                        .strip_prefix(&mount)
+                        .is_some_and(|rest| rest.starts_with('/'))
+                {
                     if req.action == "fs.write"
                         && !mount_allows_write(&m.mode)
                         && write_denied_by.is_none()
@@ -547,51 +687,8 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
             // fail-closed, since the guest could otherwise run arbitrary code
             // outside argv-array scrutiny. v0 has no shell policy, so deny here;
             // prefer an explicit exec allowlist in a later milestone.
-            {
-                let bin = argv[0].rsplit('/').next().unwrap_or(&argv[0]);
-                let rest = &argv[1..];
-                // A shell binary anywhere in argv (argv[0] itself, or reached
-                // indirectly via `env sh -c`) running an inline-code string
-                // executes arbitrary command text outside argv-array
-                // scrutiny. Running a shell script file is the same class of
-                // risk as `sh -c`, so either form is denied.
-                // Strip the path in argv[1..] too: `bin_matches` compares
-                // basenames, and `bin_matches("/bin/sh", "sh")` is false —
-                // so `env /bin/sh -c` and `/bin/busybox /bin/sh evil.sh`
-                // used to reach the gates below with shell_here=false.
-                let shell_here = SHELL_BINS.iter().any(|s| bin_matches(bin, s))
-                    || rest.iter().any(|a| {
-                        let name = a.rsplit('/').next().unwrap_or(a);
-                        SHELL_BINS.iter().any(|s| bin_matches(name, s))
-                    });
-                if shell_here && rest.iter().any(|a| shell_inline_flag(a)) {
-                    return deny("deny:shell", "shell -c is not allowed; use argv arrays");
-                }
-                if shell_here && rest.iter().any(|a| !a.starts_with('-')) {
-                    return deny(
-                        "deny:shell",
-                        "shell script files are not allowed; use argv arrays",
-                    );
-                }
-                // Interpreters given inline code are denied WHEREVER they
-                // appear in argv, not just argv[0]: `env python3 -c`, `nice
-                // perl -E` and `timeout 5 python3 -c` must be caught just
-                // like `python3 -c`. Every spelling of the inline-code flag
-                // is matched (see interpreter_flags): `-c`, `-e`, `-E`, `-p`,
-                // `--eval`, `-r`, `-R`, and the joined forms (`-ccode`).
-                for a in argv {
-                    let name = a.rsplit('/').next().unwrap_or(a);
-                    let flags = interpreter_flags(name);
-                    if flags.is_empty() {
-                        continue;
-                    }
-                    if argv.iter().any(|b| interpreter_inline_arg(b, flags)) {
-                        return deny(
-                            "deny:shell",
-                            "interpreter inline code is not allowed; use argv arrays",
-                        );
-                    }
-                }
+            if let Some(reason) = exec_inline_denial(argv) {
+                return deny("deny:shell", reason);
             }
             Decision {
                 allow: true,
@@ -758,5 +855,267 @@ mod tests {
             },
         );
         assert!(!bad.allow);
+    }
+}
+
+#[cfg(test)]
+mod trusted_exec_path_tests {
+    use super::*;
+
+    /// The contract the backend's program-path resolution must uphold (and
+    /// now does): a bare argv[0] is trusted *because* the sandbox resolves
+    /// bare names only from its fixed PATH (GUEST_PATH, system tree). These
+    /// tests pin that reasoning so a change on either side fails here.
+    #[test]
+    fn bare_names_are_trusted() {
+        assert!(trusted_exec_path("git"));
+        assert!(trusted_exec_path("dependency-updater"));
+        assert!(trusted_exec_path("python3.12"));
+        assert!(!trusted_exec_path(""));
+    }
+
+    #[test]
+    fn absolute_system_tree_is_trusted() {
+        for p in [
+            "/bin/sh",
+            "/usr/bin/git",
+            "/sbin/mkfs",
+            "/lib64/ld-linux-x86-64.so.2",
+        ] {
+            assert!(trusted_exec_path(p), "{p} must be trusted");
+        }
+    }
+
+    #[test]
+    fn relative_and_traversal_forms_are_refused() {
+        for p in ["./git", "sub/git", "../git", "a/../evil", "/usr/../evil"] {
+            assert!(!trusted_exec_path(p), "{p} must be refused");
+        }
+    }
+
+    #[test]
+    fn guest_writable_locations_are_refused() {
+        for p in ["/workspace/git", "/tmp/git", "/home/user/tool", "/root/x"] {
+            assert!(!trusted_exec_path(p), "{p} must be refused");
+        }
+    }
+
+    #[test]
+    fn lookalike_prefixes_are_refused() {
+        // Not under /usr/ — "/usrfoo/" is a different directory.
+        assert!(!trusted_exec_path("/usrfoo/sh"));
+        assert!(!trusted_exec_path("/usrshare/tool"));
+    }
+}
+
+#[cfg(test)]
+mod exec_denylist_tests {
+    use super::*;
+
+    fn denied(argv: &[&str]) -> bool {
+        let owned: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+        exec_inline_denial(&owned).is_some()
+    }
+
+    // ---- pinned (working) denylist coverage ----
+
+    #[test]
+    fn shell_inline_code_is_denied() {
+        assert!(denied(&["sh", "-c", "id"]));
+        assert!(denied(&["/bin/sh", "-c", "id"]));
+        assert!(denied(&["bash", "-lc", "id"]));
+        assert!(denied(&["env", "sh", "-c", "id"]));
+        assert!(denied(&["timeout", "5", "python3", "-c", "print(1)"]));
+    }
+
+    #[test]
+    fn shell_script_files_are_denied() {
+        assert!(denied(&["bash", "evil.sh"]));
+        assert!(denied(&["sh", "/workspace/evil.sh"]));
+        assert!(denied(&["/bin/busybox", "/bin/sh", "evil.sh"]));
+    }
+
+    #[test]
+    fn interpreter_inline_code_is_denied() {
+        assert!(denied(&["python3", "-c", "print(1)"]));
+        assert!(denied(&["perl", "-E", "say 1"]));
+        assert!(denied(&["node", "--eval", "1+1"]));
+        assert!(denied(&["env", "python3", "-c", "print(1)"]));
+        // bundled short flags
+        assert!(denied(&["python3", "-ic", "print(1)"]));
+        // -x: perl/ruby extract the program from a file and run it.
+        assert!(denied(&["perl", "-x", "/workspace/evil.pl"]));
+        assert!(denied(&["ruby", "-x", "/workspace/evil.rb"]));
+        assert!(denied(&["perl", "-x/workspace", "evil.pl"])); // joined dir form
+        assert!(denied(&["perl5", "-x", "evil.pl"])); // version tolerance
+        assert!(denied(&["env", "perl", "-x", "evil.pl"])); // reached in rest
+    }
+
+    #[test]
+    fn ordinary_argv_is_allowed() {
+        assert!(!denied(&["/bin/echo", "hello"]));
+        assert!(!denied(&["git", "status"]));
+        assert!(!denied(&["env", "FOO=bar", "git", "status"]));
+        assert!(!denied(&["python3", "script.py"]));
+        assert!(!denied(&["ls", "-la"]));
+    }
+
+    // ---- KNOWN BUGS (each pinned in the buggy state; the fix PR for each
+    // ---- vector flips its assertion to the safe direction) ----
+
+    #[test]
+    fn env_split_string_is_denied() {
+        // env -S splits the single token into "sh -c id" at exec time; neither
+        // a shell name nor -c is ever a separate argv token, so the shell and
+        // interpreter gates never fire. Denied outright (fixed).
+        assert!(denied(&["env", "-S", "sh -c id > /tmp/pwned"]));
+        assert!(denied(&["/usr/bin/env", "-S", "sh -c id"]));
+        assert!(denied(&["env", "-Ssh -c id"])); // joined -S<value>
+        assert!(denied(&["env", "--split-string=sh -c id"])); // long form, =value
+        assert!(denied(&["env", "--split-string", "sh -c id"])); // long form, separate value
+        assert!(denied(&["/usr/bin/env", "--split-string=python3 -c id"]));
+        assert!(denied(&["env", "-i", "-S", "bash -c id"])); // env with other flags
+        assert!(!denied(&["env", "FOO=bar", "git", "status"])); // env without -S stays allowed
+        assert!(!denied(&["env", "-u", "SECRET", "git", "push"]));
+        // A -S-shaped data arg without env in argv is not denied.
+        assert!(!denied(&["grep", "-S", "pattern", "file"]));
+    }
+
+    #[test]
+    fn shell_startup_file_flags_are_denied() {
+        // The script-file rule only rejects args NOT starting with '-'; the
+        // '=' form hides the script path behind a dash. Denied outright
+        // (fixed).
+        assert!(denied(&["bash", "--rcfile=/workspace/evil.sh", "-i"]));
+        assert!(denied(&["bash", "--init-file=/workspace/evil.sh", "-i"]));
+        assert!(denied(&["/bin/bash", "--rcfile=/workspace/evil.sh"]));
+        // The separate-path form was always caught (the path is a non-dash
+        // arg) — pinned so the new rule doesn't regress it.
+        assert!(denied(&["bash", "--rcfile", "/workspace/evil.sh"]));
+        // Non-shell argv with rcfile-shaped data args stays allowed.
+        assert!(!denied(&["grep", "--rcfile=x", "file"]));
+    }
+
+    #[test]
+    fn awk_program_text_is_denied() {
+        // awk executes its program from a positional argv token (or -f file)
+        // and system() gives it the shell — there is no non-code-executing
+        // use, so the family is denied outright (fixed).
+        assert!(denied(&[
+            "awk",
+            "BEGIN{system(\"sh -c id\")}",
+            "/workspace/f"
+        ]));
+        assert!(denied(&["gawk", "'{print}'", "f"]));
+        assert!(denied(&["mawk", "-f", "evil.awk"]));
+        assert!(denied(&["/usr/bin/awk", "{print}"]));
+        assert!(denied(&["gawk-5.1", "{print}"])); // version tolerance
+        assert!(denied(&["env", "awk", "{print}"])); // reached in rest
+        assert!(denied(&["sort", "file", "awk"])); // awk-shaped token anywhere
+    }
+
+    #[test]
+    fn python_module_exec_is_denied() {
+        // python -m puts the cwd (the workspace) at sys.path[0]:
+        // `python3 -m evil` imports and runs /workspace/evil.py.
+        assert!(denied(&["python3", "-m", "evil"]));
+        assert!(denied(&["python3", "-m", "http.server"])); // legit module runs pay the same price
+        assert!(denied(&["/usr/bin/python3", "-m", "evil"]));
+        assert!(denied(&["python3.12", "-m", "evil"])); // version tolerance
+        assert!(denied(&["env", "python3", "-m", "evil"])); // reached in rest
+        assert!(denied(&["python3", "-Bm", "evil"])); // bundled short flags
+        assert!(!denied(&["python3", "script.py"]));
+        assert!(!denied(&["python3", "-u", "script.py"]));
+        assert!(denied(&["python", "script.py", "-m"]));
+        // Non-python argv with -m stays allowed.
+        assert!(!denied(&["grep", "-m", "5", "pattern", "file"]));
+    }
+
+    #[test]
+    fn busybox_applet_forms_are_denied() {
+        // busybox is a shell-shaped multi-call binary: it is in SHELL_BINS,
+        // so ANY argument after it (applet names included) trips the
+        // script-file rule. Deliberately broad — busybox <applet> can be
+        // sh, awk, and more — and fail-closed.
+        assert!(denied(&["busybox", "sh", "-c", "id"]));
+        assert!(denied(&["/bin/busybox", "awk", "{print}"]));
+        assert!(denied(&["busybox", "echo", "hi"])); // over-broad by design
+        assert!(denied(&["busybox-1.35", "sh", "evil.sh"])); // version tolerance
+    }
+
+    #[test]
+    fn every_vector_denies_with_deny_shell_and_a_reason() {
+        // The rule id is part of the operator contract (explain.rs teaches
+        // it); the reason is operator-facing. Every vector must deny with
+        // exactly ['deny:shell'] and a non-empty reason.
+        let vectors: &[&[&str]] = &[
+            &["sh", "-c", "id"],
+            &["bash", "evil.sh"],
+            &["bash", "--rcfile=/workspace/evil.sh", "-i"],
+            &["env", "-S", "sh -c id"],
+            &["env", "--split-string=sh -c id"],
+            &["python3", "-c", "print(1)"],
+            &["awk", "{print}", "f"],
+            &["python3", "-m", "evil"],
+            &["perl", "-x", "evil.pl"],
+            &["busybox", "sh", "-c", "id"],
+        ];
+        let mut reasons = std::collections::HashSet::new();
+        for argv in vectors {
+            let owned: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+            let d = exec_inline_denial(&owned);
+            let reason = match d {
+                Some(r) => r,
+                None => panic!("{argv:?} must be denied"),
+            };
+            assert!(!reason.is_empty(), "{argv:?}: reason must not be empty");
+            reasons.insert(reason);
+        }
+        // Distinct classes give distinct reasons (an operator reading a
+        // denial should be able to tell which vector fired).
+        assert!(
+            reasons.len() >= 6,
+            "expected distinct reasons per vector class, got {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn interpreters_reached_by_absolute_path_in_rest_are_denied() {
+        // The interpreter loop strips paths from every token before matching:
+        // a wrapper carrying an absolute interpreter path must not dodge the
+        // inline-code gate the way a bare name would not.
+        assert!(denied(&["env", "/usr/bin/python3", "-c", "print(1)"]));
+        assert!(denied(&["nice", "/usr/bin/perl", "-E", "say 1"]));
+        assert!(denied(&["/usr/bin/env", "/bin/sh", "-c", "id"]));
+        assert!(denied(&["timeout", "5", "/usr/bin/python3.12", "-C", "x"]));
+    }
+
+    #[test]
+    fn bin_matches_version_tolerance_edges() {
+        // Version tolerance: known name + digits/dots/dashes suffix.
+        assert!(bin_matches("python3.12", "python3"));
+        assert!(bin_matches("bash5", "bash"));
+        assert!(bin_matches("busybox-1.35", "busybox"));
+        assert!(bin_matches("gawk-5.1.1", "gawk"));
+        // Not tolerance: prefix impersonations and junk suffixes must not
+        // match, or an allowlist entry could be widened by a guest-written
+        // lookalike name.
+        assert!(!bin_matches("python3x", "python3"));
+        assert!(!bin_matches("pythonista", "python"));
+        assert!(!bin_matches("3", "python3"));
+        assert!(!bin_matches("", "sh"));
+        // An allowlisted name must not match a different known binary.
+        assert!(!bin_matches("sh", "bash"));
+    }
+
+    #[test]
+    fn known_bug_awk_program_text_is_inline_code() {
+        // SUPERSEDED by awk_program_text_is_denied; kept as a marker that the
+        // vector is closed.
+        assert!(denied(&[
+            "awk",
+            "BEGIN{system(\"sh -c id\")}",
+            "/workspace/f"
+        ]));
     }
 }

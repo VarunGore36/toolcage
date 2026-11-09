@@ -28,7 +28,7 @@ rm -f "$LOG"
 # failing the job — policy and audit numbers above still measure. Any other
 # failure (real CLI regression, broken policy) is reported loud, not silently
 # disguised as "Tier0 unavailable".
-PROBE_OUT=$(./target/release/toolcage-cli run --policy schemas/policy-v0.yaml --audit "$LOG" --workspace "$WS" -- /bin/true 2>&1) || PROBE_RC=$?
+PROBE_OUT=$(./target/release/toolcage-cli run --workspace "$WS" --policy schemas/policy-v0.yaml --audit "$LOG" -- /bin/true 2>&1) || PROBE_RC=$?
 if [ "${PROBE_RC:-0}" -ne 0 ]; then
   if echo "$PROBE_OUT" | grep -qiE "unprivileged|userns|landlock|seccomp|namespace|isolation|AppArmor"; then
     echo "skip: Tier0 exec unavailable on this host (needs unprivileged userns + Landlock) — no run baseline"
@@ -41,7 +41,7 @@ fi
 N=200
 start=$(date +%s.%N)
 for i in $(seq 1 "$N"); do
-  ./target/release/toolcage-cli run --policy schemas/policy-v0.yaml --audit "$LOG" --workspace "$WS" -- /bin/true >/dev/null
+  ./target/release/toolcage-cli run --workspace "$WS" --policy schemas/policy-v0.yaml --audit "$LOG" -- /bin/true >/dev/null
 done
 end=$(date +%s.%N)
 python3 - "$start" "$end" "$N" "$LOG" <<'PY'
