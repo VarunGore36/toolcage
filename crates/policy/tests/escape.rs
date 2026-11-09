@@ -747,3 +747,44 @@ fn exec_denylist_end_to_end_matrix() {
         assert!(d.allow, "{argv:?} must be allowed: {:?}", d.reason);
     }
 }
+
+/// End-to-end approval-gate decision table through the real YAML loader:
+/// multiple require_for rules, unknown fires, known-wrong passes, and the
+/// net.connect case the review flagged (decide allows an absent method
+/// there, so the gate MUST fire on unknown — part of the approval series).
+#[test]
+fn approval_gate_decision_table_end_to_end() {
+    let p = policy::load_yaml(
+        r#"
+tool: t
+version: 0
+net:
+  mode: allowlist
+  hosts:
+    - host: github
+      methods: [GET]
+approval:
+  require_for:
+    - http.request: { methods: [POST], hosts: [github] }
+    - net.connect: { methods: [POST], hosts: [github] }
+"#,
+    )
+    .unwrap();
+    let n = |a: &str, m: Option<&str>, h: Option<&str>| p.needs_approval(a, m, h);
+
+    // MATCH fires (both actions).
+    assert!(n("http.request", Some("POST"), Some("github")));
+    assert!(n("net.connect", Some("POST"), Some("github")));
+    // UNKNOWN fires on both actions — for net.connect this is the review's
+    // scenario: decide() allows an absent method, so the gate is the only
+    // thing standing between a method-less connect and an unpaused action.
+    assert!(n("http.request", None, Some("github")));
+    assert!(n("net.connect", None, Some("github")));
+    assert!(n("net.connect", Some("POST"), None));
+    assert!(n("net.connect", None, None));
+    // KNOWN-WRONG passes.
+    assert!(!n("http.request", Some("GET"), Some("github")));
+    assert!(!n("net.connect", Some("GET"), Some("github")));
+    // Wrong action never fires.
+    assert!(!n("fs.write", None, None));
+}
