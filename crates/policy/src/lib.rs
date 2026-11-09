@@ -210,13 +210,19 @@ impl Policy {
                 }
                 if !spec.methods.is_empty() {
                     let m = method.unwrap_or("");
-                    if m.is_empty() || !spec.methods.iter().any(|x| x.eq_ignore_ascii_case(m)) {
+                    // Fail closed on unknown: an absent/empty method is
+                    // UNKNOWN, not "matches nothing" — it could be the gated
+                    // method, so the gate must fire. (5135ab7 inverted this
+                    // predicate into fail-open with a message claiming the
+                    // opposite; the approval crate carries the full history
+                    // note.)
+                    if !m.is_empty() && !spec.methods.iter().any(|x| x.eq_ignore_ascii_case(m)) {
                         continue;
                     }
                 }
                 if !spec.hosts.is_empty() {
                     let h = host.unwrap_or("");
-                    if h.is_empty() || !spec.hosts.iter().any(|x| x.eq_ignore_ascii_case(h)) {
+                    if !h.is_empty() && !spec.hosts.iter().any(|x| x.eq_ignore_ascii_case(h)) {
                         continue;
                     }
                 }
