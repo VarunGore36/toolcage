@@ -1080,6 +1080,17 @@ mod exec_denylist_tests {
     }
 
     #[test]
+    fn interpreters_reached_by_absolute_path_in_rest_are_denied() {
+        // The interpreter loop strips paths from every token before matching:
+        // a wrapper carrying an absolute interpreter path must not dodge the
+        // inline-code gate the way a bare name would not.
+        assert!(denied(&["env", "/usr/bin/python3", "-c", "print(1)"]));
+        assert!(denied(&["nice", "/usr/bin/perl", "-E", "say 1"]));
+        assert!(denied(&["/usr/bin/env", "/bin/sh", "-c", "id"]));
+        assert!(denied(&["timeout", "5", "/usr/bin/python3.12", "-C", "x"]));
+    }
+
+    #[test]
     fn known_bug_awk_program_text_is_inline_code() {
         // SUPERSEDED by awk_program_text_is_denied; kept as a marker that the
         // vector is closed.
