@@ -143,6 +143,30 @@ impl Queue {
     pub fn resolve(&self, id: &str) -> Option<bool> {
         self.decided.get(id).map(|v| *v == Verdict::Approve)
     }
+
+    /// Enforce "timeout = deny": every pending request older than
+    /// `timeout_secs` is moved to decided-Deny, and the swept ids are
+    /// returned so the caller can audit each timeout as its own event.
+    ///
+    /// The caller supplies `now` (wall-clock seconds) — the crate keeps no
+    /// clock of its own, and a caller that never sweeps never times out
+    /// (fail-closed pressure stays with whoever pauses the action, since a
+    /// pause that never resolves must block the action, not wave it
+    /// through).
+    pub fn sweep_expired(&mut self, now: u64, timeout_secs: u64) -> Vec<String> {
+        let expired: Vec<String> = self
+            .pending
+            .values()
+            .filter(|p| now.saturating_sub(p.created_at) >= timeout_secs)
+            .map(|p| p.id.clone())
+            .collect();
+        for id in &expired {
+            if let Some((k, _)) = self.pending.remove_entry(id) {
+                self.decided.insert(k, Verdict::Deny);
+            }
+        }
+        expired
+    }
 }
 
 #[cfg(test)]
@@ -381,5 +405,40 @@ mod queue_contract_tests {
         let x = q.request("http.request", None, None);
         let y = q.request("http.request", None, None);
         assert_ne!(x, y);
+    }
+}
+
+#[cfg(test)]
+mod sweep_tests {
+    use super::*;
+
+    /// "Timeout = deny" is the documented contract; sweep_expired enforces
+    /// it: expired pendings become decided-Deny (and resolve as such
+    /// forever), fresh ones keep waiting, and the swept ids come back for
+    /// the caller to audit each timeout as its own event.
+    #[test]
+    fn sweep_moves_expired_to_deny_and_returns_their_ids() {
+        let mut q = Queue::default();
+        let a = q.request("http.request", Some("github"), Some("POST"));
+        let b = q.request("http.request", Some("github"), Some("POST"));
+        // Backdate both: a is beyond the timeout, b is fresh.
+        q.pending.get_mut(&a).unwrap().created_at = 1_000;
+        q.pending.get_mut(&b).unwrap().created_at = 1_990;
+
+        let swept = q.sweep_expired(2_000, 60);
+        assert_eq!(swept, vec![a.clone()]);
+
+        // Swept: denied forever, decided-Deny, no re-deciding.
+        assert_eq!(q.resolve(&a), Some(false));
+        assert!(!q.decide(&a, Verdict::Approve));
+        assert_eq!(q.resolve(&a), Some(false));
+
+        // Fresh: still waiting, still decidable.
+        assert_eq!(q.resolve(&b), None);
+        assert!(q.decide(&b, Verdict::Approve));
+        assert_eq!(q.resolve(&b), Some(true));
+
+        // Sweeping again finds nothing new.
+        assert!(q.sweep_expired(2_000, 60).is_empty());
     }
 }
