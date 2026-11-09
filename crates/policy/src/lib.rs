@@ -1091,6 +1091,24 @@ mod exec_denylist_tests {
     }
 
     #[test]
+    fn bin_matches_version_tolerance_edges() {
+        // Version tolerance: known name + digits/dots/dashes suffix.
+        assert!(bin_matches("python3.12", "python3"));
+        assert!(bin_matches("bash5", "bash"));
+        assert!(bin_matches("busybox-1.35", "busybox"));
+        assert!(bin_matches("gawk-5.1.1", "gawk"));
+        // Not tolerance: prefix impersonations and junk suffixes must not
+        // match, or an allowlist entry could be widened by a guest-written
+        // lookalike name.
+        assert!(!bin_matches("python3x", "python3"));
+        assert!(!bin_matches("pythonista", "python"));
+        assert!(!bin_matches("3", "python3"));
+        assert!(!bin_matches("", "sh"));
+        // An allowlisted name must not match a different known binary.
+        assert!(!bin_matches("sh", "bash"));
+    }
+
+    #[test]
     fn known_bug_awk_program_text_is_inline_code() {
         // SUPERSEDED by awk_program_text_is_denied; kept as a marker that the
         // vector is closed.
