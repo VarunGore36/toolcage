@@ -21,6 +21,27 @@ limits:
   cpu_seconds: 300
   memory_mb: 1024
   egress_bytes: 20000000
+# exec:
+#   Absent an allowlist, everything not matching a denylist rule runs as a
+#   plain argv array — and the v0 denylist refuses inline command text
+#   wherever it appears in argv:
+#     - shells (sh/bash/dash/zsh/fish/ksh/tcsh/csh/busybox): inline strings
+#       (-c and bundled clusters), script files, startup files (--rcfile=,
+#       --init-file=)
+#     - interpreters (python, perl, ruby, node, lua, php): every inline-code
+#       spelling (-c -e -E -p --eval -r -R, joined and bundled forms), the
+#       program-extraction flag -x, and python -m (the cwd lands on
+#       sys.path[0], so `python3 -m evil` runs /workspace/evil.py)
+#     - the awk family (awk/gawk/mawk): its program text IS code and
+#       system() gives it the shell — denied outright
+#     - env -S / --split-string: a whole command line reassembled at exec
+#       time, invisible to the gates above — denied outright
+#   Residuals the denylist cannot see — GNU sed's `e` command, interpreter
+#   script files (python3 script.py: allowed by design), and tools that exec
+#   on their own (find -exec, xargs, git hooks) — belong behind an explicit
+#   allowlist:
+# exec:
+#   allowlist: [dependency-updater, git]
 approval:
   require_for:
     - http.request: { methods: [POST], hosts: [github] }
