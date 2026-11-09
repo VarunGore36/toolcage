@@ -685,3 +685,65 @@ exec:
     let p2 = toolcage_policy::load_yaml("tool: t\nversion: 0\n").unwrap();
     assert!(exec_dec(&p2, Some(vec!["/workspace/git", "status"])).allow);
 }
+
+/// End-to-end exec matrix through the real YAML loader: every denylist
+/// vector closed by the exec-denylist series must be denied at decide()
+/// level, and the documented allow surface must survive.
+#[test]
+fn exec_denylist_end_to_end_matrix() {
+    let p = sample();
+    let exec = |argv: &[&str]| {
+        policy::decide(
+            &p,
+            &policy::Request {
+                action: "proc.exec".into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: None,
+                argv: Some(argv.iter().map(|s| s.to_string()).collect()),
+            },
+        )
+    };
+
+    // Deny surface: every vector, through the real loader.
+    for argv in [
+        vec!["sh", "-c", "id"],
+        vec!["/bin/sh", "-c", "id"],
+        vec!["bash", "evil.sh"],
+        vec!["bash", "--rcfile=/workspace/evil.sh", "-i"],
+        vec!["env", "-S", "sh -c id"],
+        vec!["env", "--split-string=sh -c id"],
+        vec!["env", "python3", "-c", "print(1)"],
+        vec!["timeout", "5", "python3", "-c", "print(1)"],
+        vec!["awk", "BEGIN{system(\"sh -c id\")}", "f"],
+        vec!["gawk-5.1", "{print}"],
+        vec!["python3", "-m", "evil"],
+        vec!["perl", "-x", "/workspace/evil.pl"],
+        vec!["perl", "-E", "say 1"],
+        vec!["node", "--eval", "1+1"],
+    ] {
+        let d = exec(&argv);
+        assert!(!d.allow, "{argv:?} must be denied: {:?}", d.reason);
+        assert!(
+            d.rule_ids.contains(&"deny:shell".to_string()),
+            "{argv:?} must deny with deny:shell: {:?}",
+            d.rule_ids
+        );
+    }
+
+    // Allow surface: the documented v0 contract.
+    for argv in [
+        vec!["/bin/echo", "hello"],
+        vec!["git", "status"],
+        vec!["ls", "-la"],
+        vec!["env", "FOO=bar", "git", "status"],
+        vec!["python3", "script.py"],
+        vec!["grep", "-m", "5", "pattern", "file"],
+        vec!["bash", "--noprofile"],
+        vec!["bash", "-x"],
+    ] {
+        let d = exec(&argv);
+        assert!(d.allow, "{argv:?} must be allowed: {:?}", d.reason);
+    }
+}
