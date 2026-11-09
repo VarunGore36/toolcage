@@ -181,3 +181,119 @@ mod tests {
         assert!(!needs_approval(&rules, "proc.exec", None, None));
     }
 }
+
+#[cfg(test)]
+mod gate_semantics_matrix_tests {
+    use super::*;
+
+    /// The full decision table for a gate constrained to (methods=[POST],
+    /// hosts=[github]) — plus the wildcard and wrong-action axes. The
+    /// invariant: UNKNOWN fires (it could be the gated value), KNOWN-WRONG
+    /// passes, MATCH fires, absent list = wildcard.
+    #[test]
+    fn decision_table() {
+        let rules = vec![ApprovalRule {
+            action: "http.request".into(),
+            methods: vec!["POST".into()],
+            hosts: vec!["github".into()],
+        }];
+        let n = |m: Option<&str>, h: Option<&str>| needs_approval(&rules, "http.request", m, h);
+
+        // MATCH fires.
+        assert!(n(Some("POST"), Some("github")));
+        assert!(n(Some("post"), Some("GitHub"))); // case-insensitive both axes
+
+        // UNKNOWN fires (could be the gated value).
+        assert!(n(None, Some("github")));
+        assert!(n(Some(""), Some("github")));
+        assert!(n(Some("POST"), None));
+        assert!(n(Some("POST"), Some("")));
+        assert!(n(None, None));
+        assert!(n(Some(""), Some("")));
+
+        // KNOWN-WRONG passes.
+        assert!(!n(Some("GET"), Some("github")));
+        assert!(!n(Some("DELETE"), Some("github")));
+        assert!(!n(Some("POST"), Some("evil")));
+        assert!(!n(Some("GET"), Some("evil")));
+
+        // Wrong action never fires, whatever the axes.
+        assert!(!needs_approval(&rules, "fs.write", None, None));
+        assert!(!needs_approval(
+            &rules,
+            "fs.write",
+            Some("POST"),
+            Some("github")
+        ));
+    }
+
+    /// Wildcard axes: an absent list matches EVERYTHING — including unknown
+    /// values. (The module header's warning: an absent list must mean "all",
+    /// never "none", or gates silently stop firing.)
+    #[test]
+    fn wildcard_axes_match_everything_including_unknown() {
+        // Wildcard methods, constrained host.
+        let rules = vec![ApprovalRule {
+            action: "http.request".into(),
+            methods: vec![],
+            hosts: vec!["github".into()],
+        }];
+        let n = |m: Option<&str>, h: Option<&str>| needs_approval(&rules, "http.request", m, h);
+        assert!(n(Some("GET"), Some("github")));
+        assert!(n(None, Some("github"))); // unknown method, wildcard methods
+        assert!(n(Some("POST"), None)); // unknown host still fires (host constrained)
+        assert!(!n(Some("GET"), Some("evil"))); // known-wrong host passes
+
+        // Constrained method, wildcard host.
+        let rules = vec![ApprovalRule {
+            action: "http.request".into(),
+            methods: vec!["POST".into()],
+            hosts: vec![],
+        }];
+        let n = |m: Option<&str>, h: Option<&str>| needs_approval(&rules, "http.request", m, h);
+        assert!(n(Some("POST"), Some("evil")));
+        assert!(n(Some("POST"), None)); // unknown host, wildcard hosts
+        assert!(!n(Some("GET"), Some("github"))); // known-wrong method passes
+
+        // Fully wildcard: every request of the action fires.
+        let rules = vec![ApprovalRule {
+            action: "http.request".into(),
+            methods: vec![],
+            hosts: vec![],
+        }];
+        assert!(needs_approval(&rules, "http.request", None, None));
+        assert!(needs_approval(
+            &rules,
+            "http.request",
+            Some("GET"),
+            Some("evil")
+        ));
+    }
+
+    /// Multiple rules: ANY matching rule fires (the .any() semantics), and a
+    /// rule that is known-wrong on either axis does not mask a later rule
+    /// that matches.
+    #[test]
+    fn any_matching_rule_fires() {
+        let rules = vec![
+            ApprovalRule {
+                action: "http.request".into(),
+                methods: vec!["GET".into()],
+                hosts: vec!["github".into()],
+            },
+            ApprovalRule {
+                action: "http.request".into(),
+                methods: vec!["POST".into()],
+                hosts: vec!["registry".into()],
+            },
+        ];
+        let n = |m: Option<&str>, h: Option<&str>| needs_approval(&rules, "http.request", m, h);
+        assert!(n(Some("GET"), Some("github")));
+        assert!(n(Some("POST"), Some("registry")));
+        assert!(!n(Some("GET"), Some("registry")));
+        assert!(!n(Some("POST"), Some("github")));
+        // Unknown values: each constrained rule fires (first one wins).
+        assert!(n(None, None));
+        assert!(n(None, Some("github")));
+    }
+}
