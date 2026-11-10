@@ -32,7 +32,7 @@ Five adversaries (A1–A5) and seven attack paths are modeled in `docs/THREAT_MO
 |----|-----------|------------|
 | I1 | No guest process reaches any network except through the egress proxy | Escape suite (raw sockets, DNS, ICMP, IPv6, tunnels), proxy alias/metadata/budget tests |
 | I2 | No credential value ever appears in guest memory, files, environment, or arguments | Credential canaries, broker encrypt/load/rotate |
-| I3 | A token can only be narrowed, never widened, when delegated | Capability property tests (200 seeds), narrow/widen/revoke/tamper, **approval `needs_approval` fail-closed on unknown/empty method/host preventing gate-dodging** |
+| I3 | A token can only be narrowed, never widened, when delegated | Capability property tests (200 seeds), narrow/widen/revoke/tamper, **approval `needs_approval` fail-closed on unknown/empty method/host preventing gate-dodging — decision-table matrices pin the full contract (UNKNOWN fires, KNOWN-WRONG passes, wildcard lists, `.any()` across rules) in both the policy and approval crates, end-to-end through the YAML loader; a gate pause exits 3 (`fetch` and `mcp call`) and `Queue::sweep_expired` enforces timeout = deny** |
 | I4 | Every decision and side effect is recorded before the action completes | Supervisor write-ahead intent logging, chaos tests |
 | I5 | Any edit/deletion/reordering of the audit log is detected by `audit verify` | Audit mutation tests, checkpoint truncation test |
 | I6 | The guest cannot loosen its own policy or reach the policy engine | `sh -c` denial, path traversal tests, fs mount checks |
