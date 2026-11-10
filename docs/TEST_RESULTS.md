@@ -1,58 +1,38 @@
 # Test results — toolcage
 
-222 tests, 0 failures (`cargo test --workspace`). Clippy clean
+272 tests, 0 failures (`cargo test --workspace`). Clippy clean
 (`cargo clippy --workspace --all-targets`: 0 findings).
 
-Generated from the workspace run; re-run `cargo test --workspace` to
-reproduce. The breakdown is by test target (integration targets marked `*`).
+Generated from the workspace run (2026-11-10); re-run
+`cargo test --workspace` to reproduce. The per-crate breakdown below is
+`cargo test -p toolcage-<crate>` (unit + integration + doc tests) and
+sums to the workspace total.
 
-| Suite | Count | Invariants |
+| Crate | Count | Invariants |
 |---|---|---|
-| policy unit (decide, request hygiene, modes, exec gate) | 7 | I1, I6 |
-| policy escape `*` (shell/interpreter incl. path-qualified + bundled flags, allowlist trusted paths, traversal, request-line, mount modes, absent method) | 17 | I1, I6 |
-| policy timing `*` (decision p99) | 1 | perf |
-| audit unit (chain, checkpoint, verify) | 6 | I4, I5 |
-| audit throughput `*` | 1 | perf |
-| broker unit (inject/scrub/canary, encrypt/load/rotate, hex, empty credential) | 8 | I2 |
-| capability unit (narrow/widen/revoke/tamper, MAC shape, root prefix, rev_id, signed lineage) | 13 | I3 |
-| capability property `*` (200-seed chains, revocation subtree, keyed tokens) | 3 | I3 |
-| approval unit (gate matching, unknown dodges, queue) | 2 | policy |
-| proxy unit (alias, metadata, budgets, http parsing, chunked decode) | 19 | I1 |
-| guest-agent unit (request + reply validation) | 6 | I6 |
-| mcp unit (gate, tool args, learn, JSON-RPC 2.0 conformance, RPC smoke) | 15 | A2 |
-| supervisor unit (hashing, budget helpers) | 1 | — |
-| supervisor canary `*` | 3 | I2, I7 |
-| supervisor chaos `*` (audit-fail, proxy-down, broker-down, ro-disk, revoked-token, over-budget, panic freeze enforced) | 9 | fail-closed |
-| supervisor destination `*` | 2 | I1 |
-| supervisor fuzz `*` (policy/guest/audit/proxy) | 4 | all |
-| supervisor isolation `*` (fail-closed, tier2 no host spawn, escape hatch) | 4 | I1 |
-| supervisor limits `*` (timeout kill, over-cap truncate) | 2 | fail-closed |
-| supervisor output `*` (no SIGPIPE on over-cap) | 1 | fail-closed |
-| supervisor timeout `*` (process-group kill) | 1 | fail-closed |
-| supervisor wait-error `*` (group killed on wait failure) | 1 | fail-closed |
-| supervisor token gate `*` (dual auth, attenuation, revocation) | 5 | I3 |
-| backend-ns unit (probe, pidns, exec isolation, seccomp, Landlock ABI, environ scrub, waitpid EINTR) | 22 | I1, I2 |
-| backend-gv unit (OCI bundle, read_capped, honors lattice, fail-closed) | 9 | tier fail-closed |
-| backend-fc unit (config, jailer, pool, snapshot, guest reply, frame, escape suite, image manifest) | 28 | I1, I6 |
-| cli unit (budget naming) | 1 | — |
-| cli exit_code `*` | 2 | fail-closed |
-| cli key_permissions `*` (0600/0644 exact, umask-independent) | 3 | I2 |
-| cli learn_mode `*` (proposals, never auto-applied) | 2 | policy |
-| cli min_isolation `*` | 2 | tier fail-closed |
-| cli secret_arg `*` (secret never on argv) | 2 | I2 |
-| cli clients `*` (python + ts clients: allow, deny, unknown tool) | 2 | A2 |
-| cli image sign `*` (build -> sign -> load round trip, foreign key refused) | 1 | I2 |
-| cli revocation `*` (fetch refuses revoked root and its cold child; unrelated ids pass) | 1 | I3 |
-| verify binary `*` (clean log ok, tamper fails, forged checkpoint fails) | 2 | I5 |
+| policy (decide, gate polarity, request hygiene, modes, exec denylist, matrix) | 46 | I1, I6 |
+| audit (chain, checkpoint, verify-on-open, freeze, throughput `*`) | 12 | I4, I5 |
+| verify (standalone log verifier) | 2 | I5 |
+| cli (exit codes, approval pause, secret handling, clients, learn mode, key permissions, revocation, image sign, min isolation) | 24 | I2, I3, I6 |
+| supervisor (canary, chaos, destination, fuzz, isolation, limits, memory, output, timeout, token gate, wait-error) | 35 | I2, I4, I7 |
+| proxy (alias, metadata, budgets, http parsing, chunked decode, scrub) | 27 | I1, I2 |
+| broker (inject/scrub/canary, encrypt/load/rotate, empty credential) | 8 | I2 |
+| backend (honors lattice, capabilities) | 0 | — |
+| backend-fc (REST ordering, snapshot checks, pool failure, Tier-2 escape `*`) | 28 | I1, I7 |
+| backend-ns (Landlock, seccomp blocklist pinning, exec resolution, live isolation `*`) | 33 | I1, I6 |
+| backend-gv (bundle spec shape, jailer args, runsc invocation) | 9 | I1 |
+| guest-agent (request + reply validation) | 6 | I6 |
+| capability (narrow/widen/revoke/tamper, signed lineage, revocation persistence, 200-seed property `*`) | 19 | I3 |
+| approval (gate decision table, queue contract, timeout sweep) | 7 | I3 |
+| mcp (gate, tool args, learn, JSON-RPC 2.0 conformance, RPC smoke) | 16 | A2 |
+| **Total** | **272** | 0 failures |
 
-Live tier tests **skip loudly** where the host lacks the prerequisites
-(userns/mount/net/ipc/pid/uts, Landlock, `runsc`, firecracker + `/dev/kvm`);
-probes test the real syscalls, not sysctls.
+## Notes
 
-Manual live checks: `run` ok, `sh -c` denied, metadata denied, `fetch`
-scrubbed, evil denied, token widen rejected, POST paused then approved,
-`verify ok`, mutation fails, `panic` freezes + taints, checkpoint tamper
-fails verify.
-
-Not covered here (see `docs/REVIEW.md`): independent security review —
-this is the gate before any public security claim.
+- Live Tier 0 tests skip loudly on hosts without the namespace stack or
+  Landlock; `run --tier tier0` refuses to start rather than downgrade.
+- Tier 1 (gVisor) and Tier 2 (Firecracker) suites validate arg/spec shape
+  against mock APIs — see the README's status table for what is and is not
+  live-tested.
+- The counts regenerate from the run: re-run `cargo test --workspace` and
+  the `cargo test -p toolcage-<crate>` loop above before editing this file.
