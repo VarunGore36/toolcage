@@ -247,10 +247,15 @@ fn normalize_fs(p: &str) -> String {
 }
 
 fn now_secs() -> u64 {
+    // A clock reading before the epoch (broken VM RTC, restored snapshot)
+    // must fail SAFE for expiry: u64::MAX means "now > expires_at" holds for
+    // every finite expiry, so tokens are treated as expired — not
+    // permanently unexpired (the old unwrap_or(0) made 0 > expires_at
+    // impossible and waved every token through on a broken clock).
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .unwrap_or(u64::MAX)
 }
 
 impl Token {
