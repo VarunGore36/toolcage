@@ -695,11 +695,12 @@ fn main() -> anyhow::Result<()> {
             if let Some(f) = &revocation_file {
                 rl.merge(toolcage_capability::RevocationList::load(f)?);
             }
-            let mut budgets =
-                toolcage_proxy::Budgets::with_path(&budget_file).unwrap_or_else(|e| {
-                    eprintln!("warning: budget persistence unavailable (in-memory): {e}");
-                    toolcage_proxy::Budgets::default()
-                });
+            // The budget store is a DAMAGE BOUND: if it cannot be loaded, the
+            // accumulated damage is unknown, and proceeding with zeroed
+            // counters means an unbounded ceiling. Fail closed — the operator
+            // fixes or removes the corrupt store; nothing runs on a guess.
+            // (A missing file is NOT an error: with_path starts fresh then.)
+            let mut budgets = toolcage_proxy::Budgets::with_path(&budget_file)?;
             let mut proxy = toolcage_proxy::Proxy::new()?;
             let o = sup.fetch_via_proxy(
                 &broker,
