@@ -911,11 +911,10 @@ fn main() -> anyhow::Result<()> {
                 };
                 let broker = toolcage_broker::Broker::new();
                 let mut proxy = toolcage_proxy::Proxy::new()?;
-                let mut budgets =
-                    toolcage_proxy::Budgets::with_path(&budget_file).unwrap_or_else(|e| {
-                        eprintln!("warning: budget persistence unavailable (in-memory): {e}");
-                        toolcage_proxy::Budgets::default()
-                    });
+                // Damage bound: a store that exists but cannot be parsed is
+                // an error, not a silent reset to unbounded (see the fetch
+                // call site).
+                let mut budgets = toolcage_proxy::Budgets::with_path(&budget_file)?;
                 let mut learn_mode = toolcage_mcp::LearnMode::default();
                 let stdin = std::io::stdin();
                 use std::io::BufRead;
@@ -1075,11 +1074,10 @@ fn main() -> anyhow::Result<()> {
                 };
                 let broker = toolcage_broker::Broker::new();
                 let mut proxy = toolcage_proxy::Proxy::new()?;
-                let mut budgets =
-                    toolcage_proxy::Budgets::with_path(&budget_file).unwrap_or_else(|e| {
-                        eprintln!("warning: budget persistence unavailable (in-memory): {e}");
-                        toolcage_proxy::Budgets::default()
-                    });
+                // Damage bound: a store that exists but cannot be parsed is
+                // an error, not a silent reset to unbounded (see the fetch
+                // call site).
+                let mut budgets = toolcage_proxy::Budgets::with_path(&budget_file)?;
                 let args: serde_json::Value = serde_json::from_str(&args_json)?;
                 match toolcage_mcp::route(
                     &mut sup,
