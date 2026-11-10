@@ -261,7 +261,9 @@ pub fn route(
                 broker, budgets, proxy, host, method, path, token, revocation, false,
             )?;
             if o.need_approval {
-                anyhow::bail!("paused {:?}", o.rule_ids);
+                // The CLI maps this to exit 3 ("needs a human"), distinct
+                // from a policy denial's exit 2 — same contract as `fetch`.
+                anyhow::bail!("paused: approval required {:?}", o.rule_ids);
             }
             if !o.allowed {
                 anyhow::bail!("denied {:?}", o.rule_ids);

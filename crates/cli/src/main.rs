@@ -1100,7 +1100,19 @@ fn main() -> anyhow::Result<()> {
                                 serde_json::to_string_pretty(&lm.propose())?
                             );
                         }
-                        eprintln!("denied: {e}");
+                        let msg = e.to_string();
+                        if msg.starts_with("paused") {
+                            // Approval pause: documented as exit 3 (same as
+                            // `fetch`), so operator scripts can distinguish
+                            // "needs a human" from a policy denial. The
+                            // message is already "paused: approval required
+                            // …" — print it verbatim.
+                            eprintln!("{msg}");
+                            // exit() skips destructors: tear the session down first (I7).
+                            sup.teardown();
+                            std::process::exit(3);
+                        }
+                        eprintln!("denied: {msg}");
                         // exit() skips destructors: tear the session down first (I7).
                         sup.teardown();
                         std::process::exit(2);
