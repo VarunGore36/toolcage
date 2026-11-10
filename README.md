@@ -283,7 +283,7 @@ Measured on the development host, October 2026. Re-run `scripts/bench.sh` on you
 | Audit append, fsync per event | ≥ 10,000 eps | **~270,000 eps** (n = 5k) |
 | `run` end-to-end, Tier 0 | n/a | 53 ms/call (n = 200, measured before isolation was enabled) |
 | Tier 2 warm-claim start latency | track p50/p99 by tier | p50 19.9 ms, p99 20.2 ms (n = 20; includes the mock API's ~10 ms accept poll — real firecracker is sub-ms, so read it as the orchestration ceiling and its trend) |
-| Supervisor idle memory | < 100 MB | not yet measured |
+| Supervisor idle memory | < 100 MB | **3.82 MB** (RSS of a constructed supervisor after one policy decision; `cargo test -p toolcage-supervisor --test memory -- --nocapture`) |
 
 The audit figure is filesystem-dependent (tmpfs may not flush durably) and is a baseline, not a durability claim. The 53 ms figure predates real isolation and will be higher now.
 
