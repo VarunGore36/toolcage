@@ -560,6 +560,12 @@ impl Supervisor {
         // Matched over every spelling of the destination, so a request for
         // `github.internal` cannot dodge a gate written as `hosts: [github]`
         // (and vice versa) — policy already treats the two as one destination.
+        //
+        // The gate is consulted with KNOWN method/host (Some/Some, checked
+        // above); the UNKNOWN-fires polarity of needs_approval is the
+        // backstop for callers that cannot attribute a request — there,
+        // "unknown" pauses rather than proceeds (see the approval/policy
+        // gate matrices).
         let needs_ok = dest_names.iter().any(|n| {
             self.policy
                 .needs_approval("http.request", Some(method), Some(n))
