@@ -383,10 +383,14 @@ impl Broker {
         }
         // Expiry check (fail-closed).
         if let Some(exp) = c.expires_at {
+            // A pre-epoch clock must deny, not panic: u64::MAX makes
+            // now > exp hold for every finite expiry, so the credential
+            // reads as expired on a broken clock — the safe direction for
+            // the credential-injection path.
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
+                .map(|d| d.as_secs())
+                .unwrap_or(u64::MAX);
             if now > exp {
                 return None;
             }
