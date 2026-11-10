@@ -917,21 +917,74 @@ fn main() -> anyhow::Result<()> {
                 let mut budgets = toolcage_proxy::Budgets::with_path(&budget_file)?;
                 let mut learn_mode = toolcage_mcp::LearnMode::default();
                 let stdin = std::io::stdin();
-                use std::io::BufRead;
-                for line in stdin.lock().lines() {
-                    let line = line?;
-                    if line.trim().is_empty() {
-                        continue;
+                // One frame at a time, bounded DURING buffering. BufRead::lines()
+                // accumulates until \n with no cap, so a guest-controlled client
+                // could amp memory to gigabytes before the old length check ever
+                // ran; fill_buf chunks are capped here instead.
+                fn read_frame(r: &mut impl std::io::BufRead, cap: usize) -> std::io::Result<Frame> {
+                    let mut buf: Vec<u8> = Vec::new();
+                    let mut oversized = false;
+                    loop {
+                        let available = r.fill_buf()?;
+                        if available.is_empty() {
+                            return Ok(if oversized {
+                                Frame::TooLarge
+                            } else if buf.is_empty() {
+                                Frame::Eof
+                            } else {
+                                Frame::Line(std::mem::take(&mut buf))
+                            });
+                        }
+                        match available.iter().position(|&b| b == b'\n') {
+                            Some(i) => {
+                                if !oversized {
+                                    buf.extend_from_slice(&available[..i]);
+                                }
+                                r.consume(i + 1);
+                                return Ok(if oversized {
+                                    Frame::TooLarge
+                                } else {
+                                    Frame::Line(buf)
+                                });
+                            }
+                            None => {
+                                if !oversized {
+                                    if buf.len() + available.len() > cap {
+                                        buf.extend_from_slice(&available[..cap - buf.len()]);
+                                        oversized = true;
+                                    } else {
+                                        buf.extend_from_slice(available);
+                                    }
+                                }
+                                let len = available.len();
+                                r.consume(len);
+                            }
+                        }
                     }
-                    // Bound the frame: the id is reflected and the line is
-                    // parsed whole, so an unbounded line is a memory amp.
-                    if line.len() > 64 * 1024 {
-                        let r = toolcage_mcp::RpcResp::error(
-                            serde_json::Value::Null,
-                            toolcage_mcp::PARSE_ERROR,
-                            "frame too large",
-                        );
-                        println!("{}", serde_json::to_string(&r)?);
+                }
+                enum Frame {
+                    Line(Vec<u8>),
+                    TooLarge,
+                    Eof,
+                }
+                const FRAME_CAP: usize = 64 * 1024;
+                let mut raw = stdin.lock();
+                loop {
+                    let line = match read_frame(&mut raw, FRAME_CAP)? {
+                        Frame::Eof => break,
+                        Frame::TooLarge => {
+                            let r = toolcage_mcp::RpcResp::error(
+                                serde_json::Value::Null,
+                                toolcage_mcp::PARSE_ERROR,
+                                "frame too large",
+                            );
+                            println!("{}", serde_json::to_string(&r)?);
+                            continue;
+                        }
+                        Frame::Line(line) => line,
+                    };
+                    let line = String::from_utf8(line)?;
+                    if line.trim().is_empty() {
                         continue;
                     }
                     let req: toolcage_mcp::RpcReq = match serde_json::from_str(&line) {
