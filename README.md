@@ -185,7 +185,7 @@ approval:
 - Hosts and methods match case-insensitively. Mount paths are canonicalized (`/workspace/a/../b` becomes `/workspace/b`) and `..` escapes are denied.
 - Cloud metadata endpoints (`169.254.169.254`, `metadata*`, `instance-data`) are never reachable.
 - Credentials are bound to destinations with `use_with`. They are not attached to requests for any other host.
-- Approval gates pause the call (exit code 3 on the CLI). A timeout is a denial.
+- Approval gates pause the call (exit code 3 on the CLI — `fetch` and `mcp call` alike; a policy denial is exit 2). A timeout is a denial. Gate polarity: an **unknown** method or host (omitted/empty) *fires* the gate — an unattributable request could be the gated one, so a human decides; only a known-and-non-matching value (GET against a POST gate) passes.
 
 ### Capability tokens
 
