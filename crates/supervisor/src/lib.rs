@@ -442,13 +442,19 @@ impl Supervisor {
                 }
             }
         };
-        let (stdout, out_trunc) = rx_out
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap_or_default();
-        let (stderr, err_trunc) = rx_err
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap_or_default();
-        let truncated = timed_out || out_trunc || err_trunc;
+        // SUP-3: a drain that never completes (thread panicked, or a
+        // grandchild survived the process-group kill and holds the pipe) is
+        // OUTPUT LOSS, not empty output — it must be visible in the
+        // truncation flag and the audit record, not swallowed by a default.
+        let (stdout, out_trunc, out_lost) = match rx_out.recv_timeout(Duration::from_secs(5)) {
+            Ok((o, t)) => (o, t, false),
+            Err(_) => (Vec::new(), true, true),
+        };
+        let (stderr, err_trunc, err_lost) = match rx_err.recv_timeout(Duration::from_secs(5)) {
+            Ok((e, t)) => (e, t, false),
+            Err(_) => (Vec::new(), true, true),
+        };
+        let truncated = timed_out || out_trunc || err_trunc || out_lost || err_lost;
         w.append(Event {
             seq: 0,
             ts_wall: now_wall(),
@@ -460,8 +466,11 @@ impl Supervisor {
             rule_ids: rule_ids.clone(),
             token_rev_id: self.token_rev_id.clone(),
             result: format!(
-                "exit={:?} truncated={} timeout={}",
-                code, truncated, timed_out
+                "exit={:?} truncated={} timeout={} drain_lost={}",
+                code,
+                truncated,
+                timed_out,
+                out_lost || err_lost
             ),
             bytes: (stdout.len() + stderr.len()) as u64,
             claimed_by: "host".into(),
