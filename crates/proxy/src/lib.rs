@@ -1172,3 +1172,39 @@ mod budget_tests {
         assert_eq!(b.used_bytes(d), 20);
     }
 }
+
+#[cfg(test)]
+mod budget_store_tests {
+    use super::*;
+
+    /// The budget store is a damage bound: a store that exists but cannot be
+    /// parsed must be an ERROR, never a silent reset to zeroed (unbounded)
+    /// counters. The CLI call sites propagate this Err and refuse to run.
+    #[test]
+    fn corrupt_budget_store_is_an_error_not_a_reset() {
+        let dir = std::env::temp_dir().join(format!(
+            "tc-budget-corrupt-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.jsonl.budget");
+        std::fs::write(&path, b"{not json at all}").unwrap();
+        assert!(
+            Budgets::with_path(&path).is_err(),
+            "an unparseable budget store must error"
+        );
+        // A missing file is fine: fresh state (no accumulated damage to lose).
+        let missing = dir.join("never-wrote.budget");
+        assert!(Budgets::with_path(&missing).is_ok());
+        // A valid store loads its counters (the accumulated damage survives).
+        let good = dir.join("good.budget");
+        let mut b = Budgets::default();
+        b.bytes.insert("github".into(), 1234);
+        b.persist_path = Some(good.clone());
+        b.save().unwrap();
+        let loaded = Budgets::with_path(&good).unwrap();
+        assert_eq!(loaded.bytes.get("github"), Some(&1234));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
