@@ -336,11 +336,30 @@ impl Broker {
         let mut tmp = path.as_os_str().to_owned();
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
-        fs::write(&tmp, &data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+        // Write the replacement 0600 from the first byte, fsync it, then
+        // rename: a chmod failure is an ERROR (the old `let _ =` left the
+        // store 0644 permanently after rename), and an un-fsynced rename can
+        // leave an empty store after a crash.
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)
+                .map_err(|e| anyhow::anyhow!("io: {e}"))?;
+            f.write_all(&data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+            f.sync_all().map_err(|e| anyhow::anyhow!("fsync: {e}"))?;
+            fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
+                .map_err(|e| anyhow::anyhow!("io: {e}"))?;
+        }
+        #[cfg(not(unix))]
+        {
+            let mut f = fs::File::create(&tmp).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+            f.write_all(&data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+            f.sync_all().map_err(|e| anyhow::anyhow!("fsync: {e}"))?;
         }
         fs::rename(&tmp, path).map_err(|e| anyhow::anyhow!("io: {e}"))?;
         self.master_key = Some(new_key);
