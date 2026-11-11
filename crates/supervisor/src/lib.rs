@@ -259,7 +259,32 @@ impl Supervisor {
         // (gVisor), Tier 2 = Firecracker. No tier is special-cased here: Tier 2
         // must never quietly degrade to a host spawn.
         if let Some(backend) = self.backend.as_mut() {
-            let cr = backend.exec(&self.session, argv, timeout_secs, cap)?;
+            // The intent event above is already in the log: a backend error
+            // must append its outcome before returning, or the log carries a
+            // permanently open intent (an I4 pairing violation — verifiers
+            // would read every backend failure as tampering).
+            let cr = match backend.exec(&self.session, argv, timeout_secs, cap) {
+                Ok(cr) => cr,
+                Err(e) => {
+                    w.append(Event {
+                        seq: 0,
+                        ts_wall: now_wall(),
+                        session: self.session.clone(),
+                        actor: "supervisor".into(),
+                        action: "proc.exec".into(),
+                        request_hash: argv_hash,
+                        decision: "deny".into(),
+                        rule_ids: d.rule_ids.clone(),
+                        token_rev_id: "root".into(),
+                        result: format!("backend-error: {e:#}"),
+                        bytes: 0,
+                        claimed_by: "host".into(),
+                        prev_hash: String::new(),
+                        hash: String::new(),
+                    })?;
+                    return Err(e);
+                }
+            };
             w.append(Event {
                 seq: 0,
                 ts_wall: now_wall(),
