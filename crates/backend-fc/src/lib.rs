@@ -2160,8 +2160,9 @@ mod cid_allocator_tests {
 
     /// BACK-4: the id-derived CID is a PROPOSAL. Two sessions whose byte sums
     /// collide (mod 10000) must not share a CID — two VMs sharing a CID share
-    /// one control channel. The allocator refuses collisions and hands out
-    /// the next free CID; destroy frees it for reuse.
+    /// one control channel. allocate_cid() refuses collisions and hands out
+    /// the next free CID; free_cid() makes it reusable. (Pure set operations:
+    /// no KVM needed to test the allocator.)
     #[test]
     fn colliding_sessions_get_distinct_cids() {
         let mut b = FcBackend::new();
@@ -2173,58 +2174,35 @@ mod cid_allocator_tests {
             "test premise: derived CIDs collide"
         );
 
-        // Simulate the allocator's create() decision for both sessions.
-        let mut used = std::collections::HashSet::new();
-        let mut assign = |cfg: &FcConfig, used: &mut std::collections::HashSet<u32>| -> u32 {
-            let mut cid = cfg.vsock_cid;
-            if used.contains(&cid) {
-                let base = cid;
-                cid += 1;
-                while used.contains(&cid) && cid != base {
-                    cid = if cid >= 10_002 { 3 } else { cid + 1 };
-                }
-                assert!(!used.contains(&cid), "CID space exhausted");
-            }
-            used.insert(cid);
-            cid
-        };
-        let cid_a = assign(&a, &mut used);
-        let cid_c = assign(&c, &mut used);
+        let cid_a = b.allocate_cid(a.vsock_cid).unwrap();
+        let cid_c = b.allocate_cid(c.vsock_cid).unwrap();
         assert_ne!(cid_a, cid_c, "colliding sessions must get distinct CIDs");
+        assert_eq!(cid_a, a.vsock_cid, "the first claimant keeps the proposal");
+        assert_eq!(
+            cid_c,
+            a.vsock_cid + 1,
+            "the collision scans to the next free"
+        );
 
         // Destroy frees the CID for reuse.
-        used.remove(&cid_a);
-        let cid_again = assign(&a, &mut used);
+        b.free_cid(cid_a);
+        let cid_again = b.allocate_cid(a.vsock_cid).unwrap();
         assert_eq!(cid_again, cid_a, "freed CID must be reusable");
     }
 
-    /// The allocator wraps at the range boundary instead of running past the
-    /// valid guest-CID window.
+    /// The allocator reports exhaustion instead of looping forever when the
+    /// whole 3..=10002 window is in use.
     #[test]
-    fn allocator_wraps_at_range_boundary() {
-        let mut used = std::collections::HashSet::new();
-        // Fill right up to the boundary.
+    fn allocator_reports_exhaustion() {
+        let mut b = FcBackend::new();
         for cid in 3..=10_002 {
-            used.insert(cid);
+            b.used_cids.insert(cid);
         }
         let cfg = FcConfig::for_session("ab", 128);
-        let mut cid = cfg.vsock_cid;
-        let base = cid;
-        // One full wrap finds nothing — the exhaustion check must fire.
-        let mut wrapped = false;
-        loop {
-            cid = if cid >= 10_002 { 3 } else { cid + 1 };
-            if cid == base {
-                wrapped = true;
-                break;
-            }
-            if !used.contains(&cid) {
-                break;
-            }
-        }
+        let err = b.allocate_cid(cfg.vsock_cid).unwrap_err();
         assert!(
-            wrapped,
-            "exhausted space must be detected, not looped forever"
+            err.to_string().contains("exhausted"),
+            "exhaustion must be the error: {err}"
         );
     }
 }
