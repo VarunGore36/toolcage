@@ -40,6 +40,7 @@ fn wait_error_kills_the_process_group() {
         tier: toolcage_backend::Tier::Tier0,
         backend: None,
         allow_unisolated: true,
+        token_rev_id: String::new(),
         cap_key: None,
     };
     let argv = vec![script.display().to_string()];

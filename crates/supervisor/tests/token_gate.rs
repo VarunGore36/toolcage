@@ -288,6 +288,7 @@ fn cred_use_axis_is_enforced_on_credential_attachment() {
         tier: toolcage_backend::Tier::Tier0,
         backend: None,
         allow_unisolated: false,
+        token_rev_id: String::new(),
         cap_key: Some(k.clone()),
     };
     let o = fetch_cred(&mut sup, Some(&none_allowed), &rl);
@@ -320,6 +321,7 @@ fn cred_use_axis_is_enforced_on_credential_attachment() {
         tier: toolcage_backend::Tier::Tier0,
         backend: None,
         allow_unisolated: false,
+        token_rev_id: String::new(),
         cap_key: Some(k.clone()),
     };
     let o = fetch_cred(&mut sup, Some(&ok_tok), &rl);

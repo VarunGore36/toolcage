@@ -39,6 +39,7 @@ fn supervisor_idle_memory_under_100mb_target() {
         tier: toolcage_backend::Tier::Tier0,
         backend: None,
         allow_unisolated: false,
+        token_rev_id: String::new(),
         cap_key: None,
     };
 

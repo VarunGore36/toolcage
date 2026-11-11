@@ -13,6 +13,7 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         tier: toolcage_backend::Tier::Tier0,
         backend: None,
         allow_unisolated: false,
+        token_rev_id: String::new(),
         cap_key: None,
     }
 }
@@ -31,6 +32,7 @@ fn audit_write_failure_denies_action() {
         tier: toolcage_backend::Tier::Tier0,
         backend: None,
         allow_unisolated: false,
+        token_rev_id: String::new(),
         cap_key: None,
     };
     let b = toolcage_broker::Broker::new();
@@ -165,6 +167,7 @@ fn over_egress_budget_denies_fail_closed() {
         tier: toolcage_backend::Tier::Tier0,
         backend: None,
         allow_unisolated: false,
+        token_rev_id: String::new(),
         cap_key: None,
     };
     let b = toolcage_broker::Broker::new();
