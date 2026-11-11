@@ -63,6 +63,52 @@ pub fn validate(msg: &GuestMsg) -> anyhow::Result<()> {
                 anyhow::ensure!(a.len() <= 4096, "arg too long");
                 anyhow::ensure!(!a.contains('\0'), "nul in arg");
             }
+            // Shell/interpreter inline code by SHAPE (the header's claim):
+            // the policy engine denies these upstream, but the guest agent is
+            // the last gate before execve — a hostile or bypassed host path
+            // must not be able to smuggle `sh -c <string>` past it. Same
+            // denylist shape as policy: shell basenames + single-dash args
+            // containing 'c', interpreter inline flags.
+            let bin = argv[0]
+                .rsplit('/')
+                .next()
+                .unwrap_or(&argv[0])
+                .to_ascii_lowercase();
+            const SHELLS: &[&str] = &[
+                "sh", "bash", "dash", "zsh", "fish", "ksh", "tcsh", "csh", "busybox",
+            ];
+            if SHELLS.iter().any(|s| *s == bin)
+                && argv[1..].iter().any(|a| {
+                    let b = a.as_bytes();
+                    b.len() >= 2 && b[0] == b'-' && b[1] != b'-' && a.contains('c')
+                })
+            {
+                anyhow::bail!("shell inline code is not allowed by shape");
+            }
+            const INTERPRETERS: &[(&str, &[&str])] = &[
+                ("python", &["-c", "-C"]),
+                ("python3", &["-c", "-C"]),
+                ("perl", &["-e", "-E", "-x"]),
+                ("ruby", &["-e", "-E", "-x"]),
+                ("node", &["-e", "-E", "-p", "-P", "--eval", "--print"]),
+                ("lua", &["-e", "-E"]),
+                ("php", &["-r", "-R"]),
+            ];
+            for a in argv {
+                let name = a.rsplit('/').next().unwrap_or(a).to_ascii_lowercase();
+                for (binname, flags) in INTERPRETERS {
+                    if name.starts_with(binname)
+                        && name[binname.len()..]
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || b == b'.' || b == b'-')
+                        && argv
+                            .iter()
+                            .any(|b| flags.iter().any(|f| b == *f || b.starts_with(*f)))
+                    {
+                        anyhow::bail!("interpreter inline code is not allowed by shape");
+                    }
+                }
+            }
             for e in env_refs {
                 // Only placeholders cross the boundary: `secret:name` or
                 // `plain:name`, never values. Split at ':' and match the kind
@@ -316,6 +362,47 @@ mod tests {
             };
             assert!(validate(&m).is_err(), "env ref {bad_name} must be rejected");
         }
+        // The shape gate: shell inline code and interpreter inline flags are
+        // rejected at the protocol layer too (defense in depth — the policy
+        // engine is the primary gate).
+        for (argv, should_pass) in [
+            (
+                vec!["/bin/sh".to_string(), "-c".to_string(), "id".to_string()],
+                false,
+            ),
+            (
+                vec!["sh".to_string(), "-lc".to_string(), "x".to_string()],
+                false,
+            ),
+            (
+                vec![
+                    "/usr/bin/python3".to_string(),
+                    "-c".to_string(),
+                    "1".to_string(),
+                ],
+                false,
+            ),
+            (
+                vec!["perl".to_string(), "-E".to_string(), "say 1".to_string()],
+                false,
+            ),
+            (
+                vec!["node".to_string(), "--eval".to_string(), "1".to_string()],
+                false,
+            ),
+            (vec!["/bin/echo".to_string(), "-c-ish".to_string()], true),
+            (vec!["python3".to_string(), "script.py".to_string()], true),
+        ] {
+            let m = GuestMsg {
+                id: "1".into(),
+                op: GuestOp::Exec {
+                    argv,
+                    env_refs: vec![],
+                },
+            };
+            assert_eq!(validate(&m).is_ok(), should_pass, "shape gate: {m:?}");
+        }
+
         // Names must follow the portable env-var charset.
         for bad in [
             "secret:a=b",
