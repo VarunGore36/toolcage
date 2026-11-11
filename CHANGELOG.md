@@ -26,6 +26,19 @@ All notable changes to toolcage will be documented in this file.
 - `README.md`: redesigned with hero banner, 60-second demo, four guarantees, tier chart, benchmark table
 
 ### Fixed
+- `crates/cli`: the egress **budget store is a damage bound** — a store that exists but cannot be parsed now fails closed (all three call sites: `fetch`, `mcp serve`, `mcp call`) instead of silently resetting accumulated damage to an unbounded ceiling.
+- `crates/cli`: `mcp serve` bounds frame reads **during** buffering (capped `fill_buf` chunks) — the old `lines()` accumulated an unbounded line before the 64 KiB check ran, a memory amp on a guest-controlled stream.
+- `crates/capability`, `crates/broker`: a pre-epoch clock (broken VM RTC) now fails safe — token expiry reads as passed and credential injection is denied, instead of tokens living forever and the broker panicking mid-request.
+- `crates/broker`: the credential store is created `0600` **before** any bytes are written (no world-readable window), `rotate()` propagates chmod failures and fsyncs the replacement before rename (no permanently-0644 store, no empty store after a crash).
+- `crates/guest-agent`: the dangerous-env reject list covers interpreter hijacks — `BASH_ENV`, `ENV`, `SHELLOPTS`, `GLIBC_TUNABLES`, `NODE_OPTIONS`, `PYTHONSTARTUP`/`PYTHONPATH`/`PYTHONHOME`, `PERL5OPT`/`PERL5LIB`, `RUBYOPT`/`RUBYLIB`, `ZDOTDIR`, `GEM_HOME`.
+- `crates/audit`: `verify` no longer panics on degenerate log paths (`/`, `.`); the writer detects **same-length tail rewrites** between appends (a mtime check rides along; a changed file is re-verified under the lock before extending the chain).
+- `crates/cli`, `crates/mcp`: learn mode records only **policy** denials — token rejections, missing arguments, approval pauses, and infrastructure failures no longer pollute the allowlist proposals operators review.
+- `crates/cli`: `mcp serve` answers requests with an explicit `id: null` (per JSON-RPC 2.0 it is a request, not a notification) and echoes **null** — not the illegal value — in responses to invalid requests; frame reads are bounded during buffering.
+- `crates/cli`: `demo` refuses to wipe `/`, system prefixes, `$HOME`, or non-scratch directories; `doctor` anchors `doctor.sh` execution to the build tree, never the cwd.
+- `crates/supervisor`: backend errors append their audit outcome (`backend-error: …`) instead of leaving a permanently open write-ahead intent (I4 pairing).
+- `clients/python`: tool-name validation no longer uses `assert` (survives `python -O`).
+
+### Fixed
 - `crates/policy`, `crates/approval`: approval gates fail **closed** on unknown method/host. Both `needs_approval` functions treated an absent/empty method or host as "matches nothing", letting any request dodge a method- or host-constrained gate by omission — while the code comments, the tests' own messages, and THREAT_MODEL I3 all claimed the opposite (commit 5135ab7 inverted the predicate on a branch named fix/approval-fail-closed; this restores 4cf7729's fail-closed semantics and re-aligns the assertions with their messages). Unknown now fires the gate; only known-and-non-matching values pass.
 - `crates/cli`, `crates/mcp`: `mcp call` reports an approval pause as **exit 3** with a `paused:` message (matching `fetch` and the documented contract) instead of collapsing it into exit 2 with a `denied:` prefix — operator scripts can now distinguish "needs a human" from "refused".
 - `crates/approval`: the documented "Timeout = deny" contract is now enforceable — `Pending` records `created_at`, and `Queue::sweep_expired(now, timeout)` moves timed-out requests to decided-Deny and returns their ids for per-timeout audit events.
