@@ -843,21 +843,22 @@ pub struct FetchOutcome {
 /// Panic path: freeze audit with final checkpoint event, mark host tainted.
 /// Operator clears taint out-of-band. Sessions must be stopped by caller.
 pub fn panic_freeze(audit_path: &std::path::Path, reason: &str) -> anyhow::Result<String> {
-    // Marker FIRST (SUP-4): between "deny-all appended" and "marker written"
-    // there used to be a window where a crash left the freeze event in the
-    // log but no marker on disk. The chain still refuses appends after a
-    // deny-all (verify fails with "extended after panic freeze"), but
-    // Writer::open itself only refuses on the MARKER — so in that window a
-    // fresh Writer could open and rely on nothing. With the marker written
-    // first, every later Writer::open refuses immediately; if the deny-all
-    // append then fails, the marker is still honored (an operator taint
-    // stands — see the audit crate's marker handling).
+    // Order (SUP-4): open the writer, write the MARKER, then append the
+    // deny-all event. The old order (append, then marker) had a window where
+    // a crash left the freeze event in the log but no marker on disk — and
+    // Writer::open refuses on the MARKER, so the log was not actually frozen.
+    // With the marker between open and append: a crash after the marker
+    // still freezes every later open (the operator taint stands even though
+    // the deny-all event never landed); a crash before the marker leaves the
+    // log untouched and unfrozen. Writing the marker after open is safe: the
+    // open() marker check ran before we hold the writer, and no other writer
+    // can open while we hold the flock.
+    let mut w = Writer::open(audit_path)?;
     std::fs::write(
         toolcage_audit::tainted_marker(audit_path),
-        format!("tainted at {} head {}\n", now_wall(), reason),
+        format!("tainted at {} reason {}\n", now_wall(), reason),
     )?;
-    let mut w = Writer::open(audit_path)?;
-    let e = w.append(Event {
+    let e = w.append_panic_freeze(Event {
         seq: 0,
         ts_wall: now_wall(),
         session: "supervisor".into(),

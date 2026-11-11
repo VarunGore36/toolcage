@@ -278,6 +278,18 @@ impl Writer {
     /// the meantime by `panic` makes this append fail.
     pub fn append(&mut self, mut e: Event) -> anyhow::Result<Event> {
         ensure_not_tainted(&self.path)?;
+        self.append_unchecked(e)
+    }
+
+    /// The operator panic-freeze path: the taint marker is ALREADY on disk
+    /// (written before this append, so every future Writer::open refuses),
+    /// and the normal taint check would refuse the very event that freezes
+    /// the log. Only the freeze may use this.
+    pub fn append_panic_freeze(&mut self, e: Event) -> anyhow::Result<Event> {
+        self.append_unchecked(e)
+    }
+
+    fn append_unchecked(&mut self, mut e: Event) -> anyhow::Result<Event> {
         let _g = FlockGuard::lock(&self.file, &self.path)?;
         if self.modified_since_known() {
             self.resync()?;
