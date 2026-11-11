@@ -1231,10 +1231,15 @@ fn main() -> anyhow::Result<()> {
             let gv = toolcage_backend_gv::GvBackend::probe();
             println!("runsc={} version={:?}", gv.runsc_present, gv.runsc_version);
             let st = std::process::Command::new("bash")
-                .arg("scripts/doctor.sh")
+                // Anchor to the compile-time repo root, never the cwd: an
+                // agent can plant scripts/doctor.sh in its workspace and wait
+                // for the operator to run `toolcage doctor` there. When the
+                // script is absent (installed binary), the native probes
+                // above already carried the report — say so and move on.
+                .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/doctor.sh"))
                 .status();
             if st.is_err() {
-                println!("run scripts/doctor.sh");
+                println!("(shell-half doctor.sh not found at the build tree; native probes above are the report)");
             }
         }
         Cmd::Panic { audit, reason } => {
