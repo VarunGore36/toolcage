@@ -813,14 +813,17 @@ fn main() -> anyhow::Result<()> {
                 };
                 // Child expiry: 1h from now, clamped to parent expiry so attenuation
                 // never widens (and stays usable with wall-clock enforcement).
+                // A pre-epoch clock (broken VM RTC) yields u64::MAX: the clamp
+                // then narrows to the parent's expiry — never widens, never
+                // immortal (the old unwrap() panicked here).
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
+                    .map(|d| d.as_secs())
+                    .unwrap_or(u64::MAX);
                 let child_exp = if p.rights.expires_at == 0 {
-                    now + 3600
+                    now.saturating_add(3600)
                 } else {
-                    p.rights.expires_at.min(now + 3600)
+                    p.rights.expires_at.min(now.saturating_add(3600))
                 };
                 let c = p.attenuate(
                     &key,
@@ -1264,8 +1267,8 @@ fn main() -> anyhow::Result<()> {
                 let (n, head) = toolcage_audit::verify(&log)?;
                 let t = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
                     .to_string();
                 let cp = toolcage_audit::sign_checkpoint(n, &head, &t, &sk)?;
                 let checkpoint_name = format!("{}.checkpoint.{}", log.display(), n);
