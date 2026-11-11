@@ -48,6 +48,10 @@ pub struct Supervisor {
     /// Host key for capability-token tags (I3). Tokens presented without a
     /// verifiable key are denied — fail closed, never "unverified but allowed".
     pub cap_key: Option<toolcage_capability::Key>,
+    /// The rev_id of the token in scope for this supervisor's exec events.
+    /// Empty = no token presented. (SUP-2: exec events hardcoded "root" —
+    /// a lie when the call carried a delegated token or nothing at all.)
+    pub token_rev_id: String,
 }
 
 /// Session teardown on every exit path (I7): early returns and `?` errors
@@ -238,7 +242,7 @@ impl Supervisor {
             request_hash: argv_hash.clone(),
             decision: if d.allow { "allow" } else { "deny" }.into(),
             rule_ids: d.rule_ids.clone(),
-            token_rev_id: "root".into(),
+            token_rev_id: self.token_rev_id.clone(),
             result: "intent".into(),
             bytes: 0,
             claimed_by: "host".into(),
@@ -275,7 +279,7 @@ impl Supervisor {
                         request_hash: argv_hash,
                         decision: "deny".into(),
                         rule_ids: d.rule_ids.clone(),
-                        token_rev_id: "root".into(),
+                        token_rev_id: self.token_rev_id.clone(),
                         result: format!("backend-error: {e:#}"),
                         bytes: 0,
                         claimed_by: "host".into(),
@@ -294,7 +298,7 @@ impl Supervisor {
                 request_hash: argv_hash,
                 decision: "allow".into(),
                 rule_ids: d.rule_ids.clone(),
-                token_rev_id: "root".into(),
+                token_rev_id: self.token_rev_id.clone(),
                 result: format!("exit={:?} truncated={}", cr.exit_code, cr.truncated),
                 bytes: (cr.stdout.len() + cr.stderr.len()) as u64,
                 claimed_by: "host".into(),
@@ -336,7 +340,7 @@ impl Supervisor {
                 request_hash: argv_hash,
                 decision: "deny".into(),
                 rule_ids: vec![rule.into()],
-                token_rev_id: "root".into(),
+                token_rev_id: self.token_rev_id.clone(),
                 result: why,
                 bytes: 0,
                 claimed_by: "host".into(),
@@ -454,7 +458,7 @@ impl Supervisor {
             request_hash: argv_hash,
             decision: "allow".into(),
             rule_ids: rule_ids.clone(),
-            token_rev_id: "root".into(),
+            token_rev_id: self.token_rev_id.clone(),
             result: format!(
                 "exit={:?} truncated={} timeout={}",
                 code, truncated, timed_out

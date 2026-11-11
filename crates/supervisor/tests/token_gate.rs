@@ -40,6 +40,7 @@ fn sup_at(audit: &std::path::Path, cap_key: Option<toolcage_capability::Key>) ->
         backend: None,
         allow_unisolated: false,
         cap_key,
+        token_rev_id: String::new(),
     }
 }
 

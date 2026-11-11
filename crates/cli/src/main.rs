@@ -602,6 +602,7 @@ fn main() -> anyhow::Result<()> {
                 backend,
                 allow_unisolated: unsafe_no_isolation,
                 cap_key: None,
+                token_rev_id: String::new(),
             };
             let o = sup.exec(&argv)?;
             // Explicit: the exit() calls below skip Supervisor's Drop.
@@ -692,6 +693,7 @@ fn main() -> anyhow::Result<()> {
                 backend: None,
                 allow_unisolated: false,
                 cap_key,
+                token_rev_id: String::new(),
             };
             let mut broker = toolcage_broker::Broker::new();
             if !secret_value.is_empty() {
@@ -938,6 +940,7 @@ fn main() -> anyhow::Result<()> {
                     backend,
                     allow_unisolated: unsafe_no_isolation,
                     cap_key,
+                    token_rev_id: String::new(),
                 };
                 let broker = toolcage_broker::Broker::new();
                 let mut proxy = toolcage_proxy::Proxy::new()?;
@@ -1173,6 +1176,7 @@ fn main() -> anyhow::Result<()> {
                     backend,
                     allow_unisolated: unsafe_no_isolation,
                     cap_key,
+                    token_rev_id: String::new(),
                 };
                 let broker = toolcage_broker::Broker::new();
                 let mut proxy = toolcage_proxy::Proxy::new()?;
