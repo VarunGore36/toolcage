@@ -194,7 +194,13 @@ impl Supervisor {
 
     /// Egress byte bound for one destination bucket: the policy limit,
     /// narrowed by the presenting token's `budget_bytes`. 0 on either side
-    /// means "no bound from this source".
+    /// means "no bound from this source" — deliberate (an unset policy
+    /// section must not clamp every destination to zero), and covered by the
+    /// OTHER axes: a request still needs a policy net allowlist match, a
+    /// verifiable token when a key is armed, and the per-request check below.
+    /// SUP-5: this is the contract, not an accident — a policy that wants a
+    /// hard byte ceiling must state one; omitting `limits.egress_bytes`
+    /// delegates the bound to the token budget axis alone.
     fn egress_byte_cap(&self, token: Option<&toolcage_capability::Token>) -> u64 {
         let policy_cap = match self.policy.limits.egress_bytes {
             0 => u64::MAX,
