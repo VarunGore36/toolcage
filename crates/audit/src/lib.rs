@@ -526,7 +526,15 @@ pub fn verify_with_pubkey(path: &Path, pubkey: Option<&[u8]>) -> anyhow::Result<
             Some(p) => p,
             None => Path::new("."),
         };
-        let stem = path.file_name().unwrap().to_string_lossy().to_string();
+        // file_name() is None for "/", ".", and ".." — operator-supplied
+        // paths, so a panic here is a verifier DoS. Fall back to the whole
+        // path string: checkpoint lookups then simply find nothing, which
+        // fails closed (missing checkpoints are rejected when a pubkey is
+        // pinned).
+        let stem = path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string_lossy().to_string());
         let mut found = 0;
         if let Ok(rd) = std::fs::read_dir(dir) {
             for e in rd.flatten() {
