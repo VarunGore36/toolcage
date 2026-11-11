@@ -531,6 +531,33 @@ enum TokenOp {
     },
 }
 
+/// True when a route() error is a POLICY denial (the only thing learn mode
+/// should propose from). Token denials ([token:*]), missing-argument denials
+/// ([args:*]), approval pauses, and infrastructure errors (isolation
+/// unavailable, audit failures, backend errors) are not policy decisions:
+/// recording them proposed allowlist additions for problems an allowlist
+/// cannot fix, social-engineering the review.
+fn is_policy_denial(e: &anyhow::Error) -> bool {
+    let msg = e.to_string();
+    if !msg.starts_with("denied ") {
+        return false;
+    }
+    // The first bracketed tag names the denial family. Rule-id lists
+    // (["deny:..."], [fs:...], [net:...]) are policy decisions; the token and
+    // argument families are not — recording those would propose allowlisting
+    // for problems an allowlist cannot fix.
+    let tag = msg
+        .trim_start_matches("denied")
+        .trim_start()
+        .trim_start_matches('[')
+        .trim_start_matches('"')
+        .split([':', ']'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    tag != "token" && tag != "args"
+}
+
 fn load_key(p: &Option<PathBuf>) -> anyhow::Result<Option<toolcage_capability::Key>> {
     match p {
         Some(f) => Ok(Some(toolcage_capability::Key::from_hex(
@@ -1027,7 +1054,7 @@ fn main() -> anyhow::Result<()> {
                             ) {
                                 Ok(v) => toolcage_mcp::RpcResp::ok(id, v),
                                 Err(e) => {
-                                    if learn {
+                                    if learn && is_policy_denial(&e) {
                                         learn_mode.record(&cp.name, &cp.arguments);
                                     }
                                     toolcage_mcp::RpcResp::deny(id, &[e.to_string()])
@@ -1144,7 +1171,7 @@ fn main() -> anyhow::Result<()> {
                 ) {
                     Ok(v) => println!("{v}"),
                     Err(e) => {
-                        if learn {
+                        if learn && is_policy_denial(&e) {
                             let mut lm = toolcage_mcp::LearnMode::default();
                             lm.record(&name, &args);
                             eprintln!(
