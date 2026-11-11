@@ -164,6 +164,10 @@ pub struct Writer {
     /// in between, the length differs and the chain tail is re-read under the
     /// lock before we extend it.
     known_len: u64,
+    /// File mtime after our last verify/append. A non-flocking tamperer can
+    /// rewrite the tail to the SAME length (defeating the known_len check);
+    /// a changed mtime with an unchanged length forces a full re-verify too.
+    known_mtime: Option<std::time::SystemTime>,
 }
 
 /// Exclusive advisory lock on the audit file, released on drop. Held only for
@@ -217,6 +221,7 @@ impl Writer {
             next_seq: 0,
             head: "GENESIS".to_string(),
             known_len: 0,
+            known_mtime: None,
         };
         // Verify existing chain (under the lock) before appending: never
         // extend a corrupt log, and never extend one frozen by `panic`.
@@ -243,7 +248,26 @@ impl Writer {
             self.head = "GENESIS".to_string();
         }
         self.known_len = len;
+        self.known_mtime = self.file.metadata().ok().and_then(|m| m.modified().ok());
         Ok(())
+    }
+
+    /// True when the file changed since our last verify/append in a way the
+    /// known_len check cannot see: a non-flocking tamperer can rewrite the
+    /// tail to the SAME length. The stat is cheap; the full re-verify it
+    /// triggers only runs on suspicion. An unreadable stat fails safe
+    /// (re-verify).
+    fn modified_since_known(&self) -> bool {
+        let Ok(md) = self.file.metadata() else {
+            return true;
+        };
+        if md.len() != self.known_len {
+            return true;
+        }
+        match (md.modified(), self.known_mtime) {
+            (Ok(m), Some(k)) => m != k,
+            _ => true,
+        }
     }
 
     /// Write-ahead append: fsync before returning, so caller may act only after Ok.
@@ -255,7 +279,7 @@ impl Writer {
     pub fn append(&mut self, mut e: Event) -> anyhow::Result<Event> {
         ensure_not_tainted(&self.path)?;
         let _g = FlockGuard::lock(&self.file, &self.path)?;
-        if self.file.metadata()?.len() != self.known_len {
+        if self.modified_since_known() {
             self.resync()?;
         }
         e.seq = self.next_seq;
@@ -267,6 +291,7 @@ impl Writer {
         self.file.write_all(&line)?;
         self.file.sync_data()?;
         self.known_len += line.len() as u64;
+        self.known_mtime = self.file.metadata().ok().and_then(|m| m.modified().ok());
         self.next_seq += 1;
         self.head = e.hash.clone();
         Ok(e)
@@ -280,7 +305,7 @@ impl Writer {
         }
         ensure_not_tainted(&self.path)?;
         let _g = FlockGuard::lock(&self.file, &self.path)?;
-        if self.file.metadata()?.len() != self.known_len {
+        if self.modified_since_known() {
             self.resync()?;
         }
         let mut buf = Vec::with_capacity(events.len() * 256);
@@ -306,6 +331,7 @@ impl Writer {
         self.file.write_all(&buf)?;
         self.file.sync_data()?;
         self.known_len += buf.len() as u64;
+        self.known_mtime = self.file.metadata().ok().and_then(|m| m.modified().ok());
         self.next_seq = seq;
         self.head = head;
         Ok(events)
