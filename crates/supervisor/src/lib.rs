@@ -843,6 +843,19 @@ pub struct FetchOutcome {
 /// Panic path: freeze audit with final checkpoint event, mark host tainted.
 /// Operator clears taint out-of-band. Sessions must be stopped by caller.
 pub fn panic_freeze(audit_path: &std::path::Path, reason: &str) -> anyhow::Result<String> {
+    // Marker FIRST (SUP-4): between "deny-all appended" and "marker written"
+    // there used to be a window where a crash left the freeze event in the
+    // log but no marker on disk. The chain still refuses appends after a
+    // deny-all (verify fails with "extended after panic freeze"), but
+    // Writer::open itself only refuses on the MARKER — so in that window a
+    // fresh Writer could open and rely on nothing. With the marker written
+    // first, every later Writer::open refuses immediately; if the deny-all
+    // append then fails, the marker is still honored (an operator taint
+    // stands — see the audit crate's marker handling).
+    std::fs::write(
+        toolcage_audit::tainted_marker(audit_path),
+        format!("tainted at {} head {}\n", now_wall(), reason),
+    )?;
     let mut w = Writer::open(audit_path)?;
     let e = w.append(Event {
         seq: 0,
@@ -860,15 +873,6 @@ pub fn panic_freeze(audit_path: &std::path::Path, reason: &str) -> anyhow::Resul
         prev_hash: String::new(),
         hash: String::new(),
     })?;
-    // APPEND the suffix: with_extension replaces the last one, so two logs
-    // a.jsonl and a.log would collide on one a.tainted marker (the same bug
-    // the budget store's naming had).
-    // Marker name lives in the audit crate: Writer::open refuses on it, so
-    // the writer and the freezer must never disagree about what it is called.
-    std::fs::write(
-        toolcage_audit::tainted_marker(audit_path),
-        format!("tainted at {} head {}\n", e.ts_wall, e.hash),
-    )?;
     Ok(e.hash)
 }
 
