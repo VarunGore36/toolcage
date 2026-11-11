@@ -1048,11 +1048,10 @@ fn main() -> anyhow::Result<()> {
                     };
                     // JSON-RPC 2.0 request shape: version, id type and size.
                     if let Err((code, msg)) = req.validate() {
-                        let r = toolcage_mcp::RpcResp::error(
-                            req.id.clone().unwrap_or(serde_json::Value::Null),
-                            code,
-                            msg,
-                        );
+                        // Spec: when the id itself is in error (invalid
+                        // request), the response id MUST be Null — not a
+                        // reflection of the illegal value.
+                        let r = toolcage_mcp::RpcResp::error(serde_json::Value::Null, code, msg);
                         println!("{}", serde_json::to_string(&r)?);
                         continue;
                     }
