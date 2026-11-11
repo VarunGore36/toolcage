@@ -1014,7 +1014,26 @@ fn main() -> anyhow::Result<()> {
                     if line.trim().is_empty() {
                         continue;
                     }
-                    let req: toolcage_mcp::RpcReq = match serde_json::from_str(&line) {
+                    // Parse through the raw Value first: an explicit
+                    // "id": null IS present — per JSON-RPC 2.0 it is a request
+                    // (answered with id null), not a notification. serde maps
+                    // JSON null to Option::None on RpcReq.id, which would
+                    // misfile it as a notification and strand the client.
+                    let raw: serde_json::Value = match serde_json::from_str(&line) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            // Parse error: the id is unknowable, so it is null.
+                            let r = toolcage_mcp::RpcResp::error(
+                                serde_json::Value::Null,
+                                toolcage_mcp::PARSE_ERROR,
+                                format!("parse error: {e}"),
+                            );
+                            println!("{}", serde_json::to_string(&r)?);
+                            continue;
+                        }
+                    };
+                    let has_id_member = raw.get("id").is_some();
+                    let req: toolcage_mcp::RpcReq = match serde_json::from_value(raw) {
                         Ok(r) => r,
                         Err(e) => {
                             // Parse error: the id is unknowable, so it is null.
@@ -1037,8 +1056,9 @@ fn main() -> anyhow::Result<()> {
                         println!("{}", serde_json::to_string(&r)?);
                         continue;
                     }
-                    // A notification is processed but MUST NOT be answered.
-                    let respond = !req.is_notification();
+                    // A notification (NO id member) is processed but MUST NOT
+                    // be answered. An explicit null id is a request (above).
+                    let respond = has_id_member || !req.is_notification();
                     let id = req.id.clone().unwrap_or(serde_json::Value::Null);
                     let resp = if req.method == "tools/call" {
                         match serde_json::from_value::<toolcage_mcp::CallParams>(req.params) {
