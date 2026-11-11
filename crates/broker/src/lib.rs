@@ -29,6 +29,7 @@ use generic_array::GenericArray;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use zeroize::Zeroize;
 
@@ -244,13 +245,28 @@ impl Broker {
         }
         let data =
             serde_json::to_vec_pretty(&encrypted).map_err(|e| anyhow::anyhow!("encrypt: {e}"))?;
-        fs::write(path, data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+        // Create the file 0600 BEFORE any bytes are written: fs::write() +
+        // set_permissions() opened a world-readable window (umask-derived
+        // mode) on every save. The credential store's metadata (names,
+        // bindings, expiry) and ciphertext must never be world-readable,
+        // even transiently.
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(path)
+                .map_err(|e| anyhow::anyhow!("io: {e}"))?;
+            f.write_all(&data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+            // Belt and braces for a pre-existing file whose mode was looser.
             fs::set_permissions(path, fs::Permissions::from_mode(0o600))
                 .map_err(|e| anyhow::anyhow!("io: {e}"))?;
         }
+        #[cfg(not(unix))]
+        fs::write(path, data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
         Ok(())
     }
 
