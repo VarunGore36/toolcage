@@ -85,6 +85,43 @@ fn flip_one_byte(log: &Path) -> anyhow::Result<usize> {
 
 pub fn run_demo(dir: &Path) -> anyhow::Result<()> {
     println!("toolcage demo — policy, secrets, evidence in 60 seconds");
+    // The demo wipes its directory before running. That is only safe for a
+    // directory that is plausibly a scratch dir: refuse the filesystem root,
+    // system prefixes, and $HOME (and everything under it) — one flag typo
+    // must not be an rm -rf. Refuse a NON-EMPTY directory too unless it
+    // looks like a previous demo run (policy/ ws/ audit.jsonl): the demo
+    // recreates everything it needs, so there is nothing to preserve.
+    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    anyhow::ensure!(
+        canonical != Path::new("/")
+            && !canonical.starts_with("/etc")
+            && !canonical.starts_with("/usr")
+            && !canonical.starts_with("/var")
+            && !canonical.starts_with("/boot"),
+        "refusing to demo into a system path: {}",
+        canonical.display()
+    );
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::path::PathBuf::from(home);
+        let home = home.canonicalize().unwrap_or(home);
+        anyhow::ensure!(
+            canonical != home && !canonical.starts_with(&home),
+            "refusing to demo into $HOME ({}): use a scratch directory",
+            home.display()
+        );
+    }
+    if dir.exists() {
+        let entries: Vec<_> = std::fs::read_dir(dir)?.collect();
+        anyhow::ensure!(
+            entries.is_empty()
+                || entries.iter().flatten().all(|e| e
+                    .path()
+                    .file_name()
+                    .is_some_and(|n| n == "policy" || n == "ws" || n == "audit.jsonl")),
+            "{} is not empty and does not look like a previous demo run; remove it yourself first",
+            dir.display()
+        );
+    }
     let _ = std::fs::remove_dir_all(dir);
     // Policy/audit/keys live under <dir>/policy; the workspace is <dir>/ws.
     // Keeping control files OUT of the writable workspace is the VULN-05
