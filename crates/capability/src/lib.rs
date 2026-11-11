@@ -474,12 +474,34 @@ impl RevocationList {
     /// use with --revocation-file.
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         let data = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, data)?;
+        // Atomic + 0600 (mirrors the broker store): a crash mid-write must
+        // not leave a torn revocation list — load() would refuse it and
+        // revocations silently stop being enforced — and the file must never
+        // be world-readable, even transiently.
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(".tmp");
+        let tmp = std::path::PathBuf::from(tmp);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+            use std::io::Write as _;
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            f.write_all(data.as_bytes())?;
+            f.sync_all()?;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
         }
+        #[cfg(not(unix))]
+        {
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(data.as_bytes())?;
+            f.sync_all()?;
+        }
+        std::fs::rename(&tmp, path)?;
         Ok(())
     }
 
