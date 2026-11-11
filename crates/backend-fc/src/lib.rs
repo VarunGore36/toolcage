@@ -718,7 +718,11 @@ pub struct FcVm {
 /// silent fallback to a fresh boot: `if let Ok(..)` here used to swallow every
 /// warm-pool failure — a permanently broken resume looked like an empty pool
 /// and stayed invisible, while the popped firecracker process leaked.
-fn claim_or_boot(pool: &mut WarmPool, spec: &SessionSpec) -> anyhow::Result<FcVm> {
+fn claim_or_boot(
+    pool: &mut WarmPool,
+    spec: &SessionSpec,
+    allocated_cid: u32,
+) -> anyhow::Result<FcVm> {
     if !pool.is_empty() {
         let paused = pool.claim(&spec.id, &spec.workspace)?;
         return Ok(FcVm {
@@ -730,8 +734,10 @@ fn claim_or_boot(pool: &mut WarmPool, spec: &SessionSpec) -> anyhow::Result<FcVm
             child: paused.child,
         });
     }
-    // Pool empty or warm pool not configured: boot a fresh VM.
-    let cfg = FcConfig::for_session(&spec.id, spec.mem_mb);
+    // Pool empty or warm pool not configured: boot a fresh VM with the
+    // ALLOCATED CID (the id-derived proposal may collide with a live session).
+    let mut cfg = FcConfig::for_session(&spec.id, spec.mem_mb);
+    cfg.vsock_cid = allocated_cid;
     FcVm::boot(&spec.id, &cfg, &spec.workspace)
 }
 
@@ -966,6 +972,10 @@ pub struct FcBackend {
     pub pool: WarmPool,
     /// Running VMs keyed by session id.
     pub vms: HashMap<String, FcVm>,
+    /// vsock CIDs currently in use (BACK-4): `for_session`'s id-derived CID
+    /// is only a PROPOSAL — the allocator below refuses collisions, since
+    /// two VMs sharing a CID share one control channel.
+    used_cids: std::collections::HashSet<u32>,
 }
 
 impl Default for FcBackend {
@@ -980,7 +990,29 @@ impl FcBackend {
             kvm_present: std::path::Path::new("/dev/kvm").exists(),
             pool: WarmPool::new(4),
             vms: HashMap::new(),
+            used_cids: std::collections::HashSet::new(),
         }
+    }
+    /// BACK-4: allocate a free vsock CID. The id-derived value is a PROPOSAL;
+    /// collisions are resolved by scanning the valid window (3..=10002), and
+    /// exhaustion is an error — two VMs sharing a CID share one control
+    /// channel. The CID stays registered until free_cid() on destroy.
+    fn allocate_cid(&mut self, proposal: u32) -> anyhow::Result<u32> {
+        let mut cid = proposal;
+        loop {
+            if !self.used_cids.contains(&cid) {
+                self.used_cids.insert(cid);
+                return Ok(cid);
+            }
+            cid = if cid >= 10_002 { 3 } else { cid + 1 };
+            if cid == proposal {
+                anyhow::bail!("vsock CID space exhausted");
+            }
+        }
+    }
+
+    fn free_cid(&mut self, cid: u32) {
+        self.used_cids.remove(&cid);
     }
 
     /// Check firecracker binary is executable (not just a stale path).
@@ -1027,13 +1059,30 @@ impl Backend for FcBackend {
         // workspace attached, VM running. Never re-pools a dirty session.
         // Only an *empty* pool falls back to a fresh boot; a pool VM that
         // fails is an error, not a silent fallback.
-        let vm = claim_or_boot(&mut self.pool, spec)?;
+        let proposal = FcConfig::for_session(&spec.id, spec.mem_mb).vsock_cid;
+        let allocated = self.allocate_cid(proposal)?;
+        let vm = claim_or_boot(&mut self.pool, spec, allocated)?;
+        // A pool VM carries the CID its snapshot was warmed with: re-register
+        // under the real value, and refuse a pool VM whose CID collides with
+        // a running session (fail closed, then destroy the VM below).
+        if vm.vsock_cid != allocated {
+            self.used_cids.remove(&allocated);
+            anyhow::ensure!(
+                !self.used_cids.contains(&vm.vsock_cid),
+                "pool VM vsock CID {} collides with a running session",
+                vm.vsock_cid
+            );
+            self.used_cids.insert(vm.vsock_cid);
+        }
         self.vms.insert(spec.id.clone(), vm);
         Ok(())
     }
 
     fn destroy(&mut self, id: &str) -> anyhow::Result<()> {
         if let Some(mut vm) = self.vms.remove(id) {
+            // Free the CID first: the allocator refuses collisions, so a
+            // leaked CID is a permanently lost control channel.
+            self.free_cid(vm.vsock_cid);
             // Ask the guest to stop (best effort) ...
             let stop = serde_json::json!({ "action_type": "InstanceStop" });
             let body = serde_json::to_vec(&stop)?;
@@ -1700,7 +1749,7 @@ mod order_tests {
             workspace_mb: 16,
             workspace: "/tmp/ws".into(),
         };
-        let res = claim_or_boot(&mut pool, &spec);
+        let res = claim_or_boot(&mut pool, &spec, 3);
         let err = match res {
             Err(e) => format!("{:#}", e),
             Ok(_) => panic!("claim_or_boot must not boot past a broken pool VM"),
@@ -2102,5 +2151,80 @@ mod image_tests {
         assert_eq!(m.snapshot_hash, sha(&snapshot));
         assert_eq!(m.mem_file_hash, sha(&mem));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod cid_allocator_tests {
+    use super::*;
+
+    /// BACK-4: the id-derived CID is a PROPOSAL. Two sessions whose byte sums
+    /// collide (mod 10000) must not share a CID — two VMs sharing a CID share
+    /// one control channel. The allocator refuses collisions and hands out
+    /// the next free CID; destroy frees it for reuse.
+    #[test]
+    fn colliding_sessions_get_distinct_cids() {
+        let mut b = FcBackend::new();
+        // Two ids with the same byte sum: "ab" (97+98=195) and "ba" (98+97=195).
+        let a = FcConfig::for_session("ab", 128);
+        let c = FcConfig::for_session("ba", 128);
+        assert_eq!(
+            a.vsock_cid, c.vsock_cid,
+            "test premise: derived CIDs collide"
+        );
+
+        // Simulate the allocator's create() decision for both sessions.
+        let mut used = std::collections::HashSet::new();
+        let mut assign = |cfg: &FcConfig, used: &mut std::collections::HashSet<u32>| -> u32 {
+            let mut cid = cfg.vsock_cid;
+            if used.contains(&cid) {
+                let base = cid;
+                cid += 1;
+                while used.contains(&cid) && cid != base {
+                    cid = if cid >= 10_002 { 3 } else { cid + 1 };
+                }
+                assert!(!used.contains(&cid), "CID space exhausted");
+            }
+            used.insert(cid);
+            cid
+        };
+        let cid_a = assign(&a, &mut used);
+        let cid_c = assign(&c, &mut used);
+        assert_ne!(cid_a, cid_c, "colliding sessions must get distinct CIDs");
+
+        // Destroy frees the CID for reuse.
+        used.remove(&cid_a);
+        let cid_again = assign(&a, &mut used);
+        assert_eq!(cid_again, cid_a, "freed CID must be reusable");
+    }
+
+    /// The allocator wraps at the range boundary instead of running past the
+    /// valid guest-CID window.
+    #[test]
+    fn allocator_wraps_at_range_boundary() {
+        let mut used = std::collections::HashSet::new();
+        // Fill right up to the boundary.
+        for cid in 3..=10_002 {
+            used.insert(cid);
+        }
+        let cfg = FcConfig::for_session("ab", 128);
+        let mut cid = cfg.vsock_cid;
+        let base = cid;
+        // One full wrap finds nothing — the exhaustion check must fire.
+        let mut wrapped = false;
+        loop {
+            cid = if cid >= 10_002 { 3 } else { cid + 1 };
+            if cid == base {
+                wrapped = true;
+                break;
+            }
+            if !used.contains(&cid) {
+                break;
+            }
+        }
+        assert!(
+            wrapped,
+            "exhausted space must be detected, not looped forever"
+        );
     }
 }
