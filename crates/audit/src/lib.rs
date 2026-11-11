@@ -276,7 +276,7 @@ impl Writer {
     /// log since our last append, the new tail is verified and chained onto
     /// (so concurrent sessions never fork the chain), and a freeze appended in
     /// the meantime by `panic` makes this append fail.
-    pub fn append(&mut self, mut e: Event) -> anyhow::Result<Event> {
+    pub fn append(&mut self, e: Event) -> anyhow::Result<Event> {
         ensure_not_tainted(&self.path)?;
         self.append_unchecked(e)
     }

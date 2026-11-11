@@ -155,6 +155,7 @@ pub fn route(
     revocation: &toolcage_capability::RevocationList,
     name: &str,
     args: &serde_json::Value,
+    approved: bool,
 ) -> anyhow::Result<serde_json::Value> {
     // Capability gate (I3) — applied to EVERY tool, not only the arms that
     // consulted a token. Dual auth: policy AND a valid token must allow. When
@@ -258,7 +259,7 @@ pub fn route(
                 .filter(|p| !p.is_empty())
                 .ok_or_else(|| anyhow::anyhow!("denied [args:path required]"))?;
             let o = sup.fetch_via_proxy(
-                broker, budgets, proxy, host, method, path, token, revocation, false,
+                broker, budgets, proxy, host, method, path, token, revocation, approved,
             )?;
             if o.need_approval {
                 // The CLI maps this to exit 3 ("needs a human"), distinct
@@ -423,6 +424,7 @@ mod tests {
             rl,
             "read_file",
             &args,
+            false,
         )
     }
 
@@ -551,7 +553,17 @@ net:
                         name: &str,
                         args: &serde_json::Value|
          -> String {
-            match route(sup, &b, &mut proxy, &mut budgets, None, &rl, name, args) {
+            match route(
+                sup,
+                &b,
+                &mut proxy,
+                &mut budgets,
+                None,
+                &rl,
+                name,
+                args,
+                false,
+            ) {
                 Ok(_) => "ALLOWED".to_string(),
                 Err(e) => format!("{e:#}"),
             }
@@ -610,6 +622,7 @@ net:
             &rl,
             "run_command",
             &args,
+            false,
         )
         .expect("cat runs");
         // 3 bytes out. The lossy length is 7 (two U+FFFD + 'A').
@@ -680,7 +693,8 @@ net:
             None,
             &rl,
             "nope",
-            &serde_json::json!({})
+            &serde_json::json!({}),
+            false,
         )
         .is_err());
     }
@@ -713,6 +727,7 @@ net:
             &rl,
             "run_command",
             &args,
+            false,
         )
         .unwrap_err();
         assert!(e.to_string().contains("isolation:unavailable"), "got: {e}");
@@ -760,6 +775,7 @@ net:
             &rl,
             "read_file",
             &args,
+            false,
         )
         .unwrap_err();
         assert!(e.to_string().contains("token:deny"), "got: {e}");

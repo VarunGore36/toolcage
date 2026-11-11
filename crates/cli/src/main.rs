@@ -261,6 +261,10 @@ enum McpOp {
         /// addition. For operator review only — never auto-applied.
         #[arg(long, default_value_t = false)]
         learn: bool,
+        /// Out-of-band approval for gated actions (operator approved). Without
+        /// it, a gated call pauses (exit 3) instead of proceeding.
+        #[arg(long, default_value_t = false)]
+        approve: bool,
     },
 }
 
@@ -1076,6 +1080,7 @@ fn main() -> anyhow::Result<()> {
                                 &rl,
                                 &cp.name,
                                 &cp.arguments,
+                                false,
                             ) {
                                 Ok(v) => toolcage_mcp::RpcResp::ok(id, v),
                                 Err(e) => {
@@ -1137,6 +1142,7 @@ fn main() -> anyhow::Result<()> {
                 revocations,
                 revocation_file,
                 learn,
+                approve,
             } => {
                 let text = std::fs::read_to_string(&policy)?;
                 let pol = toolcage_policy::load_yaml(&text)?;
@@ -1194,6 +1200,7 @@ fn main() -> anyhow::Result<()> {
                     &rl,
                     &name,
                     &args,
+                    approve,
                 ) {
                     Ok(v) => println!("{v}"),
                     Err(e) => {
