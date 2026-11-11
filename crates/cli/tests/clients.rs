@@ -72,19 +72,36 @@ print("ok")
 #[test]
 fn ts_client_allows_and_denies() {
     // Node >= 22.6 runs .ts via type stripping; deno also works. Skip if
-    // neither is present.
-    let runner: Vec<String> = if Command::new("node").arg("--version").output().is_ok() {
-        vec!["node".into()]
-    } else if Command::new("deno").arg("--version").output().is_ok() {
-        vec![
-            "deno".into(),
-            "run".into(),
-            "--allow-run".into(),
-            "--allow-read".into(),
-        ]
-    } else {
-        eprintln!("skip: neither node nor deno installed");
-        return;
+    // neither is present — or if the runner itself is broken on this host
+    // (a system node whose shared libraries moved fails at STARTUP, before
+    // our driver runs; that is an environment problem, not a toolcage bug).
+    let runner_probe = Command::new("node")
+        .arg("-e")
+        .arg("console.log('ok')")
+        .output();
+    let runner: Vec<String> = match runner_probe {
+        Ok(o) if o.status.success() => vec!["node".into()],
+        Ok(o) => {
+            eprintln!(
+                "skip: node is installed but cannot run on this host: {}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            return;
+        }
+        Err(_) => {
+            if Command::new("deno").arg("--version").output().is_ok() {
+                vec![
+                    "deno".into(),
+                    "run".into(),
+                    "--allow-run".into(),
+                    "--allow-read".into(),
+                ]
+            } else {
+                eprintln!("skip: neither node nor deno installed");
+                return;
+            }
+        }
     };
     let dir = std::env::temp_dir().join(format!("tc-client-ts-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
