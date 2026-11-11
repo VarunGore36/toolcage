@@ -1,9 +1,9 @@
 # Test results — toolcage
 
-272 tests, 0 failures (`cargo test --workspace`). Clippy clean
+273 tests, 0 failures (`cargo test --workspace`). Clippy clean
 (`cargo clippy --workspace --all-targets`: 0 findings).
 
-Generated from the workspace run (2026-11-10); re-run
+Generated from the workspace run (2026-11-12); re-run
 `cargo test --workspace` to reproduce. The per-crate breakdown below is
 `cargo test -p toolcage-<crate>` (unit + integration + doc tests) and
 sums to the workspace total.
@@ -15,7 +15,7 @@ sums to the workspace total.
 | verify (standalone log verifier) | 2 | I5 |
 | cli (exit codes, approval pause, secret handling, clients, learn mode, key permissions, revocation, image sign, min isolation) | 24 | I2, I3, I6 |
 | supervisor (canary, chaos, destination, fuzz, isolation, limits, memory, output, timeout, token gate, wait-error) | 35 | I2, I4, I7 |
-| proxy (alias, metadata, budgets, http parsing, chunked decode, scrub) | 27 | I1, I2 |
+| proxy (alias, metadata, budgets incl. corrupt-store fail-closed, http parsing, chunked decode, scrub) | 28 | I1, I2 |
 | broker (inject/scrub/canary, encrypt/load/rotate, empty credential) | 8 | I2 |
 | backend (honors lattice, capabilities) | 0 | — |
 | backend-fc (REST ordering, snapshot checks, pool failure, Tier-2 escape `*`) | 28 | I1, I7 |
@@ -25,7 +25,7 @@ sums to the workspace total.
 | capability (narrow/widen/revoke/tamper, signed lineage, revocation persistence, 200-seed property `*`) | 19 | I3 |
 | approval (gate decision table, queue contract, timeout sweep) | 7 | I3 |
 | mcp (gate, tool args, learn, JSON-RPC 2.0 conformance, RPC smoke) | 16 | A2 |
-| **Total** | **272** | 0 failures |
+| **Total** | **273** | 0 failures |
 
 ## Notes
 
