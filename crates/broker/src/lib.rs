@@ -245,11 +245,14 @@ impl Broker {
         }
         let data =
             serde_json::to_vec_pretty(&encrypted).map_err(|e| anyhow::anyhow!("encrypt: {e}"))?;
-        // Create the file 0600 BEFORE any bytes are written: fs::write() +
-        // set_permissions() opened a world-readable window (umask-derived
-        // mode) on every save. The credential store's metadata (names,
-        // bindings, expiry) and ciphertext must never be world-readable,
-        // even transiently.
+        // Atomic write (BKR-2): the store is the secret store — a crash
+        // mid-write must never leave a torn/truncated file behind (load()
+        // would then refuse and the operator's credentials are gone until
+        // re-provisioned). Write to a 0600 temp sibling, fsync, rename over
+        // the destination — same shape as rotate() below.
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
         #[cfg(unix)]
         {
             use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -258,15 +261,21 @@ impl Broker {
                 .create(true)
                 .truncate(true)
                 .mode(0o600)
-                .open(path)
+                .open(&tmp)
                 .map_err(|e| anyhow::anyhow!("io: {e}"))?;
             f.write_all(&data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
-            // Belt and braces for a pre-existing file whose mode was looser.
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            f.sync_all().map_err(|e| anyhow::anyhow!("fsync: {e}"))?;
+            // Belt and braces for a pre-existing tmp file whose mode was looser.
+            fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
                 .map_err(|e| anyhow::anyhow!("io: {e}"))?;
         }
         #[cfg(not(unix))]
-        fs::write(path, data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+        {
+            let mut f = fs::File::create(&tmp).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+            f.write_all(&data).map_err(|e| anyhow::anyhow!("io: {e}"))?;
+            f.sync_all().map_err(|e| anyhow::anyhow!("fsync: {e}"))?;
+        }
+        fs::rename(&tmp, path).map_err(|e| anyhow::anyhow!("io: {e}"))?;
         Ok(())
     }
 
