@@ -8,7 +8,8 @@ class Toolcage:
         self.policy, self.audit, self.bin = policy, audit, bin
 
     def call(self, name, args):
-        assert name in TOOLS, f"unknown tool {name}"
+        if name not in TOOLS:
+            raise ValueError(f"unknown tool {name}")  # not assert: -O strips asserts
         r = subprocess.run(
             [self.bin, "mcp", "call", "--policy", self.policy,
              "--audit", self.audit, "--name", name,
