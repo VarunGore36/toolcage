@@ -97,6 +97,25 @@ pub fn validate(msg: &GuestMsg) -> anyhow::Result<()> {
                             | "LD_DEBUG"
                             | "PATH"
                             | "HOME"
+                            // Interpreter-hijack names: any of these steers an
+                            // injected exec into running guest-controlled code
+                            // under the intended argv (the guest is the
+                            // assumed adversary — A2/A3 in the threat model).
+                            | "BASH_ENV"
+                            | "ENV"
+                            | "SHELLOPTS"
+                            | "BASHOPTS"
+                            | "GLIBC_TUNABLES"
+                            | "NODE_OPTIONS"
+                            | "PYTHONSTARTUP"
+                            | "PYTHONPATH"
+                            | "PYTHONHOME"
+                            | "PERL5OPT"
+                            | "PERL5LIB"
+                            | "RUBYOPT"
+                            | "RUBYLIB"
+                            | "ZDOTDIR"
+                            | "GEM_HOME"
                     ),
                     "dangerous env ref name"
                 );
