@@ -58,6 +58,7 @@ fn sup_at(audit: &std::path::Path) -> Supervisor {
         backend: None,
         allow_unisolated: false,
         cap_key: None,
+        token_rev_id: String::new(),
     }
 }
 
