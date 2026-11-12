@@ -1,0 +1,43 @@
+# cargo-deny: licenses, advisories, bans, sources — one gate, four checks.
+# The CI job runs `cargo deny check` on every push/PR; every exception lives
+# in this file with a reason and a review date.
+
+[advisories]
+# Mirrors audit.toml: the unfixable unsafe-libyaml notice (see the rationale
+# there). Vulnerabilities always fail regardless of this list.
+ignore = [
+    "RUSTSEC-2024-0449", # REVIEW BY: 2027-01-01 — policy-v1 replaces serde_yaml
+]
+
+[licenses]
+version = 2
+allow = [
+    # The project itself is Apache-2.0; the dependency tree is permissive-only.
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    # Fonts/glyph data if assets ever vendor Rust crates.
+    "OFL-1.0",
+    "Unicode-DFS-2016",
+]
+# Trust the license files shipped with the crates (some miss the exact
+# `license` field cargo-deny'sclar files expect).
+confidence-threshold = 0.93
+
+[bans]
+# Multiple versions of a crate are a WARN, not a deny: the tree is small and
+# the duplicates today are transitive semver ranges. Tighten to deny when the
+# tree stabilizes. (The wildcard rule is not used: this workspace's own
+# crates are path dependencies — internal structure, not version wildcards.)
+multiple-versions = "warn"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
