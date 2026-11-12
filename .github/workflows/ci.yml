@@ -55,6 +55,20 @@ jobs:
       - run: cargo run --release -p toolcage-cli -- doctor
       - run: ./scripts/bench.sh
 
+  test-results:
+    name: TEST_RESULTS.md freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Regenerate the counts and fail on drift (TDC-2)
+        run: |
+          ./scripts/test-results.sh
+          git diff --exit-code docs/TEST_RESULTS.md || {
+            echo "::error::docs/TEST_RESULTS.md is stale — run scripts/test-results.sh and commit";
+            exit 1;
+          }
+
   fuzz:
     name: fuzz targets
     runs-on: ubuntu-latest
