@@ -3,7 +3,7 @@
 275 tests, 0 failures (`cargo test --workspace`). Clippy clean
 (`cargo clippy --workspace --all-targets`: 0 findings).
 
-Generated from the workspace run (2026-11-12); re-run
+Generated from the workspace run (2026-11-13); re-run
 `cargo test --workspace` to reproduce. The per-crate breakdown below is
 `cargo test -p toolcage-<crate>` (unit + integration + doc tests) and
 sums to the workspace total.
