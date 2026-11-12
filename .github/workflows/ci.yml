@@ -66,7 +66,9 @@ jobs:
       # Fails on known VULNERABILITIES in the lockfile. Warnings
       # (unmaintained/unsound without a fix) are triaged in audit.toml with a
       # reason and a review date — the file is the ignore list of record.
+      # fuzz/ is a separate workspace with its own lockfile: scan both.
       - run: cargo audit --config audit.toml
+      - run: cargo audit --file fuzz/Cargo.lock --config audit.toml
 
   cargo-deny:
     name: cargo-deny (licenses, advisories, bans, sources)
@@ -79,7 +81,10 @@ jobs:
       # Four checks in one: licenses (permissive-only allow list), advisories
       # (mirrors audit.toml), bans (duplicate versions warn), sources
       # (crates.io only). deny.toml is the exception list of record.
+      # fuzz/ is a separate workspace: scanned with the same policy (its
+      # libfuzzer runtime adds the NCSA allowance).
       - run: cargo deny check
+      - run: cargo deny --manifest-path fuzz/Cargo.toml check
 
   test-results:
     name: TEST_RESULTS.md freshness
