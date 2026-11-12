@@ -249,15 +249,21 @@ fn resolve_allowed_ip(host: &str) -> Result<IpAddr, ProxyError> {
     if addrs.is_empty() {
         return Err(ProxyError::Dns(format!("{host}: no addresses")));
     }
+    // PRX-3: fail closed if ANY resolved address is blocked. The old
+    // skip-blocked-continue behavior let a DNS answer mixing an internal
+    // address with a public one slip through on the public one — a hostile
+    // or misbehaving authoritative server could park an internal address in
+    // the answer and probe which slot gets dialed. The policy allows the
+    // HOSTNAME; an answer that contains a blocked address means the name
+    // cannot be trusted to point where the policy intended.
     for addr in &addrs {
         if is_blocked_ip(addr) {
-            continue;
+            return Err(ProxyError::BlockedIp(format!(
+                "{host}: resolved address {addr} is blocked"
+            )));
         }
-        return Ok(*addr);
     }
-    Err(ProxyError::BlockedIp(format!(
-        "{host}: all resolved IPs are blocked"
-    )))
+    Ok(addrs[0])
 }
 
 fn is_blocked_ip(addr: &IpAddr) -> bool {
