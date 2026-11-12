@@ -36,3 +36,13 @@ sums to the workspace total.
   live-tested.
 - The counts regenerate from the run: re-run `cargo test --workspace` and
   the `cargo test -p toolcage-<crate>` loop above before editing this file.
+
+## Dependency security
+
+- `cargo audit` (root + fuzz lockfiles): 0 vulnerabilities; 1 triaged warning
+  (`unsafe-libyaml` unmaintained, transitive via serde_yaml — ignored with
+  rationale and a 2027-01-01 review date in `audit.toml`).
+- `cargo deny` (root + fuzz workspaces): licenses ok (permissive-only allow
+  list), bans ok, sources ok (crates.io only).
+- Gates: every push/PR, nightly advisory refresh, and pre-release. Scanner
+  versions pinned (cargo-audit 0.23.0, cargo-deny 0.20.2).
