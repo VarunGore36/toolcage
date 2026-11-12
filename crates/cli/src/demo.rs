@@ -61,17 +61,21 @@ fn banner(n: usize, title: &str) {
     println!("\n── {n}. {title} ──────────────────────────────");
 }
 
-/// Flip one hex digit inside the LAST event's `"hash":"..."` field. The JSON
-/// stays parseable, so `audit verify` fails with the message that matters —
-/// a chain break — instead of a mere parse error. Length preserved, content
-/// changed: exactly what a quiet rewrite looks like.
+/// Flip one hex digit inside the FIRST event's `"hash":"..."` field. The
+/// first event is the strongest demo: its hash is referenced by the second
+/// event's prev_hash AND re-hashed by verify, so the failure is a chain
+/// break, not just a re-hash mismatch. (The LAST event's stored hash is
+/// only checked by the re-hash — and the demo's checkpoint/signature story
+/// is about pinned prefixes; flipping the head leaves no ambiguity about
+/// what verify caught.) The JSON stays parseable — length preserved,
+/// content changed: exactly what a quiet rewrite looks like.
 fn flip_one_byte(log: &Path) -> anyhow::Result<usize> {
     let mut bytes = std::fs::read(log)?;
     anyhow::ensure!(!bytes.is_empty(), "log is empty; nothing to flip");
     let needle = b"\"hash\":\"";
     let at = bytes
         .windows(needle.len())
-        .rposition(|w| w == needle)
+        .position(|w| w == needle)
         .map(|p| p + needle.len()) // first hex digit of the hash
         .unwrap_or(16.min(bytes.len() - 1));
     // Corrupt within the hex alphabet: v -> (v+1) % 16. XOR could turn a hex
