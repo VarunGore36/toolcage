@@ -26,6 +26,12 @@ All notable changes to toolcage will be documented in this file.
 - `README.md`: redesigned with hero banner, 60-second demo, four guarantees, tier chart, benchmark table
 
 ### Fixed
+- `crates/broker`, `crates/capability`: `RevocationList::save` joins the broker store in atomic 0600 writes; the canary suffix and scrub span walk lose their last panic paths (OsRng suffix; total char-advance).
+- `crates/backend-fc`: tier2 vsock CIDs are **allocated, not assumed unique** — the id-derived CID was only a proposal; collisions across sessions whose byte sums agree now scan to the next free CID (exhaustion = error), pool VMs' snapshot CIDs are reconciled against live sessions, and destroy frees the CID.
+- `crates/policy`, `crates/guest-agent`: the guest agent rejects shell/interpreter inline code **by shape at the protocol layer** (the header's claim, implemented) — defense in depth behind the policy engine.
+- `crates/cli`: learn mode records only policy denials; explain covers `deny:unknown-action` and `panic:freeze`; the demo tampers with the first event (unambiguously a chain break); `mcp serve` bounds frame reads during buffering, answers explicit `id: null`, and echoes null for invalid-request ids; `mcp call` gains `--approve`.
+- `crates/proxy`: a destination with ANY blocked resolved IP is refused (a DNS answer mixing internal and public addresses no longer slips through on the public slot).
+- CI: `tier1-gvisor` and `tier2-firecracker` jobs run the driver suites on real runsc/firecracker installs; a `test-results` job fails the build when `docs/TEST_RESULTS.md` drifts from the actual run (`scripts/test-results.sh`); the bench job is continue-on-error (hosted-runner noise).
 - `crates/cli`: the egress **budget store is a damage bound** — a store that exists but cannot be parsed now fails closed (all three call sites: `fetch`, `mcp serve`, `mcp call`) instead of silently resetting accumulated damage to an unbounded ceiling.
 - `crates/cli`: `mcp serve` bounds frame reads **during** buffering (capped `fill_buf` chunks) — the old `lines()` accumulated an unbounded line before the 64 KiB check ran, a memory amp on a guest-controlled stream.
 - `crates/capability`, `crates/broker`: a pre-epoch clock (broken VM RTC) now fails safe — token expiry reads as passed and credential injection is denied, instead of tokens living forever and the broker panicking mid-request.
