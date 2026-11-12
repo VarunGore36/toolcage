@@ -104,6 +104,16 @@ pub fn explain_denial(rule_id: &str) -> Vec<&'static str> {
             "this action matches an approval gate and is paused for a human decision",
             "(`toolcage` queues it; timeout = deny). Approve via the orchestrator CLI.",
         ],
+        "deny:unknown-action" => vec![
+            "the action name is not one this policy version knows (proc.exec,",
+            "fs.read, fs.write, http.request, net.connect). Default-deny: an",
+            "action the policy cannot reason about is refused, not waved through.",
+        ],
+        "panic:freeze" => vec![
+            "the operator froze this audit log after a suspected compromise",
+            "(`tc panic`). The taint marker refuses all future writes and the",
+            "terminal deny-all event fails verification if the log is extended.",
+        ],
 
         // unknown ids: empty; caller prints the generic fallback
         _ => vec![],
@@ -161,6 +171,8 @@ mod tests {
             "token:deny",
             "budget:exceeded",
             "approval:required",
+            "deny:unknown-action",
+            "panic:freeze",
         ];
         for id in known {
             let lines = explain_denial(id);
