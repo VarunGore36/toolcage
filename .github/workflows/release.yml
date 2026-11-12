@@ -6,7 +6,23 @@ on:
       - 'v*'
 
 jobs:
+  # Security gate BEFORE any binary is built or published: a release must not
+  # ship with a known vulnerability or an unlicensed dependency. Same policy
+  # as the CI/nightly jobs (audit.toml / deny.toml are the exception lists).
+  security-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+      - run: cargo audit --config audit.toml
+      - run: cargo audit --file fuzz/Cargo.lock --config audit.toml
+      - run: cargo deny check
+      - run: cargo deny --manifest-path fuzz/Cargo.toml check
+
   release:
+    needs: security-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
