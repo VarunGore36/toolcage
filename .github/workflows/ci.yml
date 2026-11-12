@@ -55,6 +55,19 @@ jobs:
       - run: cargo run --release -p toolcage-cli -- doctor
       - run: ./scripts/bench.sh
 
+  cargo-audit:
+    name: cargo-audit (RustSec advisories)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      # Fails on known VULNERABILITIES in the lockfile. Warnings
+      # (unmaintained/unsound without a fix) are triaged in audit.toml with a
+      # reason and a review date — the file is the ignore list of record.
+      - run: cargo audit --config audit.toml
+
   test-results:
     name: TEST_RESULTS.md freshness
     runs-on: ubuntu-latest

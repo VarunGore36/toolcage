@@ -1,0 +1,16 @@
+# cargo-audit configuration. Findings that cannot be fixed upstream are
+# ignored HERE, each with a reason and a review date — never on the command
+# line, so the ignore list is reviewed in every PR that touches it.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2024-0449 — unsafe-libyaml is unmaintained (no fixed release).
+    # Transitive via serde_yaml 0.9, which the policy engine uses for the v0
+    # policy format. Exposure is low for toolcage: policies are
+    # operator-authored local files, not attacker-supplied YAML, and serde_yaml
+    # parses them before any exec decision. Replacement tracked for policy v1
+    # (serde-saphyr or a TOML/JSON format) — switching the policy format is a
+    # breaking change, not a lock bump.
+    # REVIEW BY: 2027-01-01 — or when policy-v1 lands, whichever is first.
+    "RUSTSEC-2024-0449",
+]
