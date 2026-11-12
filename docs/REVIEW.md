@@ -94,6 +94,12 @@ cargo clippy --workspace --all-targets  # clean
 | Shell strings blocked | I6 — `sh -c`/`bash -c` denied at policy and guest-agent level; the argv-shape bypasses are closed and pinned by the exec-denylist suite: `env -S`/`--split-string` reassembly, shell startup files (`--rcfile=`/`--init-file=`), the awk family, python `-m`, and perl/ruby `-x` all deny with `deny:shell`; the end-to-end matrix runs through the real YAML loader and the cross-product matrix covers wrapper x interpreter x flag-spelling forms |
 | Cross-session isolation | I7 — canary tests write marked data, confirm later sessions can't read it |
 
+## Historical review artifacts
+
+- [`docs/VULNERABILITY_REPORT.md`](VULNERABILITY_REPORT.md) — the Nov 10 audit of the
+  pre-fix tree (v0.1.0). Superseded: every finding is fixed on `main` (see the
+  CHANGELOG and the closed review issues #69–#77 for per-finding dispositions).
+
 ## Known limitations (honest)
 
 - **Seccomp-BPF fallback mitigations**: On kernels where `PR_SET_SECCOMP` / `SYS_seccomp` returns `EINVAL`, Tier 0 runs namespaces + Landlock + `no_new_privs` and seccomp acts as defense-in-depth:
