@@ -44,6 +44,11 @@ jobs:
   bench:
     name: benchmarks
     runs-on: ubuntu-latest
+    # TDC-3: hosted-runner numbers are noisy (shared CPU, variable fsync);
+    # the bench exists to catch ORDER-OF-MAGNITUDE regressions and prove the
+    # harness runs, not to gate on exact figures. continue-on-error keeps the
+    # signal visible without a red x for a noisy p99.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
