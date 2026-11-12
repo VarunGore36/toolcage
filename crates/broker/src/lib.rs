@@ -480,7 +480,9 @@ impl Broker {
                 };
                 let s = start + off;
                 spans.push((s, s + v.len()));
-                start = s + body[s..].chars().next().unwrap().len_utf8();
+                // The char always exists here (v is non-empty and was found
+                // at s), but the fallback removes the panic path entirely.
+                start = s + body[s..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
             }
         }
         if spans.is_empty() {
@@ -576,12 +578,15 @@ use base64::Engine as _;
 use base64_engine::BASE64;
 
 fn rand_suffix() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let n = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("{:x}", n & 0xffffff)
+    // OsRng, not the wall clock: uniqueness per canary plant, and no unwrap
+    // on a broken clock (a pre-epoch RTC panicked the canary path). The
+    // nonce generator is already in scope via the AEAD imports.
+    let n = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+    let mut s = String::with_capacity(12);
+    for b in n.iter().take(6) {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
 }
 
 /// Trailing-`/**` match only (same semantics as policy paths): exact or under prefix.
