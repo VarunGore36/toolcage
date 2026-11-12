@@ -241,6 +241,8 @@ This is **tamper evidence, not tamper prevention.** An attacker who controls the
 | `tc audit keygen / checkpoint / verify / events` | Keys, signed checkpoints, pinned-key verification; list audit log events (newest first) with optional filters |
 | `tc panic --audit LOG` | Freeze a log after a suspected compromise |
 
+Dependency security: every push/PR, the nightly advisory refresh, and every release run `cargo-audit` (RustSec vulnerabilities fail the build) and `cargo-deny` (permissive-only licenses, crates.io-only sources). The exception lists — `audit.toml` / `deny.toml` — carry a reason and a review date for every ignore. |
+
 Guest-agent protocol (`Exec` / `PutFile` / `Heartbeat`): bounded argv, no NUL bytes, `env_refs` must be `secret:name`, writes confined to `/workspace`.
 
 Clients: [`clients/python/toolcage.py`](clients/python/toolcage.py), [`clients/ts/toolcage.ts`](clients/ts/toolcage.ts).
