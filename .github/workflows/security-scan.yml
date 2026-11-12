@@ -1,0 +1,27 @@
+# Nightly dependency-security scan: the RustSec advisory DB updates daily,
+# so a lockfile that was clean at merge time can be vulnerable by morning.
+# Fails the scheduled run (visible in the Actions tab) — it does not touch
+# code or open PRs automatically; triage happens in audit.toml/deny.toml.
+name: security-scan
+
+on:
+  schedule:
+    - cron: "0 5 * * *" # daily 05:00 UTC
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+      - name: cargo-audit (root + fuzz lockfiles)
+        run: |
+          cargo audit --config audit.toml
+          cargo audit --file fuzz/Cargo.lock --config audit.toml
+      - name: cargo-deny (root + fuzz workspaces)
+        run: |
+          cargo deny check
+          cargo deny --manifest-path fuzz/Cargo.toml check
