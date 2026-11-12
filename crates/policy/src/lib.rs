@@ -885,6 +885,7 @@ mod trusted_exec_path_tests {
         for p in [
             "/bin/sh",
             "/usr/bin/git",
+            "/usr/local/bin/tool", // POL-1: under the /usr/ prefix — trusted
             "/sbin/mkfs",
             "/lib64/ld-linux-x86-64.so.2",
         ] {
