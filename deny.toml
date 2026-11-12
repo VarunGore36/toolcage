@@ -21,9 +21,9 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Zlib",
-    # Fonts/glyph data if assets ever vendor Rust crates.
-    "OFL-1.0",
-    "Unicode-DFS-2016",
+    # fuzz/ tree only: libfuzzer-sys ships compiler-rt-derived runtime pieces
+    # under (MIT OR Apache-2.0) AND NCSA — permissive, fuzzing-only.
+    "NCSA",
 ]
 # Trust the license files shipped with the crates (some miss the exact
 # `license` field cargo-deny'sclar files expect).
