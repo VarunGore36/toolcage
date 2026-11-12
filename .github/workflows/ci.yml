@@ -68,6 +68,19 @@ jobs:
       # reason and a review date — the file is the ignore list of record.
       - run: cargo audit --config audit.toml
 
+  cargo-deny:
+    name: cargo-deny (licenses, advisories, bans, sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      # Four checks in one: licenses (permissive-only allow list), advisories
+      # (mirrors audit.toml), bans (duplicate versions warn), sources
+      # (crates.io only). deny.toml is the exception list of record.
+      - run: cargo deny check
+
   test-results:
     name: TEST_RESULTS.md freshness
     runs-on: ubuntu-latest
