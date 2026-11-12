@@ -493,6 +493,12 @@ enum TokenOp {
         out_prefix: PathBuf,
     },
     /// Mint a root token (signed with the host key).
+    ///
+    /// Mint always grants the FIXED broad root right set — there are no
+    /// shaping flags by design (CLI-1): the operator's knob for scope is
+    /// `token attenuate`, which can only NARROW, never widen. A minted root
+    /// is for the session owner; every delegated consumer gets an
+    /// attenuated child with explicit hosts/methods/budget.
     Mint {
         #[arg(long)]
         rev: String,
