@@ -1,0 +1,26 @@
+# Weekly dependency updates, grouped: one PR for patch+minor bumps, security
+# fixes always separate and immediate (cargo-audit/cargo-deny gate those too).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      patch-and-minor:
+        update-types:
+          - "patch"
+          - "minor"
+  - package-ecosystem: cargo
+    directory: /fuzz
+    schedule:
+      interval: weekly
+    groups:
+      patch-and-minor:
+        update-types:
+          - "patch"
+          - "minor"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
