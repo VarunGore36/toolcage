@@ -23,7 +23,7 @@
 //!   (pause + audit). An empty methods/hosts list means "all of that action".
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Policy {
     pub tool: String,
     #[serde(default = "default_tier")]
@@ -559,6 +559,15 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
         {
             return deny("forbid:metadata", "metadata address is never reachable");
         }
+    }
+
+    // Egress limit validation: when egress bounds are set, they must be
+    // positive and within sane bounds. Zero means "unlimited" (back-compat).
+    if policy.limits.egress_bytes > 1024 * 1024 * 1024 * 1024 {
+        return deny("deny:egress-bytes-excessive", "egress_bytes exceeds 1 TiB");
+    }
+    if policy.limits.egress_requests > 1_000_000_000 {
+        return deny("deny:egress-requests-excessive", "egress_requests exceeds 1 billion");
     }
     match req.action.as_str() {
         "net.connect" | "http.request" => {
