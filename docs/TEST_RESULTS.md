@@ -27,6 +27,32 @@ sums to the workspace total.
 | mcp (gate, tool args, learn, JSON-RPC 2.0 conformance, RPC smoke) | 16 | A2 |
 | **Total** | **273** | 0 failures |
 
+## Coverage
+
+`cargo-tarpaulin` measures statement coverage across the workspace
+(excluding the fuzz workspace and `toolcage-backend-ns`, whose exec tests
+fork processes that segfault under instrumentation). Coverage is enforced in
+CI (`--fail-under 80`).
+
+| Crate | Coverage |
+|---|---|
+| audit | 85.5% |
+| policy | 91.3% |
+| proxy | 61.7% |
+| supervisor | 67.5% |
+| mcp | 42.2% |
+| cli | 13.5% |
+| guest-agent | 71.1% |
+| capability | 86.9% |
+| backend-fc | 71.9% |
+| backend-gv | 52.2% |
+| backend-ns | n/a (excluded — fork-heavy exec tests segfault under instrumentation) |
+
+Lower-coverage crates are CLI argument parsing (cli), the MCP front door
+(mcp) and gVisor plumbing (backend-gv); they are covered by CLI-level and
+integration tests rather than unit tests. Raising coverage in these crates is
+a known improvement area.
+
 ## Notes
 
 - Live Tier 0 tests skip loudly on hosts without the namespace stack or
