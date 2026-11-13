@@ -54,6 +54,7 @@ pub struct SessionSpec {
     pub id: String,
     pub tier: Tier,
     pub mem_mb: u64,
+    pub cpu_millis: u64,
     pub workspace_mb: u64,
     /// Host path bind-mounted as `/workspace` inside Tier0 (enforced by policy).
     pub workspace: String,
