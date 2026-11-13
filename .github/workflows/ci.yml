@@ -67,8 +67,8 @@ jobs:
       # (unmaintained/unsound without a fix) are triaged in audit.toml with a
       # reason and a review date — the file is the ignore list of record.
       # fuzz/ is a separate workspace with its own lockfile: scan both.
-      - run: cargo audit --config audit.toml
-      - run: cargo audit --file fuzz/Cargo.lock --config audit.toml
+      - run: cargo audit
+      - run: cargo audit --file fuzz/Cargo.lock
 
   cargo-deny:
     name: cargo-deny (licenses, advisories, bans, sources)
