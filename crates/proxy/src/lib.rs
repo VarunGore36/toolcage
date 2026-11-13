@@ -471,7 +471,7 @@ impl Proxy {
 /// framing or compression that hides those bytes defeats it (a secret split
 /// across a chunk boundary, or one inside gzip, is not matched and reaches the
 /// guest intact). Fail closed rather than return bytes we cannot sanitize.
-fn decode_response_body(head: &[u8], raw_body: &[u8]) -> Result<Vec<u8>, ProxyError> {
+pub fn decode_response_body(head: &[u8], raw_body: &[u8]) -> Result<Vec<u8>, ProxyError> {
     // Content-Encoding: inspect EVERY header line and comma-separated token.
     // Checking only the first header allowed `Content-Encoding: identity`
     // followed by `Content-Encoding: gzip` to smuggle compressed secrets past
@@ -520,7 +520,7 @@ fn decode_response_body(head: &[u8], raw_body: &[u8]) -> Result<Vec<u8>, ProxyEr
 }
 
 /// Extract all header values matching `name` (case-insensitive) in order.
-fn header_values(head: &[u8], name: &str) -> Vec<String> {
+pub fn header_values(head: &[u8], name: &str) -> Vec<String> {
     let text = String::from_utf8_lossy(head);
     let mut out = Vec::new();
     for (i, line) in text.split("\r\n").enumerate() {
@@ -613,7 +613,7 @@ fn find_body_start(buf: &[u8]) -> usize {
 /// status line ("HTTP/1.x <code> ..."): a header line whose second token
 /// happens to be numeric ("Content-Length: 404") is not a status line and
 /// must not pass the fail-closed gate in fetch().
-fn parse_status(buf: &[u8]) -> Option<u16> {
+pub fn parse_status(buf: &[u8]) -> Option<u16> {
     let head = String::from_utf8_lossy(&buf[..buf.len().min(200)]);
     let first_line = head.lines().next()?;
     if !is_status_line(first_line) {

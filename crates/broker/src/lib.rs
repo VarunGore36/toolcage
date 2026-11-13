@@ -182,7 +182,7 @@ impl Broker {
                 base64_decode(&ec.encrypted_value).map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
             anyhow::ensure!(combined.len() >= 24, "decrypt: combined too short");
             let (nonce_bytes, ct) = combined.split_at(24);
-            let nonce: Nonce<XChaCha20Poly1305> = *Array::from_slice(nonce_bytes);
+            let nonce: Nonce<XChaCha20Poly1305> = Array::try_from(nonce_bytes).unwrap();
             let aad = credential_aad(
                 &ec.name,
                 &ec.use_with,
@@ -306,7 +306,7 @@ impl Broker {
                 base64_decode(&ec.encrypted_value).map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
             anyhow::ensure!(combined.len() >= 24, "decrypt: combined too short");
             let (nonce_bytes, ct) = combined.split_at(24);
-            let nonce: Nonce<XChaCha20Poly1305> = *Array::from_slice(nonce_bytes);
+            let nonce: Nonce<XChaCha20Poly1305> = Array::try_from(nonce_bytes).unwrap();
             let aad = credential_aad(
                 &ec.name,
                 &ec.use_with,
@@ -724,7 +724,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         let combined = base64_decode(&entries[0].encrypted_value).unwrap();
         let (nonce_bytes, ct) = combined.split_at(24);
-        let nonce: Nonce<XChaCha20Poly1305> = *Array::from_slice(nonce_bytes);
+        let nonce: Nonce<XChaCha20Poly1305> = Array::try_from(nonce_bytes).unwrap();
         let aad = credential_aad(
             &entries[0].name,
             &entries[0].use_with,

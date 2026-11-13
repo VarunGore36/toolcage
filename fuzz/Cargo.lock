@@ -273,6 +273,7 @@ dependencies = [
  "libfuzzer-sys",
  "serde_json",
  "toolcage-audit",
+ "toolcage-capability",
  "toolcage-guest-agent",
  "toolcage-mcp",
  "toolcage-policy",

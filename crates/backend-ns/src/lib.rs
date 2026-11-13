@@ -798,6 +798,7 @@ fn isolated_exec(
             // be the caller's (in the MCP deployment that is the guest's own
             // JSON-RPC stream).
             let devnull =
+                #[allow(clippy::manual_c_str_literals)]
                 unsafe { libc::open(b"/dev/null\0".as_ptr() as *const libc::c_char, libc::O_RDONLY | libc::O_CLOEXEC) };
 
             // 1. The namespace stack is already in place: clone_all_namespaces()
