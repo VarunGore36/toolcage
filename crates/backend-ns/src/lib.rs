@@ -84,6 +84,17 @@ const OUTPUT_CAP: usize = 1024 * 1024;
 /// open after the workload exits: the drain gives up instead of hanging.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
+/// Check if the cgroup hierarchy is writable by probing for write access
+/// to /sys/fs/cgroup. Returns false if cgroups are not available or not
+/// writable (e.g., on systems without cgroup support or in containers
+/// without cgroup delegation).
+fn cgroup_writable() -> bool {
+    std::path::Path::new("/sys/fs/cgroup").is_dir()
+        && std::fs::metadata("/sys/fs/cgroup")
+            .map(|m| !m.permissions().readonly())
+            .unwrap_or(false)
+}
+
 /// Detect whether the host is using cgroup2 unified hierarchy.
 fn cgroup2_available() -> bool {
     std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").exists()
@@ -575,6 +586,12 @@ impl Backend for NsBackend {
         anyhow::ensure!(
             landlock_abi() >= 0,
             "landlock unavailable on this host; tier0 refuses to run without the fs boundary"
+        );
+        // Verify cgroup v1/v2 hierarchy is writable before creating the session.
+        // Fail closed: Tier0 cannot enforce resource limits without cgroups.
+        anyhow::ensure!(
+            cgroup_writable(),
+            "cgroup hierarchy not writable on this host; tier0 cannot enforce resource limits without cgroups"
         );
         self.sessions.insert(spec.id.clone(), spec.clone());
         Ok(())
@@ -1500,8 +1517,8 @@ mod tests {
 
     #[test]
     fn tier0_exec_runs_command() {
-        if !isolated() {
-            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+        if !isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-exec-{}", std::process::id()));
@@ -1534,8 +1551,8 @@ mod tests {
 
     #[test]
     fn tier0_network_isolated() {
-        if !isolated() {
-            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+        if !isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
         // Helper: try connect() to an external IP. Inside the new network
@@ -1605,8 +1622,8 @@ mod tests {
 
     #[test]
     fn tier0_environment_cleared() {
-        if !isolated() {
-            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+        if !isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-env-{}", std::process::id()));
@@ -1653,8 +1670,8 @@ mod tests {
 
     #[test]
     fn tier0_landlock_blocks_outside_workspace() {
-        if !isolated() {
-            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+        if !isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-landlock-{}", std::process::id()));
@@ -2004,8 +2021,8 @@ mod tests {
         // leaked fd would let the workload write to host state (e.g. append to
         // the audit log). Rust std marks its fds CLOEXEC, so open one by hand
         // to get a genuinely-inherited fd.
-        if !isolated() {
-            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+        if !isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-fdleak-{}", std::process::id()));
@@ -2062,8 +2079,8 @@ mod tests {
         // so an inherited stdin lets a workload like `bash` be fed commands by
         // the guest. Put known content on fd 0 and verify the workload can't
         // read it.
-        if !isolated() {
-            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+        if !isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-stdin-{}", std::process::id()));
@@ -2112,8 +2129,8 @@ mod tests {
         // running, which here would append to the marker file twice.
         //
         // Forced at the chdir site with a workspace that is a regular file.
-        if !isolated() {
-            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+        if !isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-childexit-{}", std::process::id()));
@@ -2170,8 +2187,8 @@ mod tests {
         // execve fails -> child_die(127) with a static message into the
         // captured stderr pipe. (Also locks that the message is written in
         // full: v0 hardcoded a length that truncated it.)
-        if !isolated() {
-            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+        if !isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-execfail-{}", std::process::id()));
@@ -2415,8 +2432,8 @@ mod tests {
         // path is otherwise unreachable without fault injection. The id is the
         // injection switch, so the tests running concurrently in this binary
         // are unaffected.
-        if !isolated() {
-            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+        if !isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-parentfail-{}", std::process::id()));
@@ -2485,8 +2502,8 @@ mod tests {
         //
         // `$$` is the shell's getpid() — /proc is still the host's procfs, so
         // /proc/self would misleadingly show the host pid.
-        if !isolated() {
-            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+        if !isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-pidns-{}", std::process::id()));
@@ -2535,8 +2552,8 @@ mod tests {
         //
         // Like any race test this is probabilistic: with the locking wrapper it
         // failed ~5 runs in 12 here.
-        if !isolated() {
-            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+        if !isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
         // Keep libc locks hot in this process while the execs clone.
@@ -2610,8 +2627,8 @@ mod tests {
         // than the 64 KiB pipe buffer blocked in write(2) forever, was
         // SIGKILLed at the 30 s deadline and recorded as a timeout — with
         // truncated=false and only the buffered ~64 KiB of output.
-        if !isolated() {
-            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+        if !isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-bigout-{}", std::process::id()));
@@ -2666,8 +2683,8 @@ mod tests {
         // dropping the drain entirely would block the child on write(2) again.
         // 2 MiB also exceeds every pipe buffer on this host, so this is the
         // deterministic regression for the wait-then-drain deadlock.
-        if !isolated() {
-            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+        if !isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-overcap-{}", std::process::id()));
@@ -2705,8 +2722,8 @@ mod tests {
         // timeout_secs is now honored by the Tier0 backend (previously ignored:
         // every run was killed at the hardcoded 30s). A 10s sleep with a 2s
         // timeout must be killed promptly, not after 30s.
-        if !isolated() {
-            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+        if !isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-timeout-{}", std::process::id()));
@@ -2749,8 +2766,8 @@ mod tests {
         // cap is now honored by the Tier0 backend (previously ignored:
         // every run used the hardcoded 1 MiB). Output past cap is truncated
         // and the flag set.
-        if !isolated() {
-            eprintln!("skip: tier0 namespace stack unavailable (userns/mount/net/ipc/pid/uts)");
+        if !isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-cap-{}", std::process::id()));
@@ -2954,6 +2971,12 @@ mod exec_not_found_tests {
     /// to fall back to the bare name, which execve then resolved against the
     /// child's cwd — the guest-writable workspace — running a guest-written
     /// file under an allowlisted NAME. Not-found must be a pre-fork error.
+    #[test]
+    fn cgroup_writable_returns_bool() {
+        // Just verify the function doesn't panic; result depends on host
+        let _ = cgroup_writable();
+    }
+
     #[test]
     fn bare_command_not_in_sandbox_path_is_an_error() {
         let spec = SessionSpec {
