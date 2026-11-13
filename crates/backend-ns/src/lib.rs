@@ -84,10 +84,23 @@ const OUTPUT_CAP: usize = 1024 * 1024;
 /// open after the workload exits: the drain gives up instead of hanging.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
-/// Mount a cgroup v1 controller directory for the session.
+/// Detect whether the host is using cgroup2 unified hierarchy.
+fn cgroup2_available() -> bool {
+    std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").exists()
+}
+
+/// Mount a cgroup directory for the session.
+/// Supports both cgroup v1 (/sys/fs/cgroup/<controller>/toolcage/<id>) and
+/// cgroup v2 (/sys/fs/cgroup/toolcage/<id>) unified hierarchy.
 /// Returns the cgroup directory path.
 fn cgroup_mount(controller: &str, id: &str) -> anyhow::Result<std::path::PathBuf> {
-    let path = format!("/sys/fs/cgroup/{}/toolcage/{}", controller, id);
+    let path = if cgroup2_available() {
+        // cgroup2 unified hierarchy: single hierarchy, no controller subdirectory
+        format!("/sys/fs/cgroup/toolcage/{}", id)
+    } else {
+        // cgroup v1: controller-specific subdirectory
+        format!("/sys/fs/cgroup/{}/toolcage/{}", controller, id)
+    };
     create_dir_all(&path)?;
     Ok(path.into())
 }
