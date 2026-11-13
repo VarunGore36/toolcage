@@ -1004,7 +1004,6 @@ dependencies = [
  "anyhow",
  "base64",
  "chacha20poly1305",
- "generic-array",
  "rand",
  "serde",
  "serde_json",
