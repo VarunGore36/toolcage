@@ -471,9 +471,9 @@ pub fn sign_checkpoint(
     time: &str,
     sk_bytes: &[u8],
 ) -> anyhow::Result<Checkpoint> {
-    use ed25519_dalek::{Signer, SigningKey};
+    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
     anyhow::ensure!(sk_bytes.len() == 32, "sk must be 32 bytes");
-    let sk = SigningKey::from_bytes(sk_bytes.try_into().unwrap());
+    let sk = SigningKey::from_bytes(&sk_bytes.try_into().unwrap());
     let msg = checkpoint_msg(seq, head, time);
     let sig = sk.sign(&msg);
     Ok(Checkpoint {
@@ -489,9 +489,9 @@ pub fn sign_checkpoint(
 /// golden-image manifests, whose loader verifies the signature over the
 /// manifest hash; checkpoints use sign_checkpoint's shaped message.
 pub fn sign_bytes(sk_bytes: &[u8], msg: &[u8]) -> anyhow::Result<Vec<u8>> {
-    use ed25519_dalek::{Signer, SigningKey};
+    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
     anyhow::ensure!(sk_bytes.len() == 32, "sk must be 32 bytes");
-    let sk = SigningKey::from_bytes(sk_bytes.try_into().unwrap());
+    let sk = SigningKey::from_bytes(&sk_bytes.try_into().unwrap());
     Ok(sk.sign(msg).to_bytes().to_vec())
 }
 
@@ -499,7 +499,7 @@ pub fn sign_bytes(sk_bytes: &[u8], msg: &[u8]) -> anyhow::Result<Vec<u8>> {
 pub fn pubkey_of(sk_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     use ed25519_dalek::SigningKey;
     anyhow::ensure!(sk_bytes.len() == 32, "sk must be 32 bytes");
-    let sk = SigningKey::from_bytes(sk_bytes.try_into().unwrap());
+    let sk = SigningKey::from_bytes(&sk_bytes.try_into().unwrap());
     Ok(sk.verifying_key().to_bytes().to_vec())
 }
 
@@ -509,7 +509,7 @@ pub fn verify_bytes(sig: &[u8], msg: &[u8], pubkey: &[u8]) -> anyhow::Result<()>
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
     anyhow::ensure!(pubkey.len() == 32, "pubkey must be 32 bytes");
     anyhow::ensure!(sig.len() == 64, "signature must be 64 bytes");
-    let vk = VerifyingKey::from_bytes(pubkey.try_into().unwrap())?;
+    let vk = VerifyingKey::from_bytes(&pubkey.try_into().unwrap())?;
     let sig = Signature::from_slice(sig)?;
     vk.verify(msg, &sig)?;
     Ok(())
@@ -519,7 +519,7 @@ pub fn verify_bytes(sig: &[u8], msg: &[u8], pubkey: &[u8]) -> anyhow::Result<()>
 pub fn verify_checkpoint(cp: &Checkpoint, pubkey: &[u8]) -> anyhow::Result<()> {
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
     anyhow::ensure!(pubkey.len() == 32, "pubkey must be 32 bytes");
-    let vk = VerifyingKey::from_bytes(pubkey.try_into().unwrap())?;
+    let vk = VerifyingKey::from_bytes(&pubkey.try_into().unwrap())?;
     let sig_bytes = hex_decode(&cp.sig_hex)?;
     let sig = Signature::from_slice(&sig_bytes)?;
     vk.verify(&checkpoint_msg(cp.seq, &cp.head_hash, &cp.time), &sig)?;
