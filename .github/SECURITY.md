@@ -38,3 +38,12 @@ Known limitations (see `docs/TEST_RESULTS.md` and `docs/REVIEW.md`):
 ## Disclosure Policy
 
 We follow a 90-day disclosure timeline from the date of a confirmed report. Public disclosure will occur after a fix is released or 90 days elapse, whichever comes first. Credit will be given to the reporter unless they request anonymity.
+
+## Dependency security
+
+Dependencies are scanned on every push/PR, nightly against the fresh RustSec
+advisory DB, and before every release (`cargo-audit` + `cargo-deny`; see
+CONTRIBUTING.md "Dependency policy"). If you are reporting a vulnerability in
+a dependency rather than in toolcage itself, check whether the advisory is
+already known: the scanners fail the build on it, and `audit.toml` /
+`deny.toml` document every triaged exception.

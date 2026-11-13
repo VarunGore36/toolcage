@@ -26,6 +26,7 @@ All notable changes to toolcage will be documented in this file.
 - `README.md`: redesigned with hero banner, 60-second demo, four guarantees, tier chart, benchmark table
 
 ### Fixed
+- CI: dependency-security scanning over both workspaces — `cargo-audit` (RustSec vulnerabilities fail the build; the unfixable unsafe-libyaml notice is triaged in `audit.toml` with a review date) and `cargo-deny` (permissive-only licenses, crates.io-only sources; `deny.toml` is the exception list) on every push/PR, nightly against the fresh advisory DB, and as a release gate before any binary is published. Dependabot keeps cargo + actions current weekly; scanner versions are pinned for reproducible verdicts.
 - `crates/broker`, `crates/capability`: `RevocationList::save` joins the broker store in atomic 0600 writes; the canary suffix and scrub span walk lose their last panic paths (OsRng suffix; total char-advance).
 - `crates/backend-fc`: tier2 vsock CIDs are **allocated, not assumed unique** — the id-derived CID was only a proposal; collisions across sessions whose byte sums agree now scan to the next free CID (exhaustion = error), pool VMs' snapshot CIDs are reconciled against live sessions, and destroy frees the CID.
 - `crates/policy`, `crates/guest-agent`: the guest agent rejects shell/interpreter inline code **by shape at the protocol layer** (the header's claim, implemented) — defense in depth behind the policy engine.

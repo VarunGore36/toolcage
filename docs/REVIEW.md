@@ -100,6 +100,14 @@ cargo clippy --workspace --all-targets  # clean
   pre-fix tree (v0.1.0). Superseded: every finding is fixed on `main` (see the
   CHANGELOG and the closed review issues #69–#77 for per-finding dispositions).
 
+## Dependency security tooling
+
+`cargo-audit` (RustSec vulnerabilities) and `cargo-deny` (permissive-only
+licenses, crates.io-only sources) run on every push/PR, nightly against the
+fresh advisory DB, and before every release — over **both** workspaces
+(root + fuzz). Exception lists: `audit.toml`, `deny.toml` (reason + review
+date per entry). Policy: CONTRIBUTING.md "Dependency policy".
+
 ## Known limitations (honest)
 
 - **Seccomp-BPF fallback mitigations**: On kernels where `PR_SET_SECCOMP` / `SYS_seccomp` returns `EINVAL`, Tier 0 runs namespaces + Landlock + `no_new_privs` and seccomp acts as defense-in-depth:
