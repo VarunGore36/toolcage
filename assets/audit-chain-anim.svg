@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 100" width="800" height="100" role="img" aria-labelledby="title desc">
+  <title id="title">Audit chain growth animation</title>
+  <desc id="dec">Events chain together via hashes; every N events a signed checkpoint is created</desc>
+  <style>
+    .block { fill:#161b22; stroke:#bc8cff; rx:6; }
+    .hash { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace; font-size:10px; fill:#3fb950; text-anchor:middle; dominant-baseline:middle; }
+    .seq { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace; font-size:11px; fill:#bc8cff; font-weight:bold; text-anchor:middle; dominant-baseline:middle; }
+    .link { stroke:#3fb950; stroke-width:2; fill:none; }
+    .marker { fill:#3fb950; }
+    .checkpoint { stroke:#d29922; stroke-width:2; }
+    .cp-text { fill:#d29922; }
+  </style>
+  <defs>
+    <marker id="arr2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M0 0L10 5L0 10z" class="marker"/>
+    </marker>
+  </defs>
+  
+  <g id="chain">
+    <!-- Event 41 -->
+    <rect id="b1" x="20" y="20" width="120" height="50" class="block" opacity="0">
+      <animate attributeName="opacity" from="0" to="1" dur="0.5s" begin="0s" fill="freeze"/>
+    </rect>
+    <text x="80" y="32" class="seq" opacity="0">seq #41
+      <animate attributeName="opacity" from="0" to="1" dur="0.3s" begin="0.3s" fill="freeze"/>
+    </text>
+    <text x="80" y="52" class="hash" opacity="0">prev: 9f2c…
+      <animate attributeName="opacity" from="0" to="1" dur="0.3s" begin="0.4s" fill="freeze"/>
+    </text>
+    <text x="80" y="66" class="hash" opacity="0">hash: 51ab…
+      <animate attributeName="opacity" from="0" to="1" dur="0.3s" begin="0.5s" fill="freeze"/>
+    </text>
+    
+    <!-- Link 1 -->
+    <line id="l1" x1="140" y1="45" x2="170" y2="45" class="link" marker-end="url(#arr2)" stroke-dasharray="30" stroke-dashoffset="30" opacity="0">
+      <animate attributeName="opacity" from="0" to="1" dur="0.2s" begin="0.6s" fill="freeze"/>
+      <animate attributeName="stroke-dashoffset" from="30" to="0" dur="0.8s" begin="0.6s" fill="freeze"/>
+    </line>
+    
+    <!-- Event 42 -->
+    <rect id="b2" x="170" y="20" width="120" height="50" class="block" opacity="0">
+      <animate attributeName="opacity" from="0" to="1" dur="0.5s" begin="1.2s" fill="freeze"/>
+    </rect>
+    <text x="230" y="32" class="seq" opacity="0">seq #42
+      <animate attributeName="opacity" from="0" to="1" dur="0.3s" begin="1.5s" fill="freeze"/>
+    </text>
+    <text x="230" y="52" class="hash" opacity="0">prev: 51ab…
+      <animate attributeName="opacity" from="0" to="1" dur="0.3s" begin="1.6s" fill="freeze"/>
+    </text>
+    <text x="230" y="66" class="hash" opacity="0">hash: c07d…
+      <animate attributeName="opacity" from="0" to="1" dur="0.3s" begin="1.7s" fill="freeze"/>
+    </text>
+    
+    <!-- Link 2 -->
+    <line id="l2" x1="290" y1="45" x2="320" y2="45" class="link" marker-end="url(#arr2)" stroke-dasharray="30" stroke-dashoffset="30" opacity="0">
+      <animate attributeName="opacity" from="0" to="1" dur="0.2s" begin="1.8s" fill="freeze"/>
+      <animate attributeName="stroke-dashoffset" from="30" to="0" dur="0.8s" begin="1.8s" fill="freeze"/>
+    </line>
+    
+    <!-- Event 43 -->
+    <rect id="b3" x="320" y="20" width="120" height="50" class="block" opacity="0">
+      <animate attributeName="opacity" from="0" to="1" dur="0.5s" begin="2.4s" fill="freeze"/>
+    </rect>
+    <text x="380" y="32" class="seq" opacity="0">seq #43
+      <animate attributeName="opacity" from="0" to="1" dur="0.3s" begin="2.7s" fill="freeze"/>
+    </text>
+    <text x="380" y="52" class="hash" opacity="0">prev: c07d…
+      <animate attributeName="opacity" from="0" to="1" dur="0.3s" begin="2.8s" fill="freeze"/>
+    </text>
+    <text x="380" y="66" class="hash" opacity="0">hash: 7be1…
+      <animate attributeName="opacity" from="0" to="1" dur="0.3s" begin="2.9s" fill="freeze"/>
+    </text>
+    
+    <!-- Link 3 -->
+    <line id="l3" x1="440" y1="45" x2="470" y2="45" class="link" marker-end="url(#arr2)" stroke-dasharray="30" stroke-dashoffset="30" opacity="0">
+      <animate attributeName="opacity" from="0" to="1" dur="0.2s" begin="3.0s" fill="freeze"/>
+      <animate attributeName="stroke-dashoffset" from="30" to="0" dur="0.8s" begin="3.0s" fill="freeze"/>
+    </line>
+    
+    <!-- Event 44 -->
+    <rect id="b4" x="470" y="20" width="120" height="50" class="block" opacity="0">
+      <animate attributeName="opacity" from="0" to="1" dur="0.5s" begin="3.6s" fill="freeze"/>
+    </rect>
+    <text x="530" y="32" class="seq" opacity="0">seq #44
+      <animate attributeName="opacity" from="0" to="1" dur="0.3s" begin="3.9s" fill="freeze"/>
+    </text>
+    <text x="530" y="52" class="hash" opacity="0">prev: 7be1…
+      <animate attributeName="opacity" from="0" to="1" dur="0.3s" begin="4.0s" fill="freeze"/>
+    </text>
+    <text x="530" y="66" class="hash" opacity="0">hash: e3f4…
+      <animate attributeName="opacity" from="0" to="1" dur="0.3s" begin="4.1s" fill="freeze"/>
+    </text>
+    
+    <!-- Link 4 -->
+    <line id="l4" x1="590" y1="45" x2="620" y2="45" class="link" marker-end="url(#arr2)" stroke-dasharray="30" stroke-dashoffset="30" opacity="0">
+      <animate attributeName="opacity" from="0" to="1" dur="0.2s" begin="4.2s" fill="freeze"/>
+      <animate attributeName="stroke-dashoffset" from="30" to="0" dur="0.8s" begin="4.2s" fill="freeze"/>
+    </line>
+    
+    <!-- Checkpoint -->
+    <rect id="cp" x="620" y="15" width="150" height="60" class="block checkpoint" opacity="0">
+      <animate attributeName="opacity" from="0" to="1" dur="0.5s" begin="4.8s" fill="freeze"/>
+      <animate attributeName="stroke-width" values="2;4;2" dur="1.5s" begin="5.5s" repeatCount="indefinite"/>
+    </rect>
+    <text x="695" y="30" class="seq cp-text" opacity="0">Checkpoint
+      <animate attributeName="opacity" from="0" to="1" dur="0.3s" begin="5.0s" fill="freeze"/>
+    </text>
+    <text x="695" y="50" class="hash cp-text" opacity="0">Ed25519 (seq,head,time)
+      <animate attributeName="opacity" from="0" to="1" dur="0.3s" begin="5.1s" fill="freeze"/>
+    </text>
+    
+    <!-- Loop arrow back to start (conceptual) -->
+    <path d="M 695 75 Q 400 120 80 75" fill="none" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="8 4" opacity="0">
+      <animate attributeName="opacity" from="0" to="0.4" dur="0.5s" begin="5.5s" fill="freeze"/>
+      <animate attributeName="stroke-dashoffset" from="0" to="100" dur="4s" begin="5.5s" repeatCount="indefinite"/>
+    </path>
+  </g>
+</svg>

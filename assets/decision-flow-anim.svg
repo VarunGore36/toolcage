@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 120" width="800" height="120" role="img" aria-labelledby="title desc">
+  <title id="title">Decision flow animation</title>
+  <desc id="dec">Request flows through canonicalize, policy, token, approval, then logs intent before executing</desc>
+  <style>
+    .box { fill:#161b22; stroke:#30363d; rx:8; }
+    .text { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace; font-size:11px; fill:#e6edf3; text-anchor:middle; dominant-baseline:middle; }
+    .arrow { stroke:#58a6ff; stroke-width:2; }
+    .marker { fill:#58a6ff; }
+    .log-box { stroke:#bc8cff; }
+    .log-text { fill:#bc8cff; }
+  </style>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0 0L10 5L0 10z" class="marker"/>
+    </marker>
+  </defs>
+  
+  <!-- Box 1: Canonicalize -->
+  <rect x="10" y="20" width="140" height="60" class="box"/>
+  <text x="80" y="38" class="text">Canonicalize</text>
+  <text x="80" y="56" class="text">paths · hosts</text>
+  
+  <!-- Arrow 1 -->
+  <line x1="150" y1="50" x2="180" y2="50" class="arrow" marker-end="url(#arr)">
+    <animate attributeName="opacity" values="0.3;1;0.3" dur="2s" repeatCount="indefinite"/>
+    <animate attributeName="stroke-dashoffset" from="30" to="0" dur="1.5s" repeatCount="indefinite"/>
+  </line>
+  
+  <!-- Box 2: Policy -->
+  <rect x="180" y="20" width="140" height="60" class="box"/>
+  <text x="250" y="38" class="text">Policy</text>
+  <text x="250" y="56" class="text">forbid wins</text>
+  
+  <!-- Arrow 2 -->
+  <line x1="320" y1="50" x2="350" y2="50" class="arrow" marker-end="url(#arr)">
+    <animate attributeName="opacity" values="0.3;1;0.3" dur="2s" repeatCount="indefinite" begin="0.2s"/>
+    <animate attributeName="stroke-dashoffset" from="30" to="0" dur="1.5s" repeatCount="indefinite" begin="0.2s"/>
+  </line>
+  
+  <!-- Box 3: Token -->
+  <rect x="350" y="20" width="140" height="60" class="box"/>
+  <text x="420" y="38" class="text">Token</text>
+  <text x="420" y="56" class="text">narrow only</text>
+  
+  <!-- Arrow 3 -->
+  <line x1="490" y1="50" x2="520" y2="50" class="arrow" marker-end="url(#arr)">
+    <animate attributeName="opacity" values="0.3;1;0.3" dur="2s" repeatCount="indefinite" begin="0.4s"/>
+    <animate attributeName="stroke-dashoffset" from="30" to="0" dur="1.5s" repeatCount="indefinite" begin="0.4s"/>
+  </line>
+  
+  <!-- Box 4: Approval -->
+  <rect x="520" y="20" width="140" height="60" class="box"/>
+  <text x="590" y="38" class="text">Approval</text>
+  <text x="590" y="56" class="text">timeout=deny</text>
+  
+  <!-- Arrow 4 -->
+  <line x1="660" y1="50" x2="690" y2="50" class="arrow" marker-end="url(#arr)">
+    <animate attributeName="opacity" values="0.3;1;0.3" dur="2s" repeatCount="indefinite" begin="0.6s"/>
+    <animate attributeName="stroke-dashoffset" from="30" to="0" dur="1.5s" repeatCount="indefinite" begin="0.6s"/>
+  </line>
+  
+  <!-- Box 5: Log intent (highlighted) -->
+  <rect x="690" y="20" width="140" height="60" class="box log-box" stroke-width="2"/>
+  <text x="760" y="38" class="text log-text">Log intent</text>
+  <text x="760" y="56" class="text log-text">write-ahead</text>
+  
+  <!-- Pulse animation on log box -->
+  <animate xlink:href="#log-box" attributeName="stroke-opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite"/>
+</svg>

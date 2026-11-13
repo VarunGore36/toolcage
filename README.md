@@ -110,6 +110,8 @@ Every tool call crosses one small trusted core, the **supervisor**. It decides, 
 
 ### Decision order for every request
 
+![Decision flow animation](assets/decision-flow-anim.svg)
+
 ```mermaid
 flowchart TD
     A[Request arrives] --> B[Canonicalize at enforcement point]
@@ -325,6 +327,8 @@ Revocation covers the **whole subtree**: revoking a `rev_id` kills every token d
 
 ![Credential flow](assets/secrets.svg)
 
+![Credential flow animation](assets/credential-flow-anim.svg)
+
 - The guest holds `secret:name` placeholders. Literal values in `env_refs` are rejected.
 - The broker store is **encrypted at rest** and supports rotation; its `Debug` output is redacted. Saves and rotations are atomic (0600 temp file, fsync, rename) and never world-readable, even transiently.
 - The proxy resolves DNS, enforces `host + method + path`, and attaches the credential upstream.
@@ -337,6 +341,8 @@ Revocation covers the **whole subtree**: revoking a `rev_id` kills every token d
 ## Audit log
 
 ![Audit hash chain](assets/audit.svg)
+
+![Audit chain growth animation](assets/audit-chain-anim.svg)
 
 ```mermaid
 graph LR
@@ -578,87 +584,3 @@ Apache-2.0 OR MIT. See [LICENSE](LICENSE) and [LICENSE-MIT](LICENSE-MIT).
 </sub>
 
 </div>
-
-<details>
-<summary><b>Animations (hover to play)</b></summary>
-
-### Decision flow animation
-
-```svg
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 120" width="800" height="120">
-  <style>
-    .box { fill:#161b22; stroke:#30363d; rx:8; }
-    .text { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace; font-size:11px; fill:#e6edf3; text-anchor:middle; dominant-baseline:middle; }
-    .arrow { stroke:#58a6ff; stroke-width:2; marker-end:url(#arr); }
-    @keyframes pulse { 0% { opacity:0.3; } 50% { opacity:1; } 100% { opacity:0.3; } }
-    .flow { animation: pulse 2s infinite; }
-  </style>
-  <defs>
-    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#58a6ff"/></marker>
-  </defs>
-  <rect x="10" y="20" width="140" height="60" class="box"/>
-  <text x="80" y="38" class="text">Canonicalize</text>
-  <text x="80" y="56" class="text">paths · hosts</text>
-  <line x1="150" y1="50" x2="180" y2="50" class="arrow flow"/>
-  <rect x="180" y="20" width="140" height="60" class="box"/>
-  <text x="250" y="38" class="text">Policy</text>
-  <text x="250" y="56" class="text">forbid wins</text>
-  <line x1="320" y1="50" x2="350" y2="50" class="arrow flow" style="animation-delay:0.2s"/>
-  <rect x="350" y="20" width="140" height="60" class="box"/>
-  <text x="420" y="38" class="text">Token</text>
-  <text x="420" y="56" class="text">narrow only</text>
-  <line x1="490" y1="50" x2="520" y2="50" class="arrow flow" style="animation-delay:0.4s"/>
-  <rect x="520" y="20" width="140" height="60" class="box"/>
-  <text x="590" y="38" class="text">Approval</text>
-  <text x="590" y="56" class="text">timeout=deny</text>
-  <line x1="660" y1="50" x2="690" y2="50" class="arrow flow" style="animation-delay:0.6s"/>
-  <rect x="690" y="20" width="140" height="60" class="box" stroke="#bc8cff"/>
-  <text x="760" y="38" class="text" fill="#bc8cff">Log intent</text>
-  <text x="760" y="56" class="text" fill="#bc8cff">write-ahead</text>
-</svg>
-```
-
-### Audit chain growth
-
-```svg
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 100" width="800" height="100">
-  <style>
-    .block { fill:#161b22; stroke:#bc8cff; rx:6; }
-    .hash { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace; font-size:10px; fill:#3fb950; text-anchor:middle; dominant-baseline:middle; }
-    .seq { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace; font-size:11px; fill:#bc8cff; font-weight:bold; text-anchor:middle; dominant-baseline:middle; }
-    .link { stroke:#3fb950; stroke-width:2; marker-end:url(#arr2); }
-    @keyframes grow { from { stroke-dashoffset: 40; } to { stroke-dashoffset: 0; } }
-    .link { stroke-dasharray: 40; animation: grow 1.5s ease-out forwards; }
-  </style>
-  <defs>
-    <marker id="arr2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#3fb950"/></marker>
-  </defs>
-  <g id="chain">
-    <rect x="20" y="20" width="120" height="50" class="block"/>
-    <text x="80" y="32" class="seq">seq #41</text>
-    <text x="80" y="52" class="hash">prev: 9f2c…</text>
-    <text x="80" y="66" class="hash">hash: 51ab…</text>
-    <line x1="140" y1="45" x2="170" y2="45" class="link" style="animation-delay:0s"/>
-    <rect x="170" y="20" width="120" height="50" class="block"/>
-    <text x="230" y="32" class="seq">seq #42</text>
-    <text x="230" y="52" class="hash">prev: 51ab…</text>
-    <text x="230" y="66" class="hash">hash: c07d…</text>
-    <line x1="290" y1="45" x2="320" y2="45" class="link" style="animation-delay:0.3s"/>
-    <rect x="320" y="20" width="120" height="50" class="block"/>
-    <text x="380" y="32" class="seq">seq #43</text>
-    <text x="380" y="52" class="hash">prev: c07d…</text>
-    <text x="380" y="66" class="hash">hash: 7be1…</text>
-    <line x1="440" y1="45" x2="470" y2="45" class="link" style="animation-delay:0.6s"/>
-    <rect x="470" y="20" width="120" height="50" class="block"/>
-    <text x="530" y="32" class="seq">seq #44</text>
-    <text x="530" y="52" class="hash">prev: 7be1…</text>
-    <text x="530" y="66" class="hash">hash: e3f4…</text>
-    <line x1="590" y1="45" x2="620" y2="45" class="link" style="animation-delay:0.9s"/>
-    <rect x="620" y="15" width="150" height="60" class="block" stroke="#d29922" stroke-width="2"/>
-    <text x="695" y="30" class="seq" fill="#d29922">Checkpoint</text>
-    <text x="695" y="50" class="hash" fill="#d29922">Ed25519 (seq,head,time)</text>
-  </g>
-</svg>
-```
-
-</details>
