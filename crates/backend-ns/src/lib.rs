@@ -714,6 +714,15 @@ fn isolated_exec(
         let _ = cgroup_write(&cgroup_dir, "cpu.cfs_period_us", &period.to_string());
     }
     cgroup_write_max(&cgroup_dir, "memory.max", &format!("{}", spec.mem_mb * 1024 * 1024))?;
+    // Set memory swap limit: on cgroup v2 use memory.swap.max, on v1 use memory.memsw.limit_in_bytes
+    if spec.mem_mb > 0 {
+        let swap_bytes = spec.mem_mb * 1024 * 1024; // same as memory limit for swap
+        if cgroup2_available() {
+            let _ = cgroup_write(&cgroup_dir, "memory.swap.max", &swap_bytes.to_string());
+        } else {
+            let _ = cgroup_write(&cgroup_dir, "memory.memsw.limit_in_bytes", &swap_bytes.to_string());
+        }
+    }
     cgroup_write_max(&cgroup_dir, "pids.max", "1024")?;
     // Enable OOM group so the entire cgroup is killed on OOM, not just one process
     cgroup_write(&cgroup_dir, "memory.oom.group", "1")?;
