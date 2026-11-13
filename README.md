@@ -262,7 +262,16 @@ Third-party MCP servers run as **guest processes** under the same policy and aud
 
 ## Tests
 
-`cargo test --workspace` runs the full suite green with clippy clean — the current count and per-suite breakdown live in [`docs/TEST_RESULTS.md`](docs/TEST_RESULTS.md) (regenerated from the run; counts here went stale every commit when duplicated). Beyond unit tests the suite includes:
+`cargo test --workspace` runs the full suite green with clippy clean — the current count and per-suite breakdown live in [`docs/TEST_RESULTS.md`](docs/TEST_RESULTS.md) (regenerated from the run; counts here went stale every commit when duplicated).
+
+Coverage: `cargo-tarpaulin` measures statement coverage across the workspace
+(except the fuzz workspace and `backend-ns`, whose exec tests fork processes
+that segfault under instrumentation) and is enforced by CI at a floor of 80%
+(`--fail-under 80`). Current coverage: 81.65% across the measured crates,
+with the audit (85.5%), policy (91.3%) and capability (86.9%) crates well
+covered and the CLI (`tc` argument parsing), MCP front door and gVisor
+driver the main gaps. Coverage is a floor, not a ceiling — it measures lines
+executed, not whether they are exercised well. Beyond unit tests the suite includes:
 
 - 🎯 **Escape suite** against the policy and proxy (I1, I6), and a Tier 2 escape suite asserting the design closes each exit — vsock-only with no network device ever configured, jailer confinement of the VMM process, and a control-channel escape matrix
 - 🐞 **Fuzzing** of the policy, guest-agent, audit, proxy, and MCP JSON-RPC parsers (nightly campaigns + commit-time smoke twins)
