@@ -23,7 +23,7 @@
 //! are safe with 192-bit nonce space). Associated data = credential name
 //! (binding ciphertext to its identity). Master key = 32 bytes.
 
-use chacha20poly1305::aead::{Aead, AeadCore, Generate, KeyInit, Nonce, Payload, array::Array};
+use chacha20poly1305::aead::{array::Array, Aead, Generate, KeyInit, Nonce, Payload};
 use chacha20poly1305::XChaCha20Poly1305;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

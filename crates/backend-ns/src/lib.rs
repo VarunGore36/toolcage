@@ -797,9 +797,13 @@ fn isolated_exec(
             // dup2(STDIN_FILENO) near execve — the workload's stdin must never
             // be the caller's (in the MCP deployment that is the guest's own
             // JSON-RPC stream).
-            let devnull =
-                #[allow(clippy::manual_c_str_literals)]
-                unsafe { libc::open(b"/dev/null\0".as_ptr() as *const libc::c_char, libc::O_RDONLY | libc::O_CLOEXEC) };
+            #[allow(clippy::manual_c_str_literals)]
+            let devnull = unsafe {
+                libc::open(
+                    c"/dev/null".as_ptr(),
+                    libc::O_RDONLY | libc::O_CLOEXEC,
+                )
+            };
 
             // 1. The namespace stack is already in place: clone_all_namespaces()
             // created us inside user + mount + net + ipc + pid + uts in a
@@ -843,7 +847,7 @@ fn isolated_exec(
             unsafe {
                 libc::mount(
                     std::ptr::null(),
-                    b"/\0".as_ptr() as *const libc::c_char,
+                    c"/".as_ptr(),
                     std::ptr::null(),
                     libc::MS_PRIVATE | libc::MS_REC,
                     std::ptr::null(),
@@ -854,17 +858,18 @@ fn isolated_exec(
             // CStr literals on purpose: these pointers go to mount(2) as C
             // strings, and a `&str` would rely on rustc's unspecified trailing
             for sysdir in &[
-                b"/usr\0" as &[u8],
-                b"/bin\0" as &[u8],
-                b"/lib\0" as &[u8],
-                b"/lib64\0" as &[u8],
+                c"/usr",
+                c"/bin",
+                c"/lib",
+                c"/lib64",
             ] {
-                if unsafe { libc::access(sysdir.as_ptr() as *const libc::c_char, libc::F_OK) } == 0 {
+                if unsafe { libc::access(sysdir.as_ptr() as *const libc::c_char, libc::F_OK) } == 0
+                {
                     let _ = unsafe {
                         libc::mount(
                             sysdir.as_ptr() as *const libc::c_char,
                             sysdir.as_ptr() as *const libc::c_char,
-                            b"\0".as_ptr() as *const libc::c_char as *const libc::c_char,
+                            c"".as_ptr(),
                             libc::MS_BIND | libc::MS_REC,
                             std::ptr::null(),
                         )
@@ -873,7 +878,7 @@ fn isolated_exec(
                         libc::mount(
                             std::ptr::null(),
                             sysdir.as_ptr() as *const libc::c_char,
-                            b"\0".as_ptr() as *const libc::c_char as *const libc::c_char,
+                            c"".as_ptr(),
                             libc::MS_RDONLY | libc::MS_BIND | libc::MS_REMOUNT,
                             std::ptr::null(),
                         )
@@ -1412,7 +1417,8 @@ fn apply_landlock(workspace: &str) {
             && ["/usr", "/bin", "/lib"]
                 .iter()
                 .all(|p| add_rule(ruleset, p, sys_rights))
-            && (unsafe { libc::access(b"/lib64\0".as_ptr() as *const libc::c_char, libc::F_OK) } != 0
+            && (unsafe { libc::access(c"/lib64".as_ptr(), libc::F_OK) }
+                != 0
                 || add_rule(ruleset, "/lib64", sys_rights));
         if ok {
             let rc = unsafe { syscall(SYS_LANDLOCK_RESTRICT_SELF, ruleset, 0) };
