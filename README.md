@@ -442,24 +442,6 @@ Third-party MCP servers run as **guest processes** under the same policy and aud
 
 `cargo test --workspace` runs the full suite green with clippy clean — the current count and per-suite breakdown live in [`docs/TEST_RESULTS.md`](docs/TEST_RESULTS.md) (regenerated from the run; counts here went stale every commit when duplicated).
 
-```mermaid
-pie title Test distribution by crate
-    "policy" : 46
-    "supervisor" : 35
-    "backend-fc" : 28
-    "proxy" : 28
-    "backend-ns" : 33
-    "cli" : 24
-    "capability" : 19
-    "mcp" : 16
-    "audit" : 12
-    "backend-gv" : 9
-    "guest-agent" : 6
-    "broker" : 8
-    "verify" : 2
-    "approval" : 7
-```
-
 ### Coverage
 
 `cargo-tarpaulin` measures statement coverage across the workspace (excluding the fuzz workspace and `toolcage-backend-ns`, whose exec tests fork processes that segfault under instrumentation). Coverage is enforced in CI (`--fail-under 80`).
