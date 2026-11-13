@@ -118,10 +118,6 @@ fn cgroup_write_max(path: &Path, file: &str, value: &str) -> anyhow::Result<()> 
     cgroup_write(path, file, value)
 }
 
-
-/// Mount a cgroup v1 controller directory for the session.
-/// Returns the cgroup directory path.
-
 // x86_64 syscalls denied by the seccomp filter, named via libc's SYS_*
 // constants (values mirror the kernel's asm/unistd_64.h). The filter is a
 // denylist on top of the namespaces + Landlock boundary: socket(2) is denied
@@ -854,7 +850,7 @@ fn isolated_exec(
             #[allow(clippy::manual_c_str_literals)]
             let devnull = unsafe {
                 libc::open(
-                    b"/dev/null ".as_ptr() as *const libc::c_char,
+                    b"/dev/null".as_ptr() as *const libc::c_char,
                     libc::O_RDONLY | libc::O_CLOEXEC,
                 )
             };
@@ -1514,6 +1510,7 @@ mod tests {
             id: "t1".into(),
             tier: Tier::Tier0,
             mem_mb: 0,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: dir.display().to_string(),
         };
@@ -1587,6 +1584,7 @@ mod tests {
             id: "t2".into(),
             tier: Tier::Tier0,
             mem_mb: 0,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: dir.display().to_string(),
         };
@@ -1617,6 +1615,7 @@ mod tests {
             id: "t3".into(),
             tier: Tier::Tier0,
             mem_mb: 0,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: dir.display().to_string(),
         };
@@ -1664,6 +1663,7 @@ mod tests {
             id: "t4".into(),
             tier: Tier::Tier0,
             mem_mb: 0,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: dir.display().to_string(),
         };
@@ -2026,6 +2026,7 @@ mod tests {
             id: id.into(),
             tier: Tier::Tier0,
             mem_mb: 0,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: dir.display().to_string(),
         };
@@ -2080,6 +2081,7 @@ mod tests {
             id: id.into(),
             tier: Tier::Tier0,
             mem_mb: 0,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: dir.display().to_string(),
         };
@@ -2123,6 +2125,7 @@ mod tests {
             id: "t5".into(),
             tier: Tier::Tier0,
             mem_mb: 0,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: wsfile.display().to_string(),
         };
@@ -2177,6 +2180,7 @@ mod tests {
             id: "t6".into(),
             tier: Tier::Tier0,
             mem_mb: 0,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: dir.display().to_string(),
         };
@@ -2422,6 +2426,7 @@ mod tests {
             id: "t-inject-parent-fail".into(),
             tier: Tier::Tier0,
             mem_mb: 0,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: dir.display().to_string(),
         };
@@ -2490,6 +2495,7 @@ mod tests {
             id: "t-pidns".into(),
             tier: Tier::Tier0,
             mem_mb: 0,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: dir.display().to_string(),
         };
@@ -2560,6 +2566,7 @@ mod tests {
                             id: id.clone(),
                             tier: Tier::Tier0,
                             mem_mb: 0,
+                            cpu_millis: 0,
                             workspace_mb: 0,
                             workspace: dir.display().to_string(),
                         };
@@ -2613,6 +2620,7 @@ mod tests {
             id: "t8".into(),
             tier: Tier::Tier0,
             mem_mb: 0,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: dir.display().to_string(),
         };
@@ -2668,6 +2676,7 @@ mod tests {
             id: "t9".into(),
             tier: Tier::Tier0,
             mem_mb: 0,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: dir.display().to_string(),
         };
@@ -2706,6 +2715,7 @@ mod tests {
             id: "t-timeout".into(),
             tier: Tier::Tier0,
             mem_mb: 0,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: dir.display().to_string(),
         };
@@ -2750,6 +2760,7 @@ mod tests {
             id: "t-cap".into(),
             tier: Tier::Tier0,
             mem_mb: 0,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: dir.display().to_string(),
         };
@@ -2949,6 +2960,7 @@ mod exec_not_found_tests {
             id: "t-nf".into(),
             tier: Tier::Tier0,
             mem_mb: 0,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: "/nonexistent-toolcage-workspace".into(),
         };
@@ -2977,6 +2989,7 @@ mod exec_not_found_tests {
             id: "t-nf".into(),
             tier: Tier::Tier0,
             mem_mb: 0,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: "/nonexistent-toolcage-workspace".into(),
         };

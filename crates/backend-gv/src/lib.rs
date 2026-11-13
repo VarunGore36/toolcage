@@ -710,6 +710,7 @@ mod tests {
             id: "s1".into(),
             tier: Tier::Tier1,
             mem_mb: 1024,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: "/tmp".into(),
         };

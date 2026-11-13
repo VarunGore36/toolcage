@@ -10,6 +10,7 @@ fn ws_spec(id: &str, dir: &std::path::Path) -> SessionSpec {
         id: id.into(),
         tier: Tier::Tier0,
         mem_mb: 0,
+        cpu_millis: 0,
         workspace_mb: 0,
         workspace: dir.display().to_string(),
     }

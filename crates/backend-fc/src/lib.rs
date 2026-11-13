@@ -1196,6 +1196,7 @@ mod tests {
             id: "t-nokvm".into(),
             tier: Tier::Tier2,
             mem_mb: 128,
+            cpu_millis: 0,
             workspace_mb: 0,
             workspace: "/tmp".into(),
         };
@@ -1746,6 +1747,7 @@ mod order_tests {
             id: "sess-broken".into(),
             tier: Tier::Tier2,
             mem_mb: 128,
+            cpu_millis: 0,
             workspace_mb: 16,
             workspace: "/tmp/ws".into(),
         };
