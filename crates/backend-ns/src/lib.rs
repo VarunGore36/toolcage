@@ -572,6 +572,9 @@ impl Backend for NsBackend {
     }
     fn destroy(&mut self, id: &str) -> anyhow::Result<()> {
         self.sessions.remove(id);
+        // Clean up cgroup directory for the session
+        let cgroup_dir = format!("/sys/fs/cgroup/ns/{}", id);
+        let _ = std::fs::remove_dir_all(&cgroup_dir);
         Ok(())
     }
     fn exec(

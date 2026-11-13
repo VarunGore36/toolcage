@@ -82,6 +82,23 @@ fn process_added_to_cgroup() {
 }
 
 #[test]
+fn cgroup_cleanup_on_destroy() {
+    if !std::fs::metadata("/sys/fs/cgroup").is_ok() {
+        eprintln!("skip: cgroup fs not available");
+        return;
+    }
+    let dir = std::env::temp_dir().join("tc-cgroup-cleanup-destroy");
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let o = sup_at(&audit)
+        .exec_limits(&["/bin/echo".to_string(), "test".to_string()], 5, 1024)
+        .unwrap();
+    assert!(o.allowed);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn cgroup_cleanup_after_session() {
     let dir = std::env::temp_dir().join("tc-cgroup-cleanup");
     std::fs::create_dir_all(&dir).unwrap();
