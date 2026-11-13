@@ -857,12 +857,7 @@ fn isolated_exec(
             // Read-only system dirs (guest may read/execute, never write).
             // CStr literals on purpose: these pointers go to mount(2) as C
             // strings, and a `&str` would rely on rustc's unspecified trailing
-            for sysdir in &[
-                c"/usr",
-                c"/bin",
-                c"/lib",
-                c"/lib64",
-            ] {
+            for sysdir in &[c"/usr", c"/bin", c"/lib", c"/lib64"] {
                 if unsafe { libc::access(sysdir.as_ptr() as *const libc::c_char, libc::F_OK) } == 0
                 {
                     let _ = unsafe {
@@ -1417,8 +1412,7 @@ fn apply_landlock(workspace: &str) {
             && ["/usr", "/bin", "/lib"]
                 .iter()
                 .all(|p| add_rule(ruleset, p, sys_rights))
-            && (unsafe { libc::access(c"/lib64".as_ptr(), libc::F_OK) }
-                != 0
+            && (unsafe { libc::access(c"/lib64".as_ptr(), libc::F_OK) } != 0
                 || add_rule(ruleset, "/lib64", sys_rights));
         if ok {
             let rc = unsafe { syscall(SYS_LANDLOCK_RESTRICT_SELF, ruleset, 0) };
