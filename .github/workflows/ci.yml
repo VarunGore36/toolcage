@@ -55,6 +55,24 @@ jobs:
       - run: cargo run --release -p toolcage-cli -- doctor
       - run: ./scripts/bench.sh
 
+  coverage:
+    name: cargo-tarpaulin (code coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-tarpaulin@0.19.0
+      # Run coverage over the workspace except fuzz (separate workspace) and
+      // backend-ns (fork-heavy exec tests segfault under instrumentation).
+      - run: cargo tarpaulin --out Html --output-dir target/tarpaulin --workspace --exclude toolcage-fuzz --exclude toolcage-backend-ns --fail-under 80
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-html
+          path: target/tarpaulin/html
+          retention: 1w
+
   cargo-audit:
     name: cargo-audit (RustSec advisories)
     runs-on: ubuntu-latest
