@@ -43,6 +43,19 @@ fn cpu_limit_applied_in_cgroup() {
 }
 
 #[test]
+fn pids_limit_applied_in_cgroup() {
+    let dir = std::env::temp_dir().join("tc-cgroup-pids");
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let o = sup_at(&audit)
+        .exec_limits(&["/bin/echo".to_string(), "test".to_string()], 5, 1024)
+        .unwrap();
+    assert!(o.allowed);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn memory_limit_applied_in_cgroup() {
     let dir = std::env::temp_dir().join("tc-cgroup-mem");
     std::fs::create_dir_all(&dir).unwrap();

@@ -677,6 +677,7 @@ fn isolated_exec(
     let cgroup_dir = cgroup_mount("ns", &spec.id)?;
     cgroup_write_max(&cgroup_dir, "cpu.max", &format!("{}", spec.cpu_millis * 1000))?;
     cgroup_write_max(&cgroup_dir, "memory.max", &format!("{}", spec.mem_mb * 1024 * 1024))?;
+    cgroup_write_max(&cgroup_dir, "pids.max", "1024")?;
 
     let child_raw = clone_all_namespaces()?;
     // Add child to cgroup so limits apply
