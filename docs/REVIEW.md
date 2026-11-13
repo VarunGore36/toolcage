@@ -50,6 +50,14 @@ cargo build --release
 
 ```bash
 cargo test --workspace       # all green (count + breakdown: docs/TEST_RESULTS.md)
+Coverage: `cargo-tarpaulin` measures statement coverage across the workspace
+(except the fuzz workspace and `toolcage-backend-ns`, whose exec tests fork
+processes that segfault under instrumentation) and CI enforces a floor of 80%
+(`--fail-under 80`). Current coverage: 81.65% across the measured crates,
+with audit (85.5%), policy (91.3%) and capability (86.9%) well covered, and
+the CLI argument parsing (13.5%), MCP front door (42.2%) and gVisor driver
+(52.2%) the main gaps. Coverage is a floor, not a ceiling: it measures lines
+executed, not how well they are exercised.
 cargo clippy --workspace --all-targets  # clean
 ```
 
