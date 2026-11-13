@@ -23,9 +23,8 @@
 //! are safe with 192-bit nonce space). Associated data = credential name
 //! (binding ciphertext to its identity). Master key = 32 bytes.
 
-use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
+use chacha20poly1305::aead::{Aead, AeadCore, Generate, KeyInit, Nonce, Payload, array::Array};
 use chacha20poly1305::XChaCha20Poly1305;
-use generic_array::GenericArray;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -183,8 +182,7 @@ impl Broker {
                 base64_decode(&ec.encrypted_value).map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
             anyhow::ensure!(combined.len() >= 24, "decrypt: combined too short");
             let (nonce_bytes, ct) = combined.split_at(24);
-            let nonce: GenericArray<u8, <XChaCha20Poly1305 as AeadCore>::NonceSize> =
-                *GenericArray::from_slice(nonce_bytes);
+            let nonce: Nonce<XChaCha20Poly1305> = *Array::from_slice(nonce_bytes);
             let aad = credential_aad(
                 &ec.name,
                 &ec.use_with,
@@ -225,8 +223,7 @@ impl Broker {
             .map_err(|e| anyhow::anyhow!("encrypt: {e}"))?;
         let mut encrypted = Vec::new();
         for c in self.creds.values() {
-            let mut rng = OsRng;
-            let nonce = XChaCha20Poly1305::generate_nonce(&mut rng);
+            let nonce = Nonce::<XChaCha20Poly1305>::generate();
             let pt = c.value.as_bytes();
             let aad = credential_aad(&c.name, &c.use_with, &c.methods, &c.paths, c.expires_at);
             let ct = cipher
@@ -309,8 +306,7 @@ impl Broker {
                 base64_decode(&ec.encrypted_value).map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
             anyhow::ensure!(combined.len() >= 24, "decrypt: combined too short");
             let (nonce_bytes, ct) = combined.split_at(24);
-            let nonce: GenericArray<u8, <XChaCha20Poly1305 as AeadCore>::NonceSize> =
-                *GenericArray::from_slice(nonce_bytes);
+            let nonce: Nonce<XChaCha20Poly1305> = *Array::from_slice(nonce_bytes);
             let aad = credential_aad(
                 &ec.name,
                 &ec.use_with,
@@ -323,8 +319,7 @@ impl Broker {
             let pt = old_cipher
                 .decrypt(&nonce, Payload { msg: ct, aad: &aad })
                 .map_err(|e| anyhow::anyhow!("decrypt: {e}"))?;
-            let mut rng = OsRng;
-            let nonce = XChaCha20Poly1305::generate_nonce(&mut rng);
+            let nonce = Nonce::<XChaCha20Poly1305>::generate();
             let ct = new_cipher
                 .encrypt(
                     &nonce,
@@ -581,7 +576,7 @@ fn rand_suffix() -> String {
     // OsRng, not the wall clock: uniqueness per canary plant, and no unwrap
     // on a broken clock (a pre-epoch RTC panicked the canary path). The
     // nonce generator is already in scope via the AEAD imports.
-    let n = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+    let n = Nonce::<XChaCha20Poly1305>::generate();
     let mut s = String::with_capacity(12);
     for b in n.iter().take(6) {
         s.push_str(&format!("{b:02x}"));
@@ -729,8 +724,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         let combined = base64_decode(&entries[0].encrypted_value).unwrap();
         let (nonce_bytes, ct) = combined.split_at(24);
-        let nonce: GenericArray<u8, <XChaCha20Poly1305 as AeadCore>::NonceSize> =
-            *GenericArray::from_slice(nonce_bytes);
+        let nonce: Nonce<XChaCha20Poly1305> = *Array::from_slice(nonce_bytes);
         let aad = credential_aad(
             &entries[0].name,
             &entries[0].use_with,
