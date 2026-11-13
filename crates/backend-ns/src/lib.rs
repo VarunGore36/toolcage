@@ -800,7 +800,7 @@ fn isolated_exec(
             #[allow(clippy::manual_c_str_literals)]
             let devnull = unsafe {
                 libc::open(
-                    c"/dev/null".as_ptr(),
+                    c"/dev/null".as_ptr() as *const c_char,
                     libc::O_RDONLY | libc::O_CLOEXEC,
                 )
             };
