@@ -5,7 +5,7 @@
 **A local-first security runtime for AI agents.** It puts policy enforcement, host-held credentials, controlled egress, isolation, and tamper-evident audit records between an agent and the systems it can affect.
 
 [![CI](https://github.com/VarunGore36/toolcage/actions/workflows/ci.yml/badge.svg)](https://github.com/VarunGore36/toolcage/actions/workflows/ci.yml)
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE)
 [![Status: alpha](https://img.shields.io/badge/status-alpha%20%C2%B7%20not%20independently%20reviewed-orange.svg)](docs/REVIEW.md)
 [![Tests](https://img.shields.io/badge/tests-273%20%C2%B7%200%20failures-brightgreen.svg)](docs/TEST_RESULTS.md)
 ![Rust](https://img.shields.io/badge/built%20with-Rust-black.svg)
@@ -352,7 +352,7 @@ Found a vulnerability or a broken invariant? Please report it privately through 
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Apache-2.0 OR MIT. See [LICENSE](LICENSE) and [LICENSE-MIT](LICENSE-MIT).
 
 ---
 
