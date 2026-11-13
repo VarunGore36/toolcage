@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -179,8 +179,9 @@ fn mac_for(
     ancestors: &[String],
     rights: &Rights,
 ) -> Hmac<Sha256> {
+    // hmac 0.13: key setup moved from the Mac trait to the KeyInit trait.
     let mut mac =
-        <Hmac<Sha256> as Mac>::new_from_slice(&key.0).expect("hmac accepts keys of any length");
+        <Hmac<Sha256> as KeyInit>::new_from_slice(&key.0).expect("hmac accepts keys of any length");
     feed(&mut mac, rev_id.as_bytes());
     // Distinguish None from Some(...). They used to feed identically — both
     // empty via unwrap_or_default — so a root (parent: None) and a
