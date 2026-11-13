@@ -346,12 +346,12 @@ Revocation covers the **whole subtree**: revoking a `rev_id` kills every token d
 
 ```mermaid
 graph LR
-    A[Event N] -->|H(prev, canonical)| B[Event N+1]
-    B -->|H(prev, canonical)| C[Event N+2]
-    C -->|...| D[Event N+k]
+    A[Event N] --> B[Event N+1]
+    B --> C[Event N+2]
+    C --> D[Event N+k]
 
-    D -.->|Every N events or T seconds| E[Checkpoint]
-    E -.->|Ed25519 sign (seq, head, time)| F[Signed checkpoint]
+    D -.-> E[Checkpoint]
+    E -.-> F[Signed checkpoint]
 
     style A fill:#161b22,stroke:#bc8cff,stroke-width:2px
     style B fill:#161b22,stroke:#bc8cff,stroke-width:2px
