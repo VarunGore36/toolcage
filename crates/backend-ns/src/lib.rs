@@ -72,7 +72,7 @@ use nix::fcntl::{open, OFlag};
 use nix::sys::stat::Mode;
 use nix::unistd::{close, fork, pipe2, ForkResult};
 use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier, GUEST_PATH};
-use std::fs::{create_dir_all, File};
+use std::fs::create_dir_all;
 use std::io::Write;
 
 // Test fixture value: exec() takes `cap` from the caller now, so the 1 MiB
@@ -673,7 +673,15 @@ fn isolated_exec(
     // why this has to be a clone() and not fork()+unshare(). CLONE_NEWPID
     // makes the child PID 1 of the new PID namespace, so the workload really
     // runs inside it; the previous shape ran it in the host PID namespace.
+    // Cgroup: create session cgroup and set resource limits before fork
+    let cgroup_dir = cgroup_mount("ns", &spec.id)?;
+    cgroup_write_max(&cgroup_dir, "cpu.max", &format!("{}", spec.cpu_millis * 1000))?;
+    cgroup_write_max(&cgroup_dir, "memory.max", &format!("{}", spec.mem_mb * 1024 * 1024))?;
+
     let child_raw = clone_all_namespaces()?;
+    // Add child to cgroup so limits apply
+    cgroup_write(&cgroup_dir, "cgroup.procs", &child_raw.to_string())?;
+
     match child_raw {
         // --- PARENT: nonzero = the child's pid ---
         pid if pid != 0 => {
