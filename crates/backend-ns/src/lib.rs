@@ -72,6 +72,8 @@ use nix::fcntl::{open, OFlag};
 use nix::sys::stat::Mode;
 use nix::unistd::{close, fork, pipe2, ForkResult};
 use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier, GUEST_PATH};
+use std::fs::{create_dir_all, File};
+use std::io::Write;
 
 // Test fixture value: exec() takes `cap` from the caller now, so the 1 MiB
 // default lives in the tests that exercise the cap.
@@ -81,6 +83,31 @@ const OUTPUT_CAP: usize = 1024 * 1024;
 /// Bounds the case where a grandchild inherits the pipe write end and keeps it
 /// open after the workload exits: the drain gives up instead of hanging.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
+
+/// Mount a cgroup v1 controller directory for the session.
+/// Returns the cgroup directory path.
+fn cgroup_mount(controller: &str, id: &str) -> anyhow::Result<std::path::PathBuf> {
+    let path = format!("/sys/fs/cgroup/{}/toolcage/{}", controller, id);
+    create_dir_all(&path)?;
+    Ok(path.into())
+}
+
+/// Write a value to a cgroup file.
+fn cgroup_write(path: &Path, file: &str, value: &str) -> anyhow::Result<()> {
+    let f = format!("{}/{}", path.display(), file);
+    let mut f = std::fs::File::create(&f)?;
+    write!(&mut f, "{}", value)?;
+    Ok(())
+}
+
+/// Write a cgroup "max" value (e.g., cpu.max, memory.max).
+fn cgroup_write_max(path: &Path, file: &str, value: &str) -> anyhow::Result<()> {
+    cgroup_write(path, file, value)
+}
+
+
+/// Mount a cgroup v1 controller directory for the session.
+/// Returns the cgroup directory path.
 
 // x86_64 syscalls denied by the seccomp filter, named via libc's SYS_*
 // constants (values mirror the kernel's asm/unistd_64.h). The filter is a
