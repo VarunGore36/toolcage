@@ -600,6 +600,7 @@ fn main() -> anyhow::Result<()> {
                 id: format!("run-{}", std::process::id()),
                 tier: t,
                 mem_mb: pol.limits.memory_mb,
+                cpu_millis: pol.limits.cpu_seconds * 1000,
                 workspace_mb: 0, // not enforced yet; cgroup placement lands with the drivers
                 workspace: workspace.display().to_string(),
             };
@@ -936,6 +937,7 @@ fn main() -> anyhow::Result<()> {
                     id: format!("mcp-{}", std::process::id()),
                     tier: t,
                     mem_mb: pol.limits.memory_mb,
+                    cpu_millis: pol.limits.cpu_seconds * 1000,
                     workspace_mb: 0,
                     workspace: workspace.display().to_string(),
                 };
@@ -1176,6 +1178,7 @@ fn main() -> anyhow::Result<()> {
                     id: format!("mcp-call-{}", std::process::id()),
                     tier: t,
                     mem_mb: pol.limits.memory_mb,
+                    cpu_millis: pol.limits.cpu_seconds * 1000,
                     workspace_mb: 0,
                     workspace: workspace.display().to_string(),
                 };
