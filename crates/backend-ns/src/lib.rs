@@ -705,6 +705,14 @@ fn isolated_exec(
     // Cgroup: create session cgroup and set resource limits before fork
     let cgroup_dir = cgroup_mount("ns", &spec.id)?;
     cgroup_write_max(&cgroup_dir, "cpu.max", &format!("{}", spec.cpu_millis * 1000))?;
+    // On cgroup v1, also set cpu.cfs_quota_us/cpu.cfs_period_us for hard throttling.
+    // On cgroup v2, cpu.max above is sufficient.
+    if spec.cpu_millis > 0 && !cgroup2_available() {
+        let quota = spec.cpu_millis * 1000; // microseconds per period
+        let period = 100000; // 100ms default CFS period
+        let _ = cgroup_write(&cgroup_dir, "cpu.cfs_quota_us", &quota.to_string());
+        let _ = cgroup_write(&cgroup_dir, "cpu.cfs_period_us", &period.to_string());
+    }
     cgroup_write_max(&cgroup_dir, "memory.max", &format!("{}", spec.mem_mb * 1024 * 1024))?;
     cgroup_write_max(&cgroup_dir, "pids.max", "1024")?;
     // Enable OOM group so the entire cgroup is killed on OOM, not just one process
