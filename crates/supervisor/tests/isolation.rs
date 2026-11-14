@@ -429,3 +429,36 @@ fn supervisor_tier0_with_different_memory_limits() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn supervisor_session_id_variants_final() {
+    let dir = std::env::temp_dir().join(format!("tc-iso-sid-variants-final-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+
+    let session_ids = [
+        "simple-session",
+        "session-with-dashes",
+        "session.with.dots",
+        "session_with_underscores",
+        "SESSION_UPPERCASE",
+        "session123",
+    ];
+
+    for session_id in session_ids {
+        let mut sup = toolcage_supervisor::Supervisor {
+            policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+            audit_path: audit.to_path_buf(),
+            session: session_id.to_string(),
+            tier: toolcage_backend::Tier::Tier0,
+            backend: None,
+            allow_unisolated: true,
+            cap_key: None,
+            token_rev_id: String::new(),
+        };
+        let o = sup.exec(&["/bin/true".to_string()]).unwrap();
+        assert!(o.allowed, "session ID '{session_id}' should be allowed");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
