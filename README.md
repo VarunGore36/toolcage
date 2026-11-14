@@ -8,10 +8,11 @@
 
 <p align="center">
   <a href="https://github.com/VarunGore36/toolcage/actions"><img src="https://img.shields.io/github/actions/workflow/status/VarunGore36/toolcage/ci.yml?branch=main&label=CI" alt="CI"></a>
-  <a href="https://crates.io/crates/toolcage-cli"><img src="https://img.shields.io/crates/v/toolcage-cli" alt="Crates.io"></a>
-  <a href="https://github.com/VarunGore36/toolcage/blob/main/LICENSE-MIT"><img src="https://img.shields.io/crates/l/toolcage-cli" alt="License"></a>
+  <a href="https://github.com/VarunGore36/toolcage/blob/main/LICENSE"><img src="https://img.shields.io/github/license/VarunGore36/toolcage" alt="License"></a>
   <a href="https://github.com/VarunGore36/toolcage/blob/main/docs/THREAT_MODEL.md"><img src="https://img.shields.io/badge/threat%20model-documented-58a6ff" alt="Threat Model"></a>
   <a href="https://github.com/VarunGore36/toolcage/blob/main/docs/REVIEW.md"><img src="https://img.shields.io/badge/security%20review-gate%202-bc8cff" alt="Security Review"></a>
+  <img src="https://img.shields.io/badge/crates.io-unpublished-orange" alt="crates.io: unpublished">
+  <img src="https://img.shields.io/badge/version-0.1.0--alpha-blue" alt="Version">
 </p>
 
 ---
