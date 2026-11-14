@@ -1007,4 +1007,38 @@ net:
         assert!(check_server_cmd(&["/usr/bin/mcp-server".to_string()]).is_ok());
         assert!(check_server_cmd(&["/bin/mcp-server".to_string()]).is_ok());
     }
+
+    #[test]
+    fn rpc_error_code_constants() {
+        // Standard JSON-RPC 2.0 error codes
+        assert_eq!(PARSE_ERROR, -32700);
+        assert_eq!(INVALID_REQUEST, -32600);
+        assert_eq!(METHOD_NOT_FOUND, -32601);
+        assert_eq!(INVALID_PARAMS, -32602);
+        assert_eq!(INTERNAL_ERROR, -32603);
+        // All error codes are negative
+        assert!(PARSE_ERROR < 0);
+        assert!(INVALID_REQUEST < 0);
+        assert!(METHOD_NOT_FOUND < 0);
+        assert!(INVALID_PARAMS < 0);
+        assert!(INTERNAL_ERROR < 0);
+    }
+
+    #[test]
+    fn rpc_response_deny_has_rule_ids() {
+        let deny = RpcResp::deny(serde_json::json!(42), &["rule1".into(), "rule2".into()]);
+        let s = serde_json::to_string(&deny).unwrap();
+        assert!(s.contains("rule1"), "deny must include rule1: {s}");
+        assert!(s.contains("rule2"), "deny must include rule2: {s}");
+        assert!(!s.contains("result"), "deny must omit result: {s}");
+    }
+
+    #[test]
+    fn rpc_error_has_code_and_message() {
+        let err = RpcResp::error(serde_json::json!(99), INVALID_PARAMS, "bad params");
+        let s = serde_json::to_string(&err).unwrap();
+        assert!(s.contains("-32602"), "error must carry INVALID_PARAMS code: {s}");
+        assert!(s.contains("bad params"), "error must carry message: {s}");
+        assert!(!s.contains("result"), "error must omit result: {s}");
+    }
 }
