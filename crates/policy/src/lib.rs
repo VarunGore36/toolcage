@@ -1025,6 +1025,83 @@ mod tests {
         );
         assert!(d.allow, "normal workspace path must be allowed");
     }
+
+    #[test]
+    fn canonical_path_handles_double_slash() {
+        assert_eq!(canonical_path("/workspace//foo//bar"), "/workspace/foo/bar");
+        assert_eq!(canonical_path("/workspace///foo"), "/workspace/foo");
+    }
+
+    #[test]
+    fn canonical_path_handles_dot_component() {
+        assert_eq!(canonical_path("/workspace/./foo/./bar"), "/workspace/foo/bar");
+        assert_eq!(canonical_path("/workspace/."), "/workspace");
+    }
+
+    #[test]
+    fn canonical_path_handles_trailing_slash() {
+        assert_eq!(canonical_path("/workspace/foo/"), "/workspace/foo");
+        assert_eq!(canonical_path("/workspace/"), "/workspace");
+    }
+
+    #[test]
+    fn canonical_path_handles_encoded_dotdot() {
+        let result = canonical_path("/workspace/%2e%2e/etc/passwd");
+        assert_eq!(result, "/workspace/%2e%2e/etc/passwd");
+    }
+
+    #[test]
+    fn fs_path_encoded_dotdot_not_traversal() {
+        let p = sample();
+        let d = decide(
+            &p,
+            &Request {
+                action: "fs.read".into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: Some("/workspace/%2e%2e/etc/passwd".into()),
+                argv: None,
+            },
+        );
+        assert!(d.allow, "encoded dotdot should be treated as literal filename");
+    }
+
+    #[test]
+    fn fs_path_symlink_lexical_stays_under_workspace() {
+        let p = sample();
+        // canonical_path is lexical: no .. components, stays under /workspace.
+        // Actual symlink resolution happens at the backend level.
+        let d = decide(
+            &p,
+            &Request {
+                action: "fs.read".into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: Some("/workspace/symlink-to-etc/passwd".into()),
+                argv: None,
+            },
+        );
+        assert!(d.allow, "lexical path under workspace must be allowed");
+    }
+
+    #[test]
+    fn fs_path_multiple_slashes_allowed() {
+        let p = sample();
+        let d = decide(
+            &p,
+            &Request {
+                action: "fs.read".into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: Some("/workspace//foo//bar.txt".into()),
+                argv: None,
+            },
+        );
+        assert!(d.allow, "multiple slashes under workspace must be allowed");
+    }
 }
 
 #[cfg(test)]
