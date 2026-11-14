@@ -872,3 +872,133 @@ mod scrub_tests {
         assert_eq!(b.scrub("token=ghp_secret123"), "token=[REDACTED]");
     }
 }
+
+#[test]
+fn credential_inject_method_binding() {
+    let mut b = Broker::new();
+    b.insert(Credential {
+        name: "gh-token".into(),
+        value: "secret".into(),
+        use_with: "github".into(),
+        methods: vec!["POST".into()],
+        paths: vec![],
+        expires_at: None,
+        encrypted_value: None,
+    });
+    // POST is allowed
+    assert_eq!(b.inject("gh-token", "github", "POST", "/repos/acme"), Some("secret"));
+    // GET is not allowed (method binding)
+    assert_eq!(b.inject("gh-token", "github", "GET", "/repos/acme"), None);
+    // Wrong destination is not allowed
+    assert_eq!(b.inject("gh-token", "evil", "POST", "/repos/acme"), None);
+}
+
+#[test]
+fn credential_inject_path_binding() {
+    let mut b = Broker::new();
+    b.insert(Credential {
+        name: "scoped".into(),
+        value: "v".into(),
+        use_with: "github".into(),
+        methods: vec![],
+        paths: vec!["/repos/acme/**".into()],
+        expires_at: None,
+        encrypted_value: None,
+    });
+    // Under /repos/acme is allowed
+    assert_eq!(b.inject("scoped", "github", "GET", "/repos/acme/app/issues/1"), Some("v"));
+    // Outside /repos/acme is not allowed
+    assert_eq!(b.inject("scoped", "github", "GET", "/repos/evil/app"), None);
+    // /repos/acme itself is allowed (prefix match)
+    assert_eq!(b.inject("scoped", "github", "GET", "/repos/acme"), Some("v"));
+}
+
+#[test]
+fn credential_expire_check() {
+    let mut b = Broker::new();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    // Expired credential
+    b.insert(Credential {
+        name: "expired".into(),
+        value: "v".into(),
+        use_with: "github".into(),
+        methods: vec![],
+        paths: vec![],
+        expires_at: Some(now - 1),
+        encrypted_value: None,
+    });
+    assert_eq!(b.inject("expired", "github", "GET", "/"), None);
+    // Unexpired credential (expires_at = None means unbounded)
+    b.insert(Credential {
+        name: "unbounded".into(),
+        value: "v".into(),
+        use_with: "github".into(),
+        methods: vec![],
+        paths: vec![],
+        expires_at: None,
+        encrypted_value: None,
+    });
+    assert_eq!(b.inject("unbounded", "github", "GET", "/"), Some("v"));
+    // Future expiry is valid
+    b.insert(Credential {
+        name: "future".into(),
+        value: "v".into(),
+        use_with: "github".into(),
+        methods: vec![],
+        paths: vec![],
+        expires_at: Some(now + 3600),
+        encrypted_value: None,
+    });
+    assert_eq!(b.inject("future", "github", "GET", "/"), Some("v"));
+}
+
+#[test]
+fn credential_rotate_reencrypts() {
+    let mut b = Broker::new();
+    b.insert(Credential {
+        name: "gh-token".into(),
+        value: "old-secret".into(),
+        use_with: "github".into(),
+        methods: vec![],
+        paths: vec![],
+        expires_at: None,
+        encrypted_value: None,
+    });
+    // Save with old key
+    let dir = std::env::temp_dir().join(format!("tc-broker-rotate-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("broker.json");
+    let old_key = "0000000000000000000000000000000000000000000000000000000000000000";
+    std::env::set_var("TOOLCAGE_BROKER_KEY", old_key);
+    b.set_master_key(old_key).unwrap();
+    b.save(&path).unwrap();
+
+    // Load with old key (from env var)
+    let mut b2 = Broker::load(&path).unwrap();
+    assert_eq!(b2.inject("gh-token", "github", "GET", "/"), Some("old-secret"));
+
+    // Rotate to new key
+    let new_key = "1111111111111111111111111111111111111111111111111111111111111111";
+    std::env::set_var("TOOLCAGE_BROKER_KEY", new_key);
+    b2.set_master_key(new_key).unwrap();
+    b2.save(&path).unwrap();
+
+    // Load with new key (from env var)
+    let mut b3 = Broker::load(&path).unwrap();
+    assert_eq!(b3.inject("gh-token", "github", "GET", "/"), Some("old-secret"));
+
+    std::env::remove_var("TOOLCAGE_BROKER_KEY");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn credential_canary_is_unique() {
+    let mut b = Broker::new();
+    let c1 = b.plant_canary("test");
+    let c2 = b.plant_canary("test");
+    assert_ne!(c1, c2, "canary must be unique per call");
+    assert!(c1.contains("test"), "canary must contain the name prefix");
+}
