@@ -1026,4 +1026,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         result.unwrap();
     }
+
+    #[test]
+    fn hash_for_is_deterministic() {
+        use serde_json::json;
+        let body1 = json!({"seq": 1, "action": "test"});
+        let body2 = json!({"seq": 1, "action": "test"});
+        let h1 = super::hash_for("genesis", &body1);
+        let h2 = super::hash_for("genesis", &body2);
+        assert_eq!(h1, h2, "same inputs must produce same hash");
+        let h3 = super::hash_for("different", &body1);
+        assert_ne!(h1, h3, "different prev_hash must produce different hash");
+        assert!(!h1.is_empty(), "hash must not be empty");
+    }
 }
