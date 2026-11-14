@@ -1525,7 +1525,7 @@ mod tests {
         assert!(!b.honors("firecracker"));
     }
 
-    fn isolated() -> bool {
+    pub(crate) fn isolated() -> bool {
         // Tier0 refuses to run without Landlock (fail-closed, enforced in
         // create()), so live tests need both userns and Landlock.
         let p = NsBackend::probe();
@@ -1534,7 +1534,7 @@ mod tests {
 
     #[test]
     fn tier0_exec_runs_command() {
-        if !isolated() || !cgroup_writable() {
+        if !crate::tests::isolated() || !cgroup_writable() {
             eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
@@ -1568,7 +1568,7 @@ mod tests {
 
     #[test]
     fn tier0_network_isolated() {
-        if !isolated() || !cgroup_writable() {
+        if !crate::tests::isolated() || !cgroup_writable() {
             eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
@@ -1639,7 +1639,7 @@ mod tests {
 
     #[test]
     fn tier0_environment_cleared() {
-        if !isolated() || !cgroup_writable() {
+        if !crate::tests::isolated() || !cgroup_writable() {
             eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
@@ -1687,7 +1687,7 @@ mod tests {
 
     #[test]
     fn tier0_landlock_blocks_outside_workspace() {
-        if !isolated() || !cgroup_writable() {
+        if !crate::tests::isolated() || !cgroup_writable() {
             eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
@@ -2038,7 +2038,7 @@ mod tests {
         // leaked fd would let the workload write to host state (e.g. append to
         // the audit log). Rust std marks its fds CLOEXEC, so open one by hand
         // to get a genuinely-inherited fd.
-        if !isolated() || !cgroup_writable() {
+        if !crate::tests::isolated() || !cgroup_writable() {
             eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
@@ -2096,7 +2096,7 @@ mod tests {
         // so an inherited stdin lets a workload like `bash` be fed commands by
         // the guest. Put known content on fd 0 and verify the workload can't
         // read it.
-        if !isolated() || !cgroup_writable() {
+        if !crate::tests::isolated() || !cgroup_writable() {
             eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
@@ -2146,7 +2146,7 @@ mod tests {
         // running, which here would append to the marker file twice.
         //
         // Forced at the chdir site with a workspace that is a regular file.
-        if !isolated() || !cgroup_writable() {
+        if !crate::tests::isolated() || !cgroup_writable() {
             eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
@@ -2204,7 +2204,7 @@ mod tests {
         // execve fails -> child_die(127) with a static message into the
         // captured stderr pipe. (Also locks that the message is written in
         // full: v0 hardcoded a length that truncated it.)
-        if !isolated() || !cgroup_writable() {
+        if !crate::tests::isolated() || !cgroup_writable() {
             eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
@@ -2449,7 +2449,7 @@ mod tests {
         // path is otherwise unreachable without fault injection. The id is the
         // injection switch, so the tests running concurrently in this binary
         // are unaffected.
-        if !isolated() || !cgroup_writable() {
+        if !crate::tests::isolated() || !cgroup_writable() {
             eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
@@ -2519,7 +2519,7 @@ mod tests {
         //
         // `$$` is the shell's getpid() — /proc is still the host's procfs, so
         // /proc/self would misleadingly show the host pid.
-        if !isolated() || !cgroup_writable() {
+        if !crate::tests::isolated() || !cgroup_writable() {
             eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
@@ -2569,7 +2569,7 @@ mod tests {
         //
         // Like any race test this is probabilistic: with the locking wrapper it
         // failed ~5 runs in 12 here.
-        if !isolated() || !cgroup_writable() {
+        if !crate::tests::isolated() || !cgroup_writable() {
             eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
@@ -2644,7 +2644,7 @@ mod tests {
         // than the 64 KiB pipe buffer blocked in write(2) forever, was
         // SIGKILLed at the 30 s deadline and recorded as a timeout — with
         // truncated=false and only the buffered ~64 KiB of output.
-        if !isolated() || !cgroup_writable() {
+        if !crate::tests::isolated() || !cgroup_writable() {
             eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
@@ -2700,7 +2700,7 @@ mod tests {
         // dropping the drain entirely would block the child on write(2) again.
         // 2 MiB also exceeds every pipe buffer on this host, so this is the
         // deterministic regression for the wait-then-drain deadlock.
-        if !isolated() || !cgroup_writable() {
+        if !crate::tests::isolated() || !cgroup_writable() {
             eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
@@ -2739,7 +2739,7 @@ mod tests {
         // timeout_secs is now honored by the Tier0 backend (previously ignored:
         // every run was killed at the hardcoded 30s). A 10s sleep with a 2s
         // timeout must be killed promptly, not after 30s.
-        if !isolated() || !cgroup_writable() {
+        if !crate::tests::isolated() || !cgroup_writable() {
             eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
@@ -2783,7 +2783,7 @@ mod tests {
         // cap is now honored by the Tier0 backend (previously ignored:
         // every run used the hardcoded 1 MiB). Output past cap is truncated
         // and the flag set.
-        if !isolated() || !cgroup_writable() {
+        if !crate::tests::isolated() || !cgroup_writable() {
             eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
             return;
         }
@@ -3036,6 +3036,82 @@ mod exec_not_found_tests {
         let err = isolated_exec(&spec, &["".to_string()], 5, 1024).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("empty argv[0]"), "{msg}");
+    }
+
+    #[test]
+    fn exec_with_non_zero_exit() {
+        if !crate::tests::isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-exit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = SessionSpec {
+            id: "t-exit".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            cpu_millis: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        let r = b.exec(&spec.id, &["/bin/false".to_string()], 30, OUTPUT_CAP).unwrap();
+        assert_eq!(r.exit_code, Some(1), "non-zero exit must be reported");
+        b.destroy(&spec.id).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exec_output_cap_truncates() {
+        if !crate::tests::isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = SessionSpec {
+            id: "t-cap".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            cpu_millis: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        // Request a tiny cap (10 bytes) - output should be truncated
+        let r = b.exec(&spec.id, &["/bin/echo".to_string(), "this-is-a-very-long-string-that-exceeds-the-cap".to_string()], 30, 10).unwrap();
+        assert!(r.truncated, "output over cap must be flagged as truncated");
+        assert!(r.stdout.len() <= 10, "output must be capped at {} bytes, got {}", 10, r.stdout.len());
+        b.destroy(&spec.id).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exec_stderr_is_captured() {
+        if !crate::tests::isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-stderr-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = SessionSpec {
+            id: "t-stderr".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            cpu_millis: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        // /bin/echo writes to stderr with >&2
+        let r = b.exec(&spec.id, &["/bin/sh".to_string(), "-c".to_string(), "echo stderr-msg >&2".to_string()], 30, OUTPUT_CAP).unwrap();
+        assert_eq!(r.exit_code, Some(0));
+        assert_eq!(String::from_utf8_lossy(&r.stderr).trim(), "stderr-msg");
+        b.destroy(&spec.id).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
