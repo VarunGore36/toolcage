@@ -1259,7 +1259,10 @@ fn main() -> anyhow::Result<()> {
                 // for the operator to run `toolcage doctor` there. When the
                 // script is absent (installed binary), the native probes
                 // above already carried the report — say so and move on.
-                .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/doctor.sh"))
+                .arg(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../scripts/doctor.sh"
+                ))
                 .status();
             if st.is_err() {
                 println!("(shell-half doctor.sh not found at the build tree; native probes above are the report)");
