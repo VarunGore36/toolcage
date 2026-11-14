@@ -3302,7 +3302,49 @@ mod cgroup_tests {
         // Just verify the function doesn't panic; result depends on host
         let _ = cgroup_writable();
     }
-}
+
+    #[test]
+    fn cgroup_write_various_values() {
+        if !cgroup_available() {
+            eprintln!("skip: cgroup fs not available or read-only");
+            return;
+        }
+        let dir = match cgroup_mount("test", "cgroup-write-vals") {
+            Ok(d) => d,
+            Err(e) if e.to_string().contains("Permission denied") => {
+                eprintln!("skip: cgroup mount requires root: {e}");
+                return;
+            }
+            Err(e) => panic!("unexpected error: {e}"),
+        };
+        // Write various types of values
+        for (file, value) in [
+            ("cpu.max", "500000 100000"),
+            ("memory.max", "1048576"),
+            ("pids.max", "512"),
+            ("memory.swap.max", "2097152"),
+        ] {
+            match cgroup_write(&dir, file, value) {
+                Ok(()) => {
+                    let read_back = std::fs::read_to_string(dir.join(file)).unwrap();
+                    assert_eq!(read_back.trim(), value, "cgroup_write should persist value for {file}");
+                }
+                Err(e) if e.to_string().contains("Permission denied") => {
+                    eprintln!("skip: cgroup write requires root: {e}");
+                    return;
+                }
+                Err(e) => panic!("unexpected error writing {file}: {e}"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cgroup_mount_invalid_controller_errors() {
+        // Mounting under an invalid controller path should fail
+        let result = cgroup_mount("../../../etc", "test");
+        assert!(result.is_err(), "cgroup mount with path traversal should fail");
+    }
 
 #[cfg(test)]
 #[cfg(test)]
@@ -3421,11 +3463,6 @@ mod seccomp_syscall_tests {
 
 
 #[test]
-fn cgroup_mount_invalid_controller_errors() {
-    // Mounting under an invalid controller path should fail
-    let result = cgroup_mount("../../../etc", "test");
-    assert!(result.is_err(), "cgroup mount with path traversal should fail");
-}
 
 #[test]
 fn cgroup_write_to_nonexistent_dir_errors() {
@@ -3465,4 +3502,5 @@ fn backend_spec_with_nonzero_cpu_millis() {
     };
     assert_eq!(spec.cpu_millis, 500);
     assert_eq!(spec.mem_mb, 512);
+}
 }
