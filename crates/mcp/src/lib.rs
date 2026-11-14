@@ -1042,3 +1042,55 @@ net:
         assert!(!s.contains("result"), "error must omit result: {s}");
     }
 }
+
+#[test]
+fn rpc_req_method_validation() {
+    // Valid method names
+    assert!(RpcReq {
+        jsonrpc: "2.0".into(),
+        id: Some(serde_json::json!(1)),
+        method: "tools/call".into(),
+        params: serde_json::Value::Null,
+    }
+    .validate()
+    .is_ok());
+
+    assert!(RpcReq {
+        jsonrpc: "2.0".into(),
+        id: Some(serde_json::json!(1)),
+        method: "tools/list".into(),
+        params: serde_json::Value::Null,
+    }
+    .validate()
+    .is_ok());
+
+    // Method validation: empty and whitespace methods are accepted by validate()
+    // (validation is lenient - only jsonrpc version, id type, and id size are checked)
+    assert!(RpcReq {
+        jsonrpc: "2.0".into(),
+        id: Some(serde_json::json!(1)),
+        method: "".into(),
+        params: serde_json::Value::Null,
+    }
+    .validate()
+    .is_ok());
+}
+
+#[test]
+fn rpc_response_ok_omits_error() {
+    let ok = RpcResp::ok(serde_json::json!(42), serde_json::json!({"result": "ok"}));
+    let s = serde_json::to_string(&ok).unwrap();
+    assert!(!s.contains("error"), "ok response must omit error field: {s}");
+    assert!(s.contains("result"), "ok response must include result field: {s}");
+    assert!(s.contains("42"), "ok response must include id: {s}");
+}
+
+#[test]
+fn rpc_response_error_omits_result() {
+    let err = RpcResp::error(serde_json::json!(99), INTERNAL_ERROR, "server error");
+    let s = serde_json::to_string(&err).unwrap();
+    assert!(!s.contains("result"), "error response must omit result field: {s}");
+    assert!(s.contains("error"), "error response must include error field: {s}");
+    assert!(s.contains("server error"), "error response must include message: {s}");
+    assert!(s.contains("-32603"), "error response must include INTERNAL_ERROR code: {s}");
+}
