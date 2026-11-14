@@ -123,3 +123,70 @@ fn fetch_unknown_host_denied() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn token_mint_and_attenuate() {
+    let dir = std::env::temp_dir().join("tc-token");
+    std::fs::create_dir_all(&dir).unwrap();
+    let key = dir.join("key.hex");
+    let token = dir.join("token.json");
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+
+    // Generate key first
+    let status = cli_run(&[
+        "token",
+        "keygen",
+        "--out-prefix",
+        key.to_str().unwrap(),
+    ]);
+    assert!(status.success(), "token keygen must succeed, got {:?}", status.code());
+
+    // Read the generated key
+    let key_hex = dir.join("key.hex.key.hex");
+    
+    // Mint root token
+    let status = cli_run(&[
+        "token",
+        "mint",
+        "--rev",
+        "root-1",
+        "--out",
+        token.to_str().unwrap(),
+        "--key-hex",
+        key_hex.to_str().unwrap(),
+    ]);
+    assert!(
+        status.success(),
+        "token mint must succeed, got {:?}",
+        status.code()
+    );
+
+    // Attenuate token
+    let attenuated = dir.join("attenuated.json");
+    let status = cli_run(&[
+        "token",
+        "attenuate",
+        "--parent",
+        token.to_str().unwrap(),
+        "--rev",
+        "child-1",
+        "--out",
+        attenuated.to_str().unwrap(),
+        "--hosts",
+        "github",
+        "--methods",
+        "GET",
+        "--budget",
+        "100",
+        "--key-hex",
+        key_hex.to_str().unwrap(),
+    ]);
+    assert!(
+        status.success(),
+        "token attenuate must succeed, got {:?}",
+        status.code()
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
