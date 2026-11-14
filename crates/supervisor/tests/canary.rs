@@ -16,8 +16,9 @@ fn ws_spec(id: &str, dir: &std::path::Path) -> SessionSpec {
     }
 }
 
-fn ns_available() -> bool {
-    NsBackend::probe().namespaces
+fn tier0_available() -> bool {
+    let probe = NsBackend::probe();
+    probe.namespaces && probe.cgroup2 && toolcage_backend_ns::cgroup_writable()
 }
 
 #[test]
@@ -25,8 +26,8 @@ fn canary_secret_not_in_guest_environment() {
     // I2: env_clear must prevent host secrets from reaching the guest.
     // Plant a secret in THIS process's env, then exec /usr/bin/env inside a
     // namespaced session — the secret must not appear in the child's env.
-    if !ns_available() {
-        eprintln!("skip: unprivileged user namespaces unavailable");
+    if !tier0_available() {
+        eprintln!("skip: tier0 unavailable (namespaces or cgroup2 missing)");
         return;
     }
     std::env::set_var("TC_CANARY_SECRET", "hunter2-canary-do-not-leak");
@@ -79,8 +80,8 @@ fn canary_broker_scrub_redacts_secret() {
 fn canary_cross_session_isolation_after_teardown() {
     // I7: after session teardown (destroy), session state is unreachable.
     // Exec succeeds before destroy; fails after destroy.
-    if !ns_available() {
-        eprintln!("skip: unprivileged user namespaces unavailable");
+    if !tier0_available() {
+        eprintln!("skip: tier0 unavailable (namespaces or cgroup2 missing)");
         return;
     }
     let dir = std::env::temp_dir().join(format!("tc-canary-session-{}", std::process::id()));

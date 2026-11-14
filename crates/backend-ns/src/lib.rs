@@ -88,7 +88,7 @@ const DRAIN_GRACE: Duration = Duration::from_secs(2);
 /// to /sys/fs/cgroup. Returns false if cgroups are not available or not
 /// writable (e.g., on systems without cgroup support or in containers
 /// without cgroup delegation).
-fn cgroup_writable() -> bool {
+pub fn cgroup_writable() -> bool {
     std::path::Path::new("/sys/fs/cgroup").is_dir()
         && std::fs::metadata("/sys/fs/cgroup")
             .map(|m| !m.permissions().readonly())

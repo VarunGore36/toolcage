@@ -677,6 +677,7 @@ mod tests {
         b.save(&path).unwrap();
 
         // Load fresh broker from disk.
+        let prev_key = std::env::var("TOOLCAGE_BROKER_KEY").ok();
         std::env::set_var(
             "TOOLCAGE_BROKER_KEY",
             "0000000000000000000000000000000000000000000000000000000000000000",
@@ -688,6 +689,11 @@ mod tests {
         );
         assert!(b2.inject("gh", "evil", "GET", "/").is_none()); // dest mismatch
         assert!(b2.inject("gh", "github", "POST", "/").is_none()); // method mismatch
+        // Restore previous env var
+        match prev_key {
+            Some(k) => std::env::set_var("TOOLCAGE_BROKER_KEY", k),
+            None => std::env::remove_var("TOOLCAGE_BROKER_KEY"),
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1034,6 +1040,7 @@ fn broker_empty_save_load_roundtrip() {
         .unwrap();
     b.save(&path).unwrap();
 
+    let prev_key = std::env::var("TOOLCAGE_BROKER_KEY").ok();
     std::env::set_var(
         "TOOLCAGE_BROKER_KEY",
         "0000000000000000000000000000000000000000000000000000000000000000",
@@ -1044,6 +1051,11 @@ fn broker_empty_save_load_roundtrip() {
         "empty broker should have no credentials"
     );
     assert!(b2.inject("nonexistent", "github", "GET", "/").is_none());
+    // Restore previous env var
+    match prev_key {
+        Some(k) => std::env::set_var("TOOLCAGE_BROKER_KEY", k),
+        None => std::env::remove_var("TOOLCAGE_BROKER_KEY"),
+    }
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
