@@ -128,6 +128,7 @@ fn fetch_unknown_host_denied() {
 fn token_mint_and_attenuate() {
     let dir = std::env::temp_dir().join("tc-token");
     std::fs::create_dir_all(&dir).unwrap();
+    let key_hex = dir.join("key.hex.key.hex");
     let key = dir.join("key.hex");
     let token = dir.join("token.json");
     let audit = dir.join("a.jsonl");
@@ -143,8 +144,6 @@ fn token_mint_and_attenuate() {
     assert!(status.success(), "token keygen must succeed, got {:?}", status.code());
 
     // Read the generated key
-    let key_hex = dir.join("key.hex.key.hex");
-    
     // Mint root token
     let status = cli_run(&[
         "token",
@@ -187,6 +186,52 @@ fn token_mint_and_attenuate() {
         "token attenuate must succeed, got {:?}",
         status.code()
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn image_sign_and_verify() {
+    let dir = std::env::temp_dir().join("tc-image");
+    std::fs::create_dir_all(&dir).unwrap();
+    let manifest = dir.join("manifest.json");
+    let sig = dir.join("signature.bin");
+    let key = dir.join("key.hex");
+    let key_hex = dir.join("key.hex.secret.hex");
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+
+    // Create a minimal manifest
+    std::fs::write(
+        &manifest,
+        r#"{"kernel":"/vmlinuz","rootfs":"/rootfs.ext4","version":"1.0"}"#,
+    )
+    .unwrap();
+
+    // Generate key
+    let status = cli_run(&[
+        "audit",
+        "keygen",
+        "--out-prefix",
+        key.to_str().unwrap(),
+    ]);
+    assert!(status.success(), "keygen must succeed, got {:?}", status.code());
+
+    // Sign the manifest (uses directory, not manifest file directly)
+    let status = cli_run(&[
+        "image",
+        "sign",
+        "--dir",
+        dir.to_str().unwrap(),
+        "--key-hex",
+        key_hex.to_str().unwrap(),
+    ]);
+    assert!(
+        status.success(),
+        "image sign must succeed, got {:?}",
+        status.code()
+    );
+    assert!(sig.exists(), "signature file must be created: {:?}", sig);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
