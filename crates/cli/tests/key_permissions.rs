@@ -156,6 +156,7 @@ fn checkpoint_file_uses_log_name() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/policy-v0.yaml");
     let s = cli_run(&[
         "run",
+        "--unsafe-no-isolation",
         "--policy",
         policy.to_str().unwrap(),
         "--audit",

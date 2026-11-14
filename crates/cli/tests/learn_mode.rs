@@ -17,6 +17,7 @@ fn run(extra: &[&str]) -> std::process::Output {
     let mut args = vec![
         "mcp",
         "call",
+        "--unsafe-no-isolation",
         "--policy",
         policy.to_str().unwrap(),
         "--audit",

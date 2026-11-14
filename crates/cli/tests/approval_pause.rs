@@ -40,6 +40,10 @@ fn mcp_call(name: &str, args_json: &str) -> Run {
             name,
             "--args-json",
             args_json,
+            // No cgroup backend in this environment: bypass isolation so the
+            // approval gate (checked in route(), before any network connect)
+            // is reached. Gate-before-network means no network is needed.
+            "--unsafe-no-isolation",
         ])
         .output()
         .expect("cli runs");

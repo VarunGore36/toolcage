@@ -15,6 +15,7 @@ fn cli_run(args: &[&str]) -> std::process::ExitStatus {
 fn successful_run_exits_zero() {
     let status = cli_run(&[
         "run",
+        "--unsafe-no-isolation",
         "--policy",
         "../../schemas/policy-v0.yaml",
         "--audit",
@@ -35,6 +36,7 @@ fn timeout_killed_run_exits_nonzero() {
     // exit_code: None. The CLI must not map that to exit 0.
     let status = cli_run(&[
         "run",
+        "--unsafe-no-isolation",
         "--policy",
         "../../schemas/policy-v0.yaml",
         "--audit",
