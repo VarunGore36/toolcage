@@ -1,14 +1,13 @@
 //! Cgroup limit readback verification tests — verifies that cgroup limits
 //! set during exec are actually written and can be read back.
 
-
 fn make_sup_with_limits(
     audit: &std::path::Path,
     cpu_seconds: u64,
     memory_mb: u64,
 ) -> toolcage_supervisor::Supervisor {
-    let mut policy = toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml"))
-        .unwrap();
+    let mut policy =
+        toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap();
     policy.limits.cpu_seconds = cpu_seconds;
     policy.limits.memory_mb = memory_mb;
     toolcage_supervisor::Supervisor {

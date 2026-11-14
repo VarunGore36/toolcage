@@ -102,8 +102,7 @@ fn empty_argv_is_rejected() {
     std::fs::create_dir_all(&dir).unwrap();
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
-    let result = sup_at(&audit)
-        .exec_limits(&[], 5, 1024);
+    let result = sup_at(&audit).exec_limits(&[], 5, 1024);
     assert!(result.is_err(), "empty argv must be rejected");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -155,7 +154,11 @@ fn cap_large_value() {
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
     let o = sup_at(&audit)
-        .exec_limits(&["/bin/echo".to_string(), "hi".to_string()], 10, 1024 * 1024)
+        .exec_limits(
+            &["/bin/echo".to_string(), "hi".to_string()],
+            10,
+            1024 * 1024,
+        )
         .unwrap();
     assert!(o.allowed);
     assert_eq!(o.stdout.len(), 3); // "hi\n"

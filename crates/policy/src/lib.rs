@@ -567,7 +567,10 @@ pub fn decide(policy: &Policy, req: &Request) -> Decision {
         return deny("deny:egress-bytes-excessive", "egress_bytes exceeds 1 TiB");
     }
     if policy.limits.egress_requests > 1_000_000_000 {
-        return deny("deny:egress-requests-excessive", "egress_requests exceeds 1 billion");
+        return deny(
+            "deny:egress-requests-excessive",
+            "egress_requests exceeds 1 billion",
+        );
     }
     match req.action.as_str() {
         "net.connect" | "http.request" => {
@@ -872,7 +875,6 @@ mod tests {
         assert!(!bad.allow);
     }
 
-
     #[test]
     fn net_connect_unknown_host_denied() {
         let p = sample();
@@ -990,8 +992,6 @@ mod tests {
         assert!(!d.allow, "path traversal in request target must be denied");
     }
 
-
-
     #[test]
     fn fs_path_double_dotdot_denied() {
         let p = sample();
@@ -1034,7 +1034,10 @@ mod tests {
 
     #[test]
     fn canonical_path_handles_dot_component() {
-        assert_eq!(canonical_path("/workspace/./foo/./bar"), "/workspace/foo/bar");
+        assert_eq!(
+            canonical_path("/workspace/./foo/./bar"),
+            "/workspace/foo/bar"
+        );
         assert_eq!(canonical_path("/workspace/."), "/workspace");
     }
 
@@ -1064,7 +1067,10 @@ mod tests {
                 argv: None,
             },
         );
-        assert!(d.allow, "encoded dotdot should be treated as literal filename");
+        assert!(
+            d.allow,
+            "encoded dotdot should be treated as literal filename"
+        );
     }
 
     #[test]
@@ -1124,10 +1130,6 @@ mod trusted_exec_path_tests {
     fn absolute_system_tree_is_trusted() {
         for p in [
             "/bin/sh",
-
-
-
-
             "/usr/bin/git",
             "/usr/local/bin/tool", // POL-1: under the /usr/ prefix — trusted
             "/sbin/mkfs",
@@ -1423,7 +1425,6 @@ mod exec_denylist_tests {
 
 #[test]
 fn exec_policy_allowlist_validation() {
-    
     // Empty allowlist means denylist-only (back-compat)
     let pol = Policy::default();
     assert!(pol.exec.allowlist.is_empty());
@@ -1449,7 +1450,7 @@ fn exec_policy_allowlist_validation() {
 #[test]
 fn exec_policy_limits_serialization() {
     use serde_json;
-    
+
     let mut pol = Policy::default();
     pol.exec.allowlist = vec!["echo".to_string(), "cat".to_string()];
     pol.limits.cpu_seconds = 300;
@@ -1458,7 +1459,10 @@ fn exec_policy_limits_serialization() {
 
     let json = serde_json::to_string(&pol).unwrap();
     let reparsed: Policy = serde_json::from_str(&json).unwrap();
-    assert_eq!(reparsed.exec.allowlist, vec!["echo".to_string(), "cat".to_string()]);
+    assert_eq!(
+        reparsed.exec.allowlist,
+        vec!["echo".to_string(), "cat".to_string()]
+    );
     assert_eq!(reparsed.limits.cpu_seconds, 300);
     assert_eq!(reparsed.limits.memory_mb, 512);
     assert_eq!(reparsed.limits.egress_bytes, 1024 * 1024);
@@ -1467,18 +1471,16 @@ fn exec_policy_limits_serialization() {
 #[test]
 fn net_policy_serialization() {
     use serde_json;
-    
+
     let mut pol = Policy::default();
     pol.net = NetPolicy {
         mode: "allowlist".into(),
-        hosts: vec![
-            HostRule {
-                host: Some("example.com".into()),
-                alias: None,
-                methods: vec!["GET".into(), "POST".into()],
-                paths: vec!["/api/*".into()],
-            },
-        ],
+        hosts: vec![HostRule {
+            host: Some("example.com".into()),
+            alias: None,
+            methods: vec!["GET".into(), "POST".into()],
+            paths: vec!["/api/*".into()],
+        }],
     };
 
     let json = serde_json::to_string(&pol).unwrap();
@@ -1486,24 +1488,24 @@ fn net_policy_serialization() {
     assert_eq!(reparsed.net.mode, "allowlist");
     assert_eq!(reparsed.net.hosts.len(), 1);
     assert_eq!(reparsed.net.hosts[0].host.as_deref(), Some("example.com"));
-    assert_eq!(reparsed.net.hosts[0].methods, vec!["GET".to_string(), "POST".to_string()]);
+    assert_eq!(
+        reparsed.net.hosts[0].methods,
+        vec!["GET".to_string(), "POST".to_string()]
+    );
     assert_eq!(reparsed.net.hosts[0].paths, vec!["/api/*".to_string()]);
 }
 
 #[test]
 fn fs_policy_serialization() {
     use serde_json;
-    
 
     let mut pol = Policy::default();
     pol.fs = FsPolicy {
-        mounts: vec![
-            Mount {
-                path: "/workspace".into(),
-                mode: "rw".into(),
-                source: "/tmp/workspace".into(),
-            },
-        ],
+        mounts: vec![Mount {
+            path: "/workspace".into(),
+            mode: "rw".into(),
+            source: "/tmp/workspace".into(),
+        }],
     };
 
     let json = serde_json::to_string(&pol).unwrap();
@@ -1540,7 +1542,7 @@ fn limits_all_set() {
 #[test]
 fn limits_serialization_roundtrip() {
     use serde_json;
-    
+
     let limits = Limits {
         cpu_seconds: 60,
         memory_mb: 512,
@@ -1558,7 +1560,6 @@ fn limits_serialization_roundtrip() {
 #[test]
 fn exec_policy_serialization() {
     use serde_json;
-    
 
     let mut pol = Policy::default();
     pol.exec.allowlist = vec!["echo".to_string(), "cat".to_string()];
@@ -1567,7 +1568,10 @@ fn exec_policy_serialization() {
 
     let json = serde_json::to_string(&pol).unwrap();
     let reparsed: Policy = serde_json::from_str(&json).unwrap();
-    assert_eq!(reparsed.exec.allowlist, vec!["echo".to_string(), "cat".to_string()]);
+    assert_eq!(
+        reparsed.exec.allowlist,
+        vec!["echo".to_string(), "cat".to_string()]
+    );
     assert_eq!(reparsed.limits.cpu_seconds, 60);
     assert_eq!(reparsed.limits.memory_mb, 512);
 }

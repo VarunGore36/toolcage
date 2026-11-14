@@ -35,7 +35,10 @@ fn e2e_cgroup_full_lifecycle() {
 
     // Audit log should contain the exec event
     let log = std::fs::read_to_string(&audit).unwrap();
-    assert!(log.contains("proc.exec"), "audit log must contain proc.exec event");
+    assert!(
+        log.contains("proc.exec"),
+        "audit log must contain proc.exec event"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

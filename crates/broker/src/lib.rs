@@ -886,7 +886,10 @@ fn credential_inject_method_binding() {
         encrypted_value: None,
     });
     // POST is allowed
-    assert_eq!(b.inject("gh-token", "github", "POST", "/repos/acme"), Some("secret"));
+    assert_eq!(
+        b.inject("gh-token", "github", "POST", "/repos/acme"),
+        Some("secret")
+    );
     // GET is not allowed (method binding)
     assert_eq!(b.inject("gh-token", "github", "GET", "/repos/acme"), None);
     // Wrong destination is not allowed
@@ -906,11 +909,17 @@ fn credential_inject_path_binding() {
         encrypted_value: None,
     });
     // Under /repos/acme is allowed
-    assert_eq!(b.inject("scoped", "github", "GET", "/repos/acme/app/issues/1"), Some("v"));
+    assert_eq!(
+        b.inject("scoped", "github", "GET", "/repos/acme/app/issues/1"),
+        Some("v")
+    );
     // Outside /repos/acme is not allowed
     assert_eq!(b.inject("scoped", "github", "GET", "/repos/evil/app"), None);
     // /repos/acme itself is allowed (prefix match)
-    assert_eq!(b.inject("scoped", "github", "GET", "/repos/acme"), Some("v"));
+    assert_eq!(
+        b.inject("scoped", "github", "GET", "/repos/acme"),
+        Some("v")
+    );
 }
 
 #[test]
@@ -979,7 +988,10 @@ fn credential_rotate_reencrypts() {
 
     // Load with old key (from env var)
     let mut b2 = Broker::load(&path).unwrap();
-    assert_eq!(b2.inject("gh-token", "github", "GET", "/"), Some("old-secret"));
+    assert_eq!(
+        b2.inject("gh-token", "github", "GET", "/"),
+        Some("old-secret")
+    );
 
     // Rotate to new key
     let new_key = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -989,7 +1001,10 @@ fn credential_rotate_reencrypts() {
 
     // Load with new key (from env var)
     let mut b3 = Broker::load(&path).unwrap();
-    assert_eq!(b3.inject("gh-token", "github", "GET", "/"), Some("old-secret"));
+    assert_eq!(
+        b3.inject("gh-token", "github", "GET", "/"),
+        Some("old-secret")
+    );
 
     // Restore previous env var
     match prev_key {
@@ -1024,7 +1039,10 @@ fn broker_empty_save_load_roundtrip() {
         "0000000000000000000000000000000000000000000000000000000000000000",
     );
     let b2 = Broker::load(&path).unwrap();
-    assert!(b2.creds.is_empty(), "empty broker should have no credentials");
+    assert!(
+        b2.creds.is_empty(),
+        "empty broker should have no credentials"
+    );
     assert!(b2.inject("nonexistent", "github", "GET", "/").is_none());
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -1167,7 +1185,10 @@ fn broker_credential_expires_at_none_means_unlimited() {
         encrypted_value: None,
     });
     // Never-expires credential should always be injectable
-    assert_eq!(b.inject("never-expire", "github", "GET", "/"), Some("secret"));
+    assert_eq!(
+        b.inject("never-expire", "github", "GET", "/"),
+        Some("secret")
+    );
 }
 
 #[test]

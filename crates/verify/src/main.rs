@@ -89,31 +89,56 @@ mod tests {
 
     #[test]
     fn parse_hex32_valid() {
-        let key = parse_hex32("0000000000000000000000000000000000000000000000000000000000000000").unwrap();
+        let key = parse_hex32("0000000000000000000000000000000000000000000000000000000000000000")
+            .unwrap();
         assert_eq!(key, [0u8; 32]);
 
-        let key = parse_hex32("ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00").unwrap();
-        assert_eq!(key, [0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00]);
+        let key = parse_hex32("ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00")
+            .unwrap();
+        assert_eq!(
+            key,
+            [
+                0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00,
+                0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00,
+                0xff, 0x00, 0xff, 0x00
+            ]
+        );
     }
 
     #[test]
     fn parse_hex32_rejects_wrong_length() {
         assert!(parse_hex32("").is_err());
         assert!(parse_hex32("00").is_err());
-        assert!(parse_hex32("00000000000000000000000000000000000000000000000000000000000000").is_err()); // 63 chars
-        assert!(parse_hex32("00000000000000000000000000000000000000000000000000000000000000000").is_err()); // 65 chars
+        assert!(
+            parse_hex32("00000000000000000000000000000000000000000000000000000000000000").is_err()
+        ); // 63 chars
+        assert!(
+            parse_hex32("00000000000000000000000000000000000000000000000000000000000000000")
+                .is_err()
+        ); // 65 chars
     }
 
     #[test]
     fn parse_hex32_rejects_non_hex() {
-        assert!(parse_hex32("000000000000000000000000000000000000000000000000000000000000000g").is_err());
-        assert!(parse_hex32("00000000000000000000000000000000000000000000000000000000000000GG").is_err());
-        assert!(parse_hex32("GG00000000000000000000000000000000000000000000000000000000000000").is_err());
+        assert!(
+            parse_hex32("000000000000000000000000000000000000000000000000000000000000000g")
+                .is_err()
+        );
+        assert!(
+            parse_hex32("00000000000000000000000000000000000000000000000000000000000000GG")
+                .is_err()
+        );
+        assert!(
+            parse_hex32("GG00000000000000000000000000000000000000000000000000000000000000")
+                .is_err()
+        );
     }
 
     #[test]
     fn parse_hex32_trims_whitespace() {
-        let key = parse_hex32("  0000000000000000000000000000000000000000000000000000000000000000  ").unwrap();
+        let key =
+            parse_hex32("  0000000000000000000000000000000000000000000000000000000000000000  ")
+                .unwrap();
         assert_eq!(key, [0u8; 32]);
     }
 }

@@ -3651,3 +3651,62 @@ fn cgroup_cleanup_removes_directory() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(!dir.exists(), "cgroup dir should be removed after cleanup");
 }
+
+#[cfg(test)]
+mod backend_ns_spec_tests {
+    use super::*;
+
+    #[test]
+    fn session_spec_default_values() {
+        let spec = SessionSpec {
+            id: "test-session".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            cpu_millis: 0,
+            workspace_mb: 0,
+            workspace: "/workspace".into(),
+        };
+        assert_eq!(spec.id, "test-session");
+        assert_eq!(spec.tier, Tier::Tier0);
+        assert_eq!(spec.mem_mb, 0);
+        assert_eq!(spec.cpu_millis, 0);
+        assert_eq!(spec.workspace_mb, 0);
+        assert_eq!(spec.workspace, "/workspace");
+    }
+
+    #[test]
+    fn tier_equality_and_ordering() {
+        assert_eq!(Tier::Tier0, Tier::Tier0);
+        assert_eq!(Tier::Tier1, Tier::Tier1);
+        assert_eq!(Tier::Tier2, Tier::Tier2);
+        assert_ne!(Tier::Tier0, Tier::Tier1);
+        assert_ne!(Tier::Tier1, Tier::Tier2);
+        assert_ne!(Tier::Tier0, Tier::Tier2);
+    }
+
+    #[test]
+    fn tier_parse_roundtrip() {
+        assert_eq!(Tier::parse("tier0").unwrap(), Tier::Tier0);
+        assert_eq!(Tier::parse("tier1").unwrap(), Tier::Tier1);
+        assert_eq!(Tier::parse("tier2").unwrap(), Tier::Tier2);
+        assert_eq!(Tier::parse("ns").unwrap(), Tier::Tier0);
+        assert_eq!(Tier::parse("landlock").unwrap(), Tier::Tier0);
+        assert_eq!(Tier::parse("gvisor").unwrap(), Tier::Tier1);
+        assert_eq!(Tier::parse("runsc").unwrap(), Tier::Tier1);
+        assert_eq!(Tier::parse("firecracker").unwrap(), Tier::Tier2);
+        assert_eq!(Tier::parse("microvm").unwrap(), Tier::Tier2);
+        assert!(Tier::parse("tier3").is_err());
+        assert!(Tier::parse("").is_err());
+        assert!(Tier::parse("invalid").is_err());
+    }
+
+    #[test]
+    fn tier_parse_case_insensitive() {
+        assert_eq!(Tier::parse("TIER0").unwrap(), Tier::Tier0);
+        assert_eq!(Tier::parse("Tier1").unwrap(), Tier::Tier1);
+        assert_eq!(Tier::parse("TIER2").unwrap(), Tier::Tier2);
+        assert_eq!(Tier::parse("Ns").unwrap(), Tier::Tier0);
+        assert_eq!(Tier::parse("RUNSC").unwrap(), Tier::Tier1);
+        assert_eq!(Tier::parse("Firecracker").unwrap(), Tier::Tier2);
+    }
+}

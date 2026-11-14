@@ -538,6 +538,9 @@ mod tests {
                 bytes: 1,
             },
         };
-        assert!(validate(&m).is_err(), "id longer than 64 chars must be rejected");
+        assert!(
+            validate(&m).is_err(),
+            "id longer than 64 chars must be rejected"
+        );
     }
 }

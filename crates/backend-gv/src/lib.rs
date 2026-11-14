@@ -551,7 +551,10 @@ mod tests {
     fn bundle_config_mounts_include_workspace() {
         let bundle = GvBackend::bundle_config("test-session", "/rootfs", "/tmp/workspace");
         let mounts: Vec<serde_json::Value> = bundle["mounts"].as_array().unwrap().clone();
-        let workspace_mounts: Vec<_> = mounts.iter().filter(|m| m["destination"] == "/workspace").collect();
+        let workspace_mounts: Vec<_> = mounts
+            .iter()
+            .filter(|m| m["destination"] == "/workspace")
+            .collect();
         assert_eq!(workspace_mounts.len(), 1, "workspace mount should exist");
     }
 
@@ -584,7 +587,11 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("tc-gv-manifest-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let manifest = tmp.join("manifest.json");
-        std::fs::write(&manifest, r#"{"kernel":"/vmlinuz","rootfs":"/rootfs.ext4","version":"1.0"}"#).unwrap();
+        std::fs::write(
+            &manifest,
+            r#"{"kernel":"/vmlinuz","rootfs":"/rootfs.ext4","version":"1.0"}"#,
+        )
+        .unwrap();
 
         let content = std::fs::read_to_string(&manifest).unwrap();
         let manifest_json: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -594,7 +601,6 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
-
 }
 
 #[test]

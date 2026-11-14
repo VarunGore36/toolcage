@@ -2225,16 +2225,28 @@ mod cid_allocator_tests {
 fn vsock_uds_path_uses_dot_vsock_suffix() {
     let cfg = FcConfig::for_session("test-session", 1024);
     let path = cfg.vsock_uds_path();
-    assert!(path.ends_with(".vsock"), "vsock path must end with .vsock: {path}");
-    assert!(!path.contains("//run/toolcage//"), "vsock path must not double /run/toolcage: {path}");
-    assert!(path.contains("test-session"), "vsock path must contain session id: {path}");
+    assert!(
+        path.ends_with(".vsock"),
+        "vsock path must end with .vsock: {path}"
+    );
+    assert!(
+        !path.contains("//run/toolcage//"),
+        "vsock path must not double /run/toolcage: {path}"
+    );
+    assert!(
+        path.contains("test-session"),
+        "vsock path must contain session id: {path}"
+    );
 }
 
 #[test]
 fn cid_allocation_is_deterministic_for_session_id() {
     let cfg1 = FcConfig::for_session("same-session", 1024);
     let cfg2 = FcConfig::for_session("same-session", 2048);
-    assert_eq!(cfg1.vsock_cid, cfg2.vsock_cid, "same session id must get same CID");
+    assert_eq!(
+        cfg1.vsock_cid, cfg2.vsock_cid,
+        "same session id must get same CID"
+    );
 }
 
 #[test]
@@ -2251,8 +2263,16 @@ fn cid_allocation_is_distinct_for_different_sessions() {
 fn cid_is_in_valid_range() {
     let cfg = FcConfig::for_session("test-session", 1024);
     // CID must be >= 3 (CIDs 0, 1, 2 are reserved)
-    assert!(cfg.vsock_cid >= 3, "CID must be >= 3: got {}", cfg.vsock_cid);
-    assert!(cfg.vsock_cid < 10003, "CID must be < 10003: got {}", cfg.vsock_cid);
+    assert!(
+        cfg.vsock_cid >= 3,
+        "CID must be >= 3: got {}",
+        cfg.vsock_cid
+    );
+    assert!(
+        cfg.vsock_cid < 10003,
+        "CID must be < 10003: got {}",
+        cfg.vsock_cid
+    );
 }
 
 #[test]
@@ -2278,8 +2298,11 @@ fn cold_start_time_under_target() {
     let cfg = FcConfig::for_session("cold-start-test", 1024);
     // Config creation should be fast
     let elapsed = start.elapsed();
-    assert!(elapsed < std::time::Duration::from_millis(100),
-        "cgroup config creation should be fast, took {:?}", elapsed);
+    assert!(
+        elapsed < std::time::Duration::from_millis(100),
+        "cgroup config creation should be fast, took {:?}",
+        elapsed
+    );
     // Verify cfg fields are sensible
     assert!(cfg.mem_mb > 0);
     assert!(cfg.vcpu > 0);
@@ -2296,35 +2319,41 @@ fn warm_pool_claim_and_release() {
         assert!(cfg.vsock_cid >= 3, "CID must be >= 3");
         assert!(cfg.vsock_cid < 10003, "CID must be < 10003");
         // All CIDs should be unique
-        assert!(cids.insert(cfg.vsock_cid), "CID {} should be unique", cfg.vsock_cid);
+        assert!(
+            cids.insert(cfg.vsock_cid),
+            "CID {} should be unique",
+            cfg.vsock_cid
+        );
     }
 }
 
-    #[test]
-    fn snapshot_hash_verification() {
-        // Verify that snapshot hash verification works
-        let tmp = std::env::temp_dir().join(format!("tc-snap-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let snapshot = tmp.join("snapshot.json");
-        std::fs::write(&snapshot, r#"{"vm": "test"}"#).unwrap();
+#[test]
+fn snapshot_hash_verification() {
+    // Verify that snapshot hash verification works
+    let tmp = std::env::temp_dir().join(format!("tc-snap-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let snapshot = tmp.join("snapshot.json");
+    std::fs::write(&snapshot, r#"{"vm": "test"}"#).unwrap();
 
-        // Compute expected hash using SHA256
-        use sha2::{Digest, Sha256};
-        let content = std::fs::read(&snapshot).unwrap();
-        let hash = Sha256::digest(&content);
-        let hash_hex = hash.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+    // Compute expected hash using SHA256
+    use sha2::{Digest, Sha256};
+    let content = std::fs::read(&snapshot).unwrap();
+    let hash = Sha256::digest(&content);
+    let hash_hex = hash
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>();
 
-        // Correct hash should verify
-        let result = verify_snapshot_hash(snapshot.to_str().unwrap(), &hash_hex);
-        assert!(result.is_ok(), "correct hash should verify: {:?}", result);
+    // Correct hash should verify
+    let result = verify_snapshot_hash(snapshot.to_str().unwrap(), &hash_hex);
+    assert!(result.is_ok(), "correct hash should verify: {:?}", result);
 
-        // Wrong hash should fail
-        let result = verify_snapshot_hash(snapshot.to_str().unwrap(), "wrong-hash");
-        assert!(result.is_err(), "wrong hash should fail");
+    // Wrong hash should fail
+    let result = verify_snapshot_hash(snapshot.to_str().unwrap(), "wrong-hash");
+    assert!(result.is_err(), "wrong hash should fail");
 
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
+    let _ = std::fs::remove_dir_all(&tmp);
+}
 
 #[test]
 fn backend_caps_tier2_specific() {

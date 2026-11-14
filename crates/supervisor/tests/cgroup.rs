@@ -62,7 +62,11 @@ fn memory_limit_applied_in_cgroup() {
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
     let o = sup_at(&audit)
-        .exec_limits(&["/bin/echo".to_string(), "test".to_string()], 5, 1024 * 1024)
+        .exec_limits(
+            &["/bin/echo".to_string(), "test".to_string()],
+            5,
+            1024 * 1024,
+        )
         .unwrap();
     assert!(o.allowed);
     let _ = std::fs::remove_dir_all(&dir);
@@ -122,7 +126,8 @@ fn cgroup_cleanup_after_session() {
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
     let o = sup_at(&audit)
-        .exec_limits(&["/bin/echo".to_string(), "test".to_string()], 5, 1024).unwrap();
+        .exec_limits(&["/bin/echo".to_string(), "test".to_string()], 5, 1024)
+        .unwrap();
     assert!(o.allowed);
     let _ = std::fs::remove_dir_all(&dir);
 }

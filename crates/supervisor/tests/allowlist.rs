@@ -4,13 +4,12 @@
 //! These tests construct a Policy programmatically with an exec allowlist
 //! and verify the supervisor enforces it.
 
-
 fn make_sup_with_allowlist(
     audit: &std::path::Path,
     allowlist: Vec<String>,
 ) -> toolcage_supervisor::Supervisor {
-    let mut policy = toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml"))
-        .unwrap();
+    let mut policy =
+        toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap();
     policy.exec.allowlist = allowlist;
     toolcage_supervisor::Supervisor {
         policy,
@@ -33,9 +32,16 @@ fn allowlist_empty_denylist_applies() {
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
     let o = make_sup_with_allowlist(&audit, vec![])
-        .exec(&["/bin/sh".to_string(), "-c".to_string(), "echo pwned".to_string()])
+        .exec(&[
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "echo pwned".to_string(),
+        ])
         .unwrap();
-    assert!(!o.allowed, "shell with inline code must be denied without allowlist");
+    assert!(
+        !o.allowed,
+        "shell with inline code must be denied without allowlist"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -59,7 +65,11 @@ fn allowlist_denies_unlisted_binary() {
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
     let o = make_sup_with_allowlist(&audit, vec!["echo".to_string()])
-        .exec(&["/bin/sh".to_string(), "-c".to_string(), "echo pwned".to_string()])
+        .exec(&[
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "echo pwned".to_string(),
+        ])
         .unwrap();
     assert!(!o.allowed, "unlisted binary must be denied");
     assert!(o.rule_ids.iter().any(|r| r.contains("not-allowlisted")));
@@ -76,7 +86,10 @@ fn allowlist_allows_different_path() {
     let o = make_sup_with_allowlist(&audit, vec!["echo".to_string()])
         .exec(&["/usr/bin/echo".to_string(), "hello".to_string()])
         .unwrap();
-    assert!(o.allowed, "echo at /usr/bin must be allowed when echo is allowlisted");
+    assert!(
+        o.allowed,
+        "echo at /usr/bin must be allowed when echo is allowlisted"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -90,7 +103,10 @@ fn allowlist_rejects_untrusted_path() {
     let o = make_sup_with_allowlist(&audit, vec!["echo".to_string()])
         .exec(&["/workspace/echo".to_string(), "hello".to_string()])
         .unwrap();
-    assert!(!o.allowed, "allowlisted name at untrusted path must be denied");
+    assert!(
+        !o.allowed,
+        "allowlisted name at untrusted path must be denied"
+    );
     assert!(o.rule_ids.iter().any(|r| r.contains("untrusted-path")));
     let _ = std::fs::remove_dir_all(&dir);
 }

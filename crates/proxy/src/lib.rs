@@ -1218,8 +1218,14 @@ mod budget_store_tests {
     fn budget_default_is_empty() {
         let b = super::Budgets::default();
         assert!(b.bytes.is_empty(), "default budget has no entries");
-        assert!(b.requests.is_empty(), "default budget has no request entries");
-        assert!(b.persist_path.is_none(), "default budget has no persist path");
+        assert!(
+            b.requests.is_empty(),
+            "default budget has no request entries"
+        );
+        assert!(
+            b.persist_path.is_none(),
+            "default budget has no persist path"
+        );
     }
 
     #[test]
@@ -1290,4 +1296,3 @@ mod budget_store_tests {
         assert!(b.charge_bytes("host2", 1, 1000).unwrap());
     }
 }
-

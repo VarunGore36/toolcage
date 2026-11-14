@@ -1,14 +1,13 @@
 //! Egress limit enforcement tests — verifies egress budgets are checked
 //! during exec and enforced via precharge/true-up.
 
-
 fn make_sup_with_egress(
     audit: &std::path::Path,
     egress_bytes: u64,
     egress_requests: u64,
 ) -> toolcage_supervisor::Supervisor {
-    let mut policy = toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml"))
-        .unwrap();
+    let mut policy =
+        toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap();
     policy.limits.egress_bytes = egress_bytes;
     policy.limits.egress_requests = egress_requests;
     toolcage_supervisor::Supervisor {
@@ -33,7 +32,10 @@ fn egress_bytes_excessive_rejected_at_session() {
         .exec(&["/bin/true".to_string()])
         .unwrap();
     assert!(!o.allowed, "excessive egress_bytes must reject exec");
-    assert!(o.rule_ids.iter().any(|r| r.contains("egress-bytes-excessive")));
+    assert!(o
+        .rule_ids
+        .iter()
+        .any(|r| r.contains("egress-bytes-excessive")));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -47,7 +49,10 @@ fn egress_requests_excessive_rejected_at_session() {
         .exec(&["/bin/true".to_string()])
         .unwrap();
     assert!(!o.allowed, "excessive egress_requests must reject exec");
-    assert!(o.rule_ids.iter().any(|r| r.contains("egress-requests-excessive")));
+    assert!(o
+        .rule_ids
+        .iter()
+        .any(|r| r.contains("egress-requests-excessive")));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -73,6 +78,9 @@ fn egress_requests_zero_allows_exec() {
     let o = make_sup_with_egress(&audit, 0, 0)
         .exec(&["/bin/true".to_string()])
         .unwrap();
-    assert!(o.allowed, "zero egress_requests (unlimited) must allow exec");
+    assert!(
+        o.allowed,
+        "zero egress_requests (unlimited) must allow exec"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

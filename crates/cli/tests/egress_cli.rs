@@ -16,12 +16,16 @@ fn egress_excessive_policy_rejected() {
     let dir = std::env::temp_dir().join("tc-egress-cli");
     std::fs::create_dir_all(&dir).unwrap();
     let policy_path = dir.join("policy.yaml");
-    std::fs::write(&policy_path, r#"
+    std::fs::write(
+        &policy_path,
+        r#"
 tool: test
 limits:
   egress_bytes: 2000000000000
   egress_requests: 0
-"#).unwrap();
+"#,
+    )
+    .unwrap();
     let audit = dir.join("audit.jsonl");
     let _ = std::fs::remove_file(&audit);
 
@@ -34,7 +38,10 @@ limits:
         "--",
         "/bin/true",
     ]);
-    assert!(!status.success(), "excessive egress_bytes policy must be rejected");
+    assert!(
+        !status.success(),
+        "excessive egress_bytes policy must be rejected"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

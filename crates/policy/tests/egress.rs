@@ -31,7 +31,10 @@ fn egress_bytes_excessive_is_denied() {
     p.limits.egress_bytes = 2 * 1024 * 1024 * 1024 * 1024; // 2 TiB > 1 TiB
     let d = decide(&p, &req_connect());
     assert!(!d.allow, "excessive egress_bytes must be denied");
-    assert!(d.rule_ids.iter().any(|r| r.contains("egress-bytes-excessive")));
+    assert!(d
+        .rule_ids
+        .iter()
+        .any(|r| r.contains("egress-bytes-excessive")));
 }
 
 #[test]
@@ -40,21 +43,30 @@ fn egress_requests_excessive_is_denied() {
     p.limits.egress_requests = 2_000_000_000; // 2B > 1B
     let d = decide(&p, &req_http());
     assert!(!d.allow, "excessive egress_requests must be denied");
-    assert!(d.rule_ids.iter().any(|r| r.contains("egress-requests-excessive")));
+    assert!(d
+        .rule_ids
+        .iter()
+        .any(|r| r.contains("egress-requests-excessive")));
 }
 
 #[test]
 fn egress_bytes_zero_is_unlimited() {
     let p = Policy::default();
     let d = decide(&p, &req_connect());
-    assert!(!d.rule_ids.iter().any(|r| r.contains("egress-bytes-excessive")));
+    assert!(!d
+        .rule_ids
+        .iter()
+        .any(|r| r.contains("egress-bytes-excessive")));
 }
 
 #[test]
 fn egress_requests_zero_is_unlimited() {
     let p = Policy::default();
     let d = decide(&p, &req_http());
-    assert!(!d.rule_ids.iter().any(|r| r.contains("egress-requests-excessive")));
+    assert!(!d
+        .rule_ids
+        .iter()
+        .any(|r| r.contains("egress-requests-excessive")));
 }
 
 #[test]
@@ -62,7 +74,10 @@ fn egress_bytes_at_limit_is_allowed() {
     let mut p = Policy::default();
     p.limits.egress_bytes = 1024 * 1024 * 1024 * 1024; // exactly 1 TiB
     let d = decide(&p, &req_connect());
-    assert!(!d.rule_ids.iter().any(|r| r.contains("egress-bytes-excessive")));
+    assert!(!d
+        .rule_ids
+        .iter()
+        .any(|r| r.contains("egress-bytes-excessive")));
 }
 
 #[test]
@@ -70,5 +85,8 @@ fn egress_requests_at_limit_is_allowed() {
     let mut p = Policy::default();
     p.limits.egress_requests = 1_000_000_000; // exactly 1B
     let d = decide(&p, &req_http());
-    assert!(!d.rule_ids.iter().any(|r| r.contains("egress-requests-excessive")));
+    assert!(!d
+        .rule_ids
+        .iter()
+        .any(|r| r.contains("egress-requests-excessive")));
 }

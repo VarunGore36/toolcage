@@ -135,13 +135,12 @@ fn token_mint_and_attenuate() {
     let _ = std::fs::remove_file(&audit);
 
     // Generate key first
-    let status = cli_run(&[
-        "token",
-        "keygen",
-        "--out-prefix",
-        key.to_str().unwrap(),
-    ]);
-    assert!(status.success(), "token keygen must succeed, got {:?}", status.code());
+    let status = cli_run(&["token", "keygen", "--out-prefix", key.to_str().unwrap()]);
+    assert!(
+        status.success(),
+        "token keygen must succeed, got {:?}",
+        status.code()
+    );
 
     // Read the generated key
     // Mint root token
@@ -209,13 +208,12 @@ fn image_sign_and_verify() {
     .unwrap();
 
     // Generate key
-    let status = cli_run(&[
-        "audit",
-        "keygen",
-        "--out-prefix",
-        key.to_str().unwrap(),
-    ]);
-    assert!(status.success(), "keygen must succeed, got {:?}", status.code());
+    let status = cli_run(&["audit", "keygen", "--out-prefix", key.to_str().unwrap()]);
+    assert!(
+        status.success(),
+        "keygen must succeed, got {:?}",
+        status.code()
+    );
 
     // Sign the manifest (uses directory, not manifest file directly)
     let status = cli_run(&[
@@ -267,9 +265,11 @@ fn mcp_call_unknown_host_denied() {
 
 #[test]
 fn doctor_command_runs() {
-    let status = cli_run(&[
-        "doctor",
-    ]);
+    let status = cli_run(&["doctor"]);
     // doctor should succeed if basic isolation is available
-    assert!(status.success(), "doctor should exit 0, got {:?}", status.code());
+    assert!(
+        status.success(),
+        "doctor should exit 0, got {:?}",
+        status.code()
+    );
 }

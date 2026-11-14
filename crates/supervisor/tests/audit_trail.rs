@@ -29,7 +29,10 @@ fn audit_trail_records_intent_and_outcome() {
 
     let log = std::fs::read_to_string(&audit).unwrap();
     // Audit must contain both intent (allow) and outcome records
-    assert!(log.contains("proc.exec"), "audit must contain proc.exec action");
+    assert!(
+        log.contains("proc.exec"),
+        "audit must contain proc.exec action"
+    );
     assert!(log.contains("allow"), "audit must contain allow decision");
 
     // Verify the audit chain integrity
@@ -47,7 +50,15 @@ fn audit_trail_records_denial() {
 
     // Use an empty argv which should be denied
     let o = sup_at(&audit)
-        .exec_limits(&["/bin/sh".to_string(), "-c".to_string(), "echo pwned".to_string()], 5, 1024)
+        .exec_limits(
+            &[
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "echo pwned".to_string(),
+            ],
+            5,
+            1024,
+        )
         .unwrap();
     assert!(!o.allowed, "shell with inline code must be denied");
 
@@ -64,7 +75,8 @@ fn audit_trail_records_exec_with_argv() {
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
     let mut sup = toolcage_supervisor::Supervisor {
-        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml"))
+            .unwrap(),
         audit_path: audit.to_path_buf(),
         session: "audit-argv".into(),
         tier: toolcage_backend::Tier::Tier0,
@@ -73,7 +85,13 @@ fn audit_trail_records_exec_with_argv() {
         cap_key: None,
         token_rev_id: String::new(),
     };
-    let o = sup.exec(&["/bin/echo".to_string(), "hello".to_string(), "world".to_string()]).unwrap();
+    let o = sup
+        .exec(&[
+            "/bin/echo".to_string(),
+            "hello".to_string(),
+            "world".to_string(),
+        ])
+        .unwrap();
     assert!(o.allowed);
     let log = std::fs::read_to_string(&audit).unwrap();
     assert!(log.contains("proc.exec"), "audit must contain proc.exec");
@@ -89,7 +107,8 @@ fn audit_trail_records_denied_exec() {
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
     let mut sup = toolcage_supervisor::Supervisor {
-        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml"))
+            .unwrap(),
         audit_path: audit.to_path_buf(),
         session: "audit-deny".into(),
         tier: toolcage_backend::Tier::Tier0,
@@ -99,7 +118,10 @@ fn audit_trail_records_denied_exec() {
         token_rev_id: String::new(),
     };
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
-    assert!(!o.allowed, "tier0 without allow_unisolated should be denied");
+    assert!(
+        !o.allowed,
+        "tier0 without allow_unisolated should be denied"
+    );
     let log = std::fs::read_to_string(&audit).unwrap();
     assert!(log.contains("proc.exec"), "audit must contain proc.exec");
     assert!(log.contains("deny"), "audit must contain deny outcome");
