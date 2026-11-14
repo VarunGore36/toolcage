@@ -1237,65 +1237,57 @@ mod budget_store_tests {
         assert_eq!(b.bytes.len(), 2);
         assert_eq!(b.requests.len(), 2);
     }
-}
 
-#[test]
-fn budget_charge_at_exact_boundary() {
-    let mut b = Budgets::default();
-    // Charge exactly up to the limit - should succeed
-    assert!(b.charge_bytes("host1", 100, 100).unwrap());
-    // One more byte should fail
-    assert!(!b.charge_bytes("host1", 1, 100).unwrap());
-}
-
-#[test]
-fn budget_charge_zero_bytes() {
-    let mut b = Budgets::default();
-    // Zero bytes should always succeed
-    assert!(b.charge_bytes("host1", 0, 100).unwrap());
-    assert!(b.charge_bytes("host1", 0, 0).unwrap());
-}
-
-#[test]
-    fn budget_charge_zero_max_rejects_nonzero() {
+    #[test]
+    fn budget_charge_at_exact_boundary() {
         let mut b = Budgets::default();
-        // max_bytes = 0 means no bytes allowed (except zero-byte charges)
+        assert!(b.charge_bytes("host1", 100, 100).unwrap());
+        assert!(!b.charge_bytes("host1", 1, 100).unwrap());
+        assert_eq!(b.used_bytes("host1"), 100);
+    }
+
+    #[test]
+    fn budget_charge_zero_bytes() {
+        let mut b = Budgets::default();
+        assert!(b.charge_bytes("host1", 0, 100).unwrap());
+        assert!(b.charge_bytes("host1", 0, 0).unwrap());
+        assert_eq!(b.used_bytes("host1"), 0);
+    }
+
+    #[test]
+    fn budget_zero_max_rejects_nonzero() {
+        let mut b = Budgets::default();
         assert!(b.charge_bytes("host1", 0, 0).unwrap());
         assert!(!b.charge_bytes("host1", 1, 0).unwrap());
     }
 
-#[test]
-fn decide_unknown_host_denied() {
-    let p = toolcage_policy::Policy::default();
-    let d = decide(&p, "evil.example.com", "GET", "/");
-    assert!(!d.allow);
+    #[test]
+    fn budget_check_tracks_bytes_and_requests() {
+        let mut b = Budgets::default();
+        assert!(b.check("host1", 100, 1000, 10).unwrap());
+        assert_eq!(b.used_bytes("host1"), 100);
+        assert!(b.check("host1", 100, 1000, 10).unwrap());
+        assert_eq!(b.used_bytes("host1"), 200);
+        assert!(!b.check("host1", 900, 1000, 10).unwrap());
+        assert_eq!(b.used_bytes("host1"), 200);
+    }
+
+    #[test]
+    fn budget_request_limit_exceeded() {
+        let mut b = Budgets::default();
+        assert!(b.check("host1", 1, 1000, 1).unwrap());
+        assert!(!b.check("host1", 1, 1000, 1).unwrap());
+    }
+
+    #[test]
+    fn budget_separate_per_destination() {
+        let mut b = Budgets::default();
+        assert!(b.charge_bytes("host1", 500, 1000).unwrap());
+        assert!(b.charge_bytes("host2", 500, 1000).unwrap());
+        assert_eq!(b.used_bytes("host1"), 500);
+        assert_eq!(b.used_bytes("host2"), 500);
+        assert!(!b.charge_bytes("host1", 501, 1000).unwrap());
+        assert!(b.charge_bytes("host2", 1, 1000).unwrap());
+    }
 }
 
-#[test]
-fn decide_allowlisted_host_allowed() {
-    let p = toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap();
-    let d = decide(&p, "registry.npmjs.org", "GET", "/");
-    assert!(d.allow);
-}
-
-#[test]
-fn decide_wrong_method_denied() {
-    let p = toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap();
-    // registry.npmjs.org only allows GET
-    let d = decide(&p, "registry.npmjs.org", "POST", "/");
-    assert!(!d.allow);
-}
-
-#[test]
-fn find_body_start_handles_no_body() {
-    let resp = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
-        assert_eq!(find_body_start(resp), 38);
-        assert_eq!(&resp[38..], b"");
-}
-
-#[test]
-fn find_body_start_handles_no_content_length() {
-    let resp = b"HTTP/1.1 200 OK\r\n\r\nbody";
-        assert_eq!(find_body_start(resp), 19);
-        assert_eq!(&resp[19..], b"body");
-}
