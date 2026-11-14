@@ -725,4 +725,20 @@ mod tests {
         // if present, version is Some; if absent, version is None.
         assert_eq!(p.runsc_present, p.runsc_version.is_some());
     }
+
+    #[test]
+    fn tier_caps_has_expected_fields() {
+        let caps = toolcage_backend::TierCaps {
+            separate_kernel: true,
+            syscall_filter: true,
+            fs_mount_enforced: true,
+            net_vsock_only: true,
+            snapshot_pool: true,
+        };
+        assert!(caps.separate_kernel);
+        assert!(caps.syscall_filter);
+        assert!(caps.fs_mount_enforced);
+        assert!(caps.net_vsock_only);
+        assert!(caps.snapshot_pool);
+    }
 }
