@@ -850,4 +850,25 @@ mod scrub_tests {
         assert_eq!(b3.scrub("nothing here"), "nothing here");
         assert_eq!(b3.scrub("token=tok-1234 ok"), "token=[REDACTED] ok");
     }
+
+    #[test]
+    fn credential_inject_and_scrub() {
+        let mut b = Broker::new();
+        b.insert(Credential {
+            name: "gh-token".into(),
+            value: "ghp_secret123".into(),
+            use_with: "github".into(),
+            methods: vec!["POST".into()],
+            paths: vec![],
+            expires_at: None,
+            encrypted_value: None,
+        });
+        // Inject returns the secret value (empty paths match all)
+        let val = b.inject("gh-token", "github", "POST", "/repos/acme/app/issues/1");
+        assert_eq!(val, Some("ghp_secret123"));
+        // Unknown name returns None
+        assert_eq!(b.inject("nonexistent", "github", "POST", "/x"), None);
+        // Scrub removes the secret from output
+        assert_eq!(b.scrub("token=ghp_secret123"), "token=[REDACTED]");
+    }
 }
