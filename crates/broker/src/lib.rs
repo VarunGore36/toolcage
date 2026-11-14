@@ -972,6 +972,7 @@ fn credential_rotate_reencrypts() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("broker.json");
     let old_key = "0000000000000000000000000000000000000000000000000000000000000000";
+    let prev_key = std::env::var("TOOLCAGE_BROKER_KEY").ok();
     std::env::set_var("TOOLCAGE_BROKER_KEY", old_key);
     b.set_master_key(old_key).unwrap();
     b.save(&path).unwrap();
@@ -990,7 +991,11 @@ fn credential_rotate_reencrypts() {
     let mut b3 = Broker::load(&path).unwrap();
     assert_eq!(b3.inject("gh-token", "github", "GET", "/"), Some("old-secret"));
 
-    std::env::remove_var("TOOLCAGE_BROKER_KEY");
+    // Restore previous env var
+    match prev_key {
+        Some(k) => std::env::set_var("TOOLCAGE_BROKER_KEY", k),
+        None => std::env::remove_var("TOOLCAGE_BROKER_KEY"),
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
