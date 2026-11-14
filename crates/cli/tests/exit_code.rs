@@ -51,3 +51,45 @@ fn timeout_killed_run_exits_nonzero() {
         status.code()
     );
 }
+
+#[test]
+fn denied_shell_exec_fails() {
+    // sh -c is a shell interpreter and should be denied by policy
+    let status = cli_run(&[
+        "run",
+        "--unsafe-no-isolation",
+        "--policy",
+        "../../schemas/policy-v0.yaml",
+        "--audit",
+        &format!("{}/tc-exit-deny.jsonl", std::env::temp_dir().display()),
+        "--",
+        "/bin/sh",
+        "-c",
+        "echo pwned",
+    ]);
+    assert!(
+        !status.success(),
+        "denied shell exec must not exit 0, got {:?}",
+        status.code()
+    );
+}
+
+#[test]
+fn allowed_echo_exec_succeeds() {
+    let status = cli_run(&[
+        "run",
+        "--unsafe-no-isolation",
+        "--policy",
+        "../../schemas/policy-v0.yaml",
+        "--audit",
+        &format!("{}/tc-exit-echo.jsonl", std::env::temp_dir().display()),
+        "--",
+        "/bin/echo",
+        "hello",
+    ]);
+    assert!(
+        status.success(),
+        "echo must exit 0, got {:?}",
+        status.code()
+    );
+}
