@@ -1221,4 +1221,20 @@ mod budget_store_tests {
         assert!(b.requests.is_empty(), "default budget has no request entries");
         assert!(b.persist_path.is_none(), "default budget has no persist path");
     }
+
+    #[test]
+    fn budget_accumulates_across_hosts() {
+        let mut b = super::Budgets::default();
+        b.bytes.insert("host1".into(), 100);
+        b.bytes.insert("host2".into(), 200);
+        b.requests.insert("host1".into(), 5);
+        b.requests.insert("host2".into(), 10);
+
+        assert_eq!(b.bytes.get("host1"), Some(&100));
+        assert_eq!(b.bytes.get("host2"), Some(&200));
+        assert_eq!(b.requests.get("host1"), Some(&5));
+        assert_eq!(b.requests.get("host2"), Some(&10));
+        assert_eq!(b.bytes.len(), 2);
+        assert_eq!(b.requests.len(), 2);
+    }
 }
