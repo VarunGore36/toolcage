@@ -235,3 +235,32 @@ fn image_sign_and_verify() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn mcp_call_unknown_host_denied() {
+    let dir = std::env::temp_dir().join("tc-mcp-call-deny");
+    std::fs::create_dir_all(&dir).unwrap();
+    let policy =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/policy-v0.yaml");
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let status = cli_run(&[
+        "mcp",
+        "call",
+        "--unsafe-no-isolation",
+        "--policy",
+        policy.to_str().unwrap(),
+        "--audit",
+        audit.to_str().unwrap(),
+        "--name",
+        "http_fetch",
+        "--args-json",
+        r#"{"host":"evil.example.com","method":"GET","path":"/"}"#,
+    ]);
+    assert!(
+        !status.success(),
+        "mcp call to unknown host must be denied, got {:?}",
+        status.code()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
