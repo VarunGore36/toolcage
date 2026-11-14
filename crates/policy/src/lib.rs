@@ -871,6 +871,125 @@ mod tests {
         );
         assert!(!bad.allow);
     }
+
+
+    #[test]
+    fn net_connect_unknown_host_denied() {
+        let p = sample();
+        let d = decide(
+            &p,
+            &Request {
+                action: "net.connect".into(),
+                host: Some("evil.example.com".into()),
+                method: None,
+                path: Some("/".into()),
+                fs_path: None,
+                argv: None,
+            },
+        );
+        assert!(!d.allow);
+        assert!(d.rule_ids.iter().any(|r| r.contains("deny-default")));
+    }
+
+    #[test]
+    fn http_request_case_insensitive_host_match() {
+        let p = sample();
+        // Registry host should match regardless of case
+        let d = decide(
+            &p,
+            &Request {
+                action: "http.request".into(),
+                host: Some("REGISTRY.NPMJS.ORG".into()),
+                method: Some("GET".into()),
+                path: Some("/".into()),
+                fs_path: None,
+                argv: None,
+            },
+        );
+        assert!(d.allow, "host match should be case-insensitive");
+    }
+
+    #[test]
+    fn http_request_method_missing_denied() {
+        let p = sample();
+        let d = decide(
+            &p,
+            &Request {
+                action: "http.request".into(),
+                host: Some("registry.npmjs.org".into()),
+                method: None,
+                path: Some("/".into()),
+                fs_path: None,
+                argv: None,
+            },
+        );
+        assert!(!d.allow);
+        assert!(d.rule_ids.iter().any(|r| r.contains("method-missing")));
+    }
+
+    #[test]
+    fn http_request_wrong_method_denied() {
+        let p = sample();
+        let d = decide(
+            &p,
+            &Request {
+                action: "http.request".into(),
+                host: Some("registry.npmjs.org".into()),
+                method: Some("DELETE".into()),
+                path: Some("/".into()),
+                fs_path: None,
+                argv: None,
+            },
+        );
+        assert!(!d.allow);
+    }
+
+    #[test]
+    fn metadata_host_variants_all_denied() {
+        let p = sample();
+        for host in [
+            "169.254.169.254",
+            "METADATA",
+            "Instance-Data",
+            "100.100.100.200",
+            "metadata.google.internal",
+        ] {
+            let d = decide(
+                &p,
+                &Request {
+                    action: "http.request".into(),
+                    host: Some(host.into()),
+                    method: Some("GET".into()),
+                    path: Some("/".into()),
+                    fs_path: None,
+                    argv: None,
+                },
+            );
+            assert!(!d.allow, "host {host} must be denied");
+            assert!(
+                d.rule_ids.iter().any(|r| r.contains("forbid:metadata")),
+                "host {host} must be metadata deny"
+            );
+        }
+    }
+
+    #[test]
+    fn request_target_path_traversal_denied() {
+        let p = sample();
+        let d = decide(
+            &p,
+            &Request {
+                action: "http.request".into(),
+                host: Some("registry.npmjs.org".into()),
+                method: Some("GET".into()),
+                path: Some("/../../etc/passwd".into()),
+                fs_path: None,
+                argv: None,
+            },
+        );
+        assert!(!d.allow, "path traversal in request target must be denied");
+    }
+
 }
 
 #[cfg(test)]
