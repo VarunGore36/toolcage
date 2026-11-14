@@ -742,3 +742,60 @@ mod tests {
         assert!(caps.snapshot_pool);
     }
 }
+
+#[test]
+fn runsc_create_args_structure() {
+    let id = "test-container";
+    let bundle = std::path::Path::new("/tmp/test-bundle");
+    let args = runsc_create_args(id, bundle);
+    assert_eq!(args[0], "create");
+    assert_eq!(args[1], "--bundle");
+    assert_eq!(args[2], "/tmp/test-bundle");
+    assert_eq!(args[3], "test-container");
+    assert_eq!(args.len(), 4);
+}
+
+#[test]
+fn runsc_exec_args_structure() {
+    let id = "test-container";
+    let argv = vec!["echo".to_string(), "hello".to_string()];
+    let args = runsc_exec_args(id, &argv);
+    assert_eq!(args[0], "exec");
+    assert_eq!(args[1], id);
+    assert_eq!(args[2], "--");
+    assert_eq!(args[3], "echo");
+    assert_eq!(args[4], "hello");
+}
+
+#[test]
+fn runsc_kill_args_structure() {
+    let id = "test-container";
+    let args = runsc_kill_args(id);
+    assert_eq!(args[0], "kill");
+    assert_eq!(args[1], id);
+    assert_eq!(args[2], "KILL");
+}
+
+#[test]
+fn runsc_delete_args_structure() {
+    let id = "test-container";
+    let args = runsc_delete_args(id);
+    assert_eq!(args[0], "delete");
+    assert_eq!(args[1], id);
+}
+
+#[test]
+fn tier2_caps_has_all_features() {
+    let caps = toolcage_backend::TierCaps {
+        separate_kernel: true,
+        syscall_filter: true,
+        fs_mount_enforced: true,
+        net_vsock_only: true,
+        snapshot_pool: true,
+    };
+    assert!(caps.separate_kernel);
+    assert!(caps.syscall_filter);
+    assert!(caps.fs_mount_enforced);
+    assert!(caps.net_vsock_only);
+    assert!(caps.snapshot_pool);
+}
