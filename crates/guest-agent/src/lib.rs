@@ -516,4 +516,28 @@ mod tests {
             assert!(validate(&m).is_ok(), "path {p:?} must be accepted");
         }
     }
+
+    #[test]
+    fn guest_msg_id_rejects_empty() {
+        let m = GuestMsg {
+            id: "".into(),
+            op: GuestOp::PutFile {
+                path: "/workspace/foo".into(),
+                bytes: 1,
+            },
+        };
+        assert!(validate(&m).is_err(), "empty id must be rejected");
+    }
+
+    #[test]
+    fn guest_msg_id_rejects_too_long() {
+        let m = GuestMsg {
+            id: "a".repeat(200).into(),
+            op: GuestOp::PutFile {
+                path: "/workspace/foo".into(),
+                bytes: 1,
+            },
+        };
+        assert!(validate(&m).is_err(), "id longer than 64 chars must be rejected");
+    }
 }
