@@ -3038,3 +3038,165 @@ mod exec_not_found_tests {
         assert!(msg.contains("empty argv[0]"), "{msg}");
     }
 }
+
+#[cfg(test)]
+mod cgroup_tests {
+    use super::*;
+
+    fn cgroup_available() -> bool {
+        std::path::Path::new("/sys/fs/cgroup").exists()
+            && std::fs::metadata("/sys/fs/cgroup")
+                .map(|m| !m.permissions().readonly())
+                .unwrap_or(false)
+    }
+
+    #[test]
+    fn cgroup_mount_creates_directory() {
+        if !cgroup_available() {
+            eprintln!("skip: cgroup fs not available or read-only");
+            return;
+        }
+        let dir = match cgroup_mount("test", "verify") {
+            Ok(d) => d,
+            Err(e) if e.to_string().contains("Permission denied") => {
+                eprintln!("skip: cgroup mount requires root: {e}");
+                return;
+            }
+            Err(e) => panic!("unexpected error: {e}"),
+        };
+        assert!(dir.exists(), "cgroup dir should exist: {:?}", dir);
+        assert!(dir.is_dir(), "cgroup dir should be a directory");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cgroup_write_writes_value() {
+        if !cgroup_available() {
+            eprintln!("skip: cgroup fs not available or read-only");
+            return;
+        }
+        let dir = match cgroup_mount("test", "write-verify") {
+            Ok(d) => d,
+            Err(e) if e.to_string().contains("Permission denied") => {
+                eprintln!("skip: cgroup mount requires root: {e}");
+                return;
+            }
+            Err(e) => panic!("unexpected error: {e}"),
+        };
+        match cgroup_write(&dir, "testfile", "hello") {
+            Ok(()) => {
+                let content = std::fs::read_to_string(dir.join("testfile")).unwrap();
+                assert_eq!(content.trim(), "hello");
+            }
+            Err(e) if e.to_string().contains("Permission denied") => {
+                eprintln!("skip: cgroup write requires root: {e}");
+                return;
+            }
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cgroup_write_max_writes_value() {
+        if !cgroup_available() {
+            eprintln!("skip: cgroup fs not available or read-only");
+            return;
+        }
+        let dir = match cgroup_mount("test", "max-verify") {
+            Ok(d) => d,
+            Err(e) if e.to_string().contains("Permission denied") => {
+                eprintln!("skip: cgroup mount requires root: {e}");
+                return;
+            }
+            Err(e) => panic!("unexpected error: {e}"),
+        };
+        match cgroup_write_max(&dir, "pids.max", "512") {
+            Ok(()) => {
+                let content = std::fs::read_to_string(dir.join("pids.max")).unwrap();
+                assert_eq!(content.trim(), "512");
+            }
+            Err(e) if e.to_string().contains("Permission denied") => {
+                eprintln!("skip: cgroup write requires root: {e}");
+                return;
+            }
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cpu_max_format_is_millis_per_period() {
+        if !cgroup_available() {
+            eprintln!("skip: cgroup fs not available or read-only");
+            return;
+        }
+        let dir = match cgroup_mount("test", "cpu-max-format") {
+            Ok(d) => d,
+            Err(e) if e.to_string().contains("Permission denied") => {
+                eprintln!("skip: cgroup mount requires root: {e}");
+                return;
+            }
+            Err(e) => panic!("unexpected error: {e}"),
+        };
+        // cpu.max format: "quota period" where quota is in microseconds
+        // 500 millis = 500000 microseconds, period = 100000 microseconds (100ms)
+        match cgroup_write_max(&dir, "cpu.max", "500000 100000") {
+            Ok(()) => {
+                let content = std::fs::read_to_string(dir.join("cpu.max")).unwrap();
+                let parts: Vec<&str> = content.trim().split_whitespace().collect();
+                assert_eq!(parts.len(), 2, "cpu.max must have quota period format");
+                assert_eq!(parts[0], "500000", "cpu.max quota must be 500000 microseconds");
+                assert_eq!(parts[1], "100000", "cpu.max period must be 100000 microseconds");
+            }
+            Err(e) if e.to_string().contains("Permission denied") => {
+                eprintln!("skip: cgroup write requires root: {e}");
+                return;
+            }
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn memory_max_format_is_bytes() {
+        if !cgroup_available() {
+            eprintln!("skip: cgroup fs not available or read-only");
+            return;
+        }
+        let dir = match cgroup_mount("test", "mem-max-format") {
+            Ok(d) => d,
+            Err(e) if e.to_string().contains("Permission denied") => {
+                eprintln!("skip: cgroup mount requires root: {e}");
+                return;
+            }
+            Err(e) => panic!("unexpected error: {e}"),
+        };
+        // memory.max format: bytes
+        let bytes = 64 * 1024 * 1024; // 64 MiB
+        match cgroup_write_max(&dir, "memory.max", &bytes.to_string()) {
+            Ok(()) => {
+                let content = std::fs::read_to_string(dir.join("memory.max")).unwrap();
+                assert_eq!(content.trim(), bytes.to_string(), "memory.max must be in bytes");
+            }
+            Err(e) if e.to_string().contains("Permission denied") => {
+                eprintln!("skip: cgroup write requires root: {e}");
+                return;
+            }
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cgroup2_available_returns_bool() {
+        // Just verify the function doesn't panic; result depends on host
+        let _ = cgroup2_available();
+    }
+
+    #[test]
+    fn cgroup_writable_returns_bool() {
+        // Just verify the function doesn't panic; result depends on host
+        let _ = cgroup_writable();
+    }
+}
