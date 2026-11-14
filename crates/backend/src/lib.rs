@@ -60,6 +60,57 @@ pub struct SessionSpec {
     pub workspace: String,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tier_parse_accepts_aliases() {
+        assert_eq!(Tier::parse("tier0").unwrap(), Tier::Tier0);
+        assert_eq!(Tier::parse("ns").unwrap(), Tier::Tier0);
+        assert_eq!(Tier::parse("landlock").unwrap(), Tier::Tier0);
+        assert_eq!(Tier::parse("tier1").unwrap(), Tier::Tier1);
+        assert_eq!(Tier::parse("gvisor").unwrap(), Tier::Tier1);
+        assert_eq!(Tier::parse("runsc").unwrap(), Tier::Tier1);
+        assert_eq!(Tier::parse("tier2").unwrap(), Tier::Tier2);
+        assert_eq!(Tier::parse("firecracker").unwrap(), Tier::Tier2);
+        assert_eq!(Tier::parse("microvm").unwrap(), Tier::Tier2);
+    }
+
+    #[test]
+    fn tier_parse_rejects_unknown() {
+        assert!(Tier::parse("tier3").is_err());
+        assert!(Tier::parse("").is_err());
+        assert!(Tier::parse("unknown").is_err());
+    }
+
+    #[test]
+    fn tier_parse_is_case_insensitive() {
+        assert_eq!(Tier::parse("TIER0").unwrap(), Tier::Tier0);
+        assert_eq!(Tier::parse("Ns").unwrap(), Tier::Tier0);
+        assert_eq!(Tier::parse("RUNSC").unwrap(), Tier::Tier1);
+        assert_eq!(Tier::parse("Firecracker").unwrap(), Tier::Tier2);
+    }
+
+    #[test]
+    fn session_spec_default_fields() {
+        let spec = SessionSpec {
+            id: "test-session".into(),
+            tier: Tier::Tier0,
+            mem_mb: 256,
+            cpu_millis: 500,
+            workspace_mb: 0,
+            workspace: "/tmp/test-workspace".into(),
+        };
+        assert_eq!(spec.id, "test-session");
+        assert_eq!(spec.tier, Tier::Tier0);
+        assert_eq!(spec.mem_mb, 256);
+        assert_eq!(spec.cpu_millis, 500);
+        assert_eq!(spec.workspace_mb, 0);
+        assert_eq!(spec.workspace, "/tmp/test-workspace");
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CommandResult {
     pub exit_code: Option<i32>,
