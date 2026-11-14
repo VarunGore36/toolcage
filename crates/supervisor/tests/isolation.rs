@@ -184,4 +184,51 @@ fn denied_exec_is_audited() {
     assert!(log.contains("deny"), "audit must contain deny outcome");
     toolcage_audit::verify(&audit).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tier1_backend_unavailable_denies() {
+    // Tier1 (gVisor) without a wired backend must fail closed
+    let dir = std::env::temp_dir().join(format!("tc-iso-tier1-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let mut sup = toolcage_supervisor::Supervisor {
+        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+        audit_path: audit.to_path_buf(),
+        session: "tier1-backend".into(),
+        tier: toolcage_backend::Tier::Tier1,
+        backend: None,
+        allow_unisolated: false,
+        cap_key: None,
+        token_rev_id: String::new(),
+    };
+    let o = sup.exec(&["/bin/true".to_string()]).unwrap();
+    assert!(!o.allowed, "tier1 without backend should be denied");
+    assert!(o.stdout.is_empty(), "denied call must not execute");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn exec_with_bad_tier_name_denied() {
+    // Test that the supervisor properly handles tier validation
+    let dir = std::env::temp_dir().join(format!("tc-iso-bad-tier-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let mut sup = toolcage_supervisor::Supervisor {
+        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+        audit_path: audit.to_path_buf(),
+        session: "bad-tier".into(),
+        tier: toolcage_backend::Tier::Tier2,
+        backend: None,
+        allow_unisolated: false,
+        cap_key: None,
+        token_rev_id: String::new(),
+    };
+    let o = sup.exec(&["/bin/true".to_string()]).unwrap();
+    assert!(!o.allowed, "tier2 without backend should be denied");
+    let _ = std::fs::remove_dir_all(&dir);
 }
