@@ -587,6 +587,29 @@ impl RevocationList {
     }
 }
 
+
+#[cfg(test)]
+fn hex_encode(bytes: impl AsRef<[u8]>) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(bytes.as_ref().len() * 2);
+    for b in bytes.as_ref() {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+impl Token {
+    /// Test-only helper: compute and set the MAC tag for this token.
+    #[cfg(test)]
+    pub fn sign_for_tests(&mut self, key: &Key) -> String {
+        let mac = mac_for(key, &self.rev_id, &self.parent, &self.ancestors, &self.rights);
+        let bytes: Vec<u8> = mac.finalize().into_bytes().to_vec();
+        let tag = hex_encode(bytes);
+        self.tag = tag.clone();
+        tag
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1257,4 +1280,136 @@ mod tests {
             "prefix check must respect '/' boundary and not revoke org/team-a-other"
         );
     }
+}
+
+
+#[test]
+fn allows_tampered_rights_fail_closed() {
+    // A guest that reads a token cannot widen rights without the MAC key.
+    let key = Key::from_hex("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff").unwrap();
+    let mut tok = Token {
+        rev_id: "sess-1".into(),
+        parent: None,
+        ancestors: vec![],
+        rights: Rights {
+            fs_prefixes: vec!["/workspace".into()],
+            net_hosts: Vec::new(),
+            methods: vec!["GET".into()],
+            cred_use: Vec::new(),
+            budget_bytes: 1024,
+            expires_at: 0,
+        },
+        tag: String::new(),
+    };
+    tok.tag = tok.sign_for_tests(&key); // sign it
+    assert!(tok.allows(&key, Some("/workspace/file"), None, None, None));
+
+    // Tamper with rights: add a new host without re-signing
+    tok.rights.net_hosts = vec!["evil.example.com".into()];
+    assert!(!tok.allows(&key, None, Some("evil.example.com"), None, None),
+        "tampered rights must fail closed");
+}
+
+#[test]
+fn allows_empty_rights_grant_nothing() {
+    let key = Key::from_hex("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff").unwrap();
+    let mut tok = Token {
+        rev_id: "sess-empty".into(),
+        parent: None,
+        ancestors: vec![],
+        rights: Rights::default(), // all empty
+        tag: String::new(),
+    };
+    tok.tag = tok.sign_for_tests(&key);
+    // Empty fs_prefixes grants nothing on fs axis
+    assert!(!tok.allows(&key, Some("/anything"), None, None, None));
+    // Empty methods grants nothing on net axis
+    assert!(!tok.allows(&key, None, Some("example.com"), Some("GET"), None));
+}
+
+#[test]
+fn allows_expired_token_fail_closed() {
+    let key = Key::from_hex("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff").unwrap();
+    let mut tok = Token {
+        rev_id: "sess-expired".into(),
+        parent: None,
+        ancestors: vec![],
+        rights: Rights {
+            fs_prefixes: vec!["/workspace".into()],
+            net_hosts: Vec::new(),
+            methods: Vec::new(),
+            cred_use: Vec::new(),
+            budget_bytes: 1024,
+            expires_at: 1, // expired long ago
+        },
+        tag: String::new(),
+    };
+    tok.tag = tok.sign_for_tests(&key);
+    assert!(!tok.allows_at(&key, Some("/workspace/file"), None, None, None, 9999),
+        "expired token must fail closed");
+}
+
+#[test]
+fn attenuate_cannot_widen_methods() {
+    // Adding a new right axis must not silently grant it.
+    let key = Key::from_hex("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff").unwrap();
+    let mut parent = Token {
+        rev_id: "parent".into(),
+        parent: None,
+        ancestors: vec![],
+        rights: Rights {
+            fs_prefixes: vec!["/workspace".into()],
+            net_hosts: vec!["example.com".into()],
+            methods: vec!["GET".into()],
+            cred_use: Vec::new(),
+            budget_bytes: 1024,
+            expires_at: 0,
+        },
+        tag: String::new(),
+    };
+    parent.sign_for_tests(&key);
+
+    // Attenuate with empty methods — must NOT become wildcard
+    // Attenuate with same rights (subset, not widen)
+    let child = parent.attenuate(&key, "child".into(), Rights {
+        fs_prefixes: vec!["/workspace".into()],
+        net_hosts: vec!["example.com".into()],
+        methods: vec!["GET".into()],
+        cred_use: Vec::new(),
+        budget_bytes: 512,
+        expires_at: 0,
+    }).unwrap();
+    // Child has same rights as parent subset
+    assert!(child.allows(&key, Some("/workspace/file"), None, None, None));
+    assert!(child.allows(&key, None, Some("example.com"), Some("GET"), None));
+    // But child cannot do POST (not in narrow methods)
+    assert!(!child.allows(&key, None, Some("example.com"), Some("POST"), None));
+    // And child cannot access /etc (not under /workspace prefix)
+    assert!(!child.allows(&key, Some("/etc/passwd"), None, None, None));
+}
+
+#[test]
+fn tag_tampering_fail_closed() {
+    let key = Key::from_hex("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff").unwrap();
+    let mut tok = Token {
+        rev_id: "sess-tamper".into(),
+        parent: None,
+        ancestors: vec![],
+        rights: Rights {
+            fs_prefixes: vec!["/workspace".into()],
+            net_hosts: Vec::new(),
+            methods: Vec::new(),
+            cred_use: Vec::new(),
+            budget_bytes: 1024,
+            expires_at: 0,
+        },
+        tag: String::new(),
+    };
+    tok.tag = tok.sign_for_tests(&key);
+    assert!(tok.allows(&key, Some("/workspace/file"), None, None, None));
+
+    // Tamper with tag itself
+    tok.tag = "deadbeef".into();
+    assert!(!tok.allows(&key, Some("/workspace/file"), None, None, None),
+        "tampered tag must fail closed");
 }
