@@ -1230,7 +1230,7 @@ fn resolve_program(argv0: &str, path_var: &str) -> anyhow::Result<Resolved> {
 /// Returns the Vec so the caller owns and keeps it alive: `apply_seccomp`'s
 /// sock_fprog points into this buffer. v0 bug: this returned a bare sock_fprog
 /// whose backing Vec was dropped here — a use-after-free.
-fn build_seccomp_insns() -> Vec<sock_filter> {
+pub(crate) fn build_seccomp_insns() -> Vec<sock_filter> {
     let mut insns: Vec<sock_filter> = Vec::new();
     let deny_eperm = SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA);
 
@@ -1818,7 +1818,7 @@ mod tests {
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn run_filter(insns: &[sock_filter], nr: i32) -> u32 {
+    pub(crate) fn run_filter(insns: &[sock_filter], nr: i32) -> u32 {
         run_filter_with_arch(insns, AUDIT_ARCH_X86_64, nr)
     }
 
@@ -1902,7 +1902,7 @@ mod tests {
 
         for &nr in BLOCKED_SYSCALLS {
             assert_eq!(
-                run_filter(&insns, nr),
+                crate::tests::run_filter(&insns, nr as i32),
                 deny_verdict,
                 "blocked syscall {nr} must be denied with EPERM"
             );
@@ -1917,7 +1917,7 @@ mod tests {
             "IA-32 syscall must be denied"
         );
         assert_eq!(
-            run_filter(&insns, (X32_SYSCALL_BIT | 1) as i32),
+            crate::tests::run_filter(&insns, (X32_SYSCALL_BIT | 1) as i32),
             deny_verdict,
             "x32 ABI syscall must be denied"
         );
@@ -1942,7 +1942,7 @@ mod tests {
             318, // getrandom
         ] {
             assert_eq!(
-                run_filter(&insns, nr),
+                crate::tests::run_filter(&insns, nr as i32),
                 SECCOMP_RET_ALLOW,
                 "ordinary syscall {nr} must be allowed"
             );
@@ -1955,7 +1955,7 @@ mod tests {
                 continue;
             }
             assert_eq!(
-                run_filter(&insns, nr),
+                crate::tests::run_filter(&insns, nr as i32),
                 SECCOMP_RET_ALLOW,
                 "syscall {nr} is not on the denylist and must be allowed"
             );
@@ -3200,3 +3200,119 @@ mod cgroup_tests {
         let _ = cgroup_writable();
     }
 }
+
+#[cfg(test)]
+#[cfg(test)]
+mod seccomp_syscall_tests {
+    use super::*;
+
+    #[test]
+    fn mount_family_syscalls_are_blocked() {
+        let insns = build_seccomp_insns();
+        let deny_verdict = SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA);
+
+        // mount family: workload must not create mounts Landlock doesn't anticipate
+        for nr in [
+            libc::SYS_mount,
+            libc::SYS_umount2,
+            libc::SYS_pivot_root,
+        ] {
+            assert_eq!(
+                crate::tests::run_filter(&insns, nr as i32),
+                deny_verdict,
+                "mount-family syscall {nr} must be denied"
+            );
+        }
+    }
+
+    #[test]
+    fn module_and_boot_syscalls_are_blocked() {
+        let insns = build_seccomp_insns();
+        let deny_verdict = SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA);
+
+        // module loading and kexec are privileged operations
+        for nr in [
+            libc::SYS_init_module,
+            libc::SYS_finit_module,
+            libc::SYS_kexec_load,
+            libc::SYS_reboot,
+            libc::SYS_iopl,
+            libc::SYS_ioperm,
+        ] {
+            assert_eq!(
+                crate::tests::run_filter(&insns, nr as i32),
+                deny_verdict,
+                "privileged syscall {nr} must be denied"
+            );
+        }
+    }
+
+    #[test]
+    fn socket_syscalls_are_blocked() {
+        let insns = build_seccomp_insns();
+        let deny_verdict = SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA);
+
+        // socket family: guest must not create network sockets
+        for nr in [
+            libc::SYS_socket,
+            libc::SYS_socketpair,
+            libc::SYS_accept4,
+            libc::SYS_recvmmsg,
+        ] {
+            assert_eq!(
+                crate::tests::run_filter(&insns, nr as i32),
+                deny_verdict,
+                "socket syscall {nr} must be denied"
+            );
+        }
+    }
+
+    #[test]
+    fn ptrace_and_ns_syscalls_are_blocked() {
+        let insns = build_seccomp_insns();
+        let deny_verdict = SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA);
+
+        // namespace manipulation and process inspection are blocked
+        for nr in [
+            libc::SYS_unshare,
+            libc::SYS_setns,
+            libc::SYS_ptrace,
+            libc::SYS_process_vm_writev,
+        ] {
+            assert_eq!(
+                crate::tests::run_filter(&insns, nr as i32),
+                deny_verdict,
+                "namespace/ptrace syscall {nr} must be denied"
+            );
+        }
+    }
+
+    #[test]
+    fn seccomp_filter_structure_is_valid() {
+        let insns = build_seccomp_insns();
+        assert!(!insns.is_empty(), "seccomp filter must not be empty");
+
+        // First instruction loads architecture from offset 4
+        assert_eq!(insns[0].k, 4, "first insn must load arch from offset 4");
+
+        // Last instruction must return ALLOW (catch-all)
+        let last = insns.last().unwrap();
+        assert_eq!(
+            last.k,
+            SECCOMP_RET_ALLOW as u32,
+            "last insn must return ALLOW"
+        );
+    }
+
+    #[test]
+    fn blocked_syscalls_have_no_duplicates() {
+        let mut seen = std::collections::HashSet::new();
+        for &nr in BLOCKED_SYSCALLS {
+            assert!(
+                seen.insert(nr),
+                "blocked syscall {nr} appears more than once"
+            );
+        }
+    }
+}
+
