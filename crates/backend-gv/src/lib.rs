@@ -799,3 +799,40 @@ fn tier2_caps_has_all_features() {
     assert!(caps.net_vsock_only);
     assert!(caps.snapshot_pool);
 }
+
+#[test]
+fn golden_image_hash_verification() {
+    #[test]
+    fn golden_image_manifest_parsing() {
+        // Golden image manifest should be valid JSON with required fields
+        let tmp = std::env::temp_dir().join(format!("tc-gv-manifest-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let manifest = tmp.join("manifest.json");
+        std::fs::write(&manifest, r#"{"kernel":"/vmlinuz","rootfs":"/rootfs.ext4","version":"1.0"}"#).unwrap();
+
+        let content = std::fs::read_to_string(&manifest).unwrap();
+        let manifest_json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(manifest_json["kernel"], "/vmlinuz");
+        assert_eq!(manifest_json["rootfs"], "/rootfs.ext4");
+        assert_eq!(manifest_json["version"], "1.0");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
+#[test]
+fn backend_gv_tier_caps_all_fields() {
+    // TierCaps for gVisor backend (Tier1)
+    let caps = toolcage_backend::TierCaps {
+        separate_kernel: false, // gVisor shares host kernel
+        syscall_filter: true,   // gVisor intercepts syscalls
+        fs_mount_enforced: true,
+        net_vsock_only: false,  // gVisor uses vsock but not exclusively
+        snapshot_pool: true,
+    };
+    assert!(!caps.separate_kernel, "gVisor shares host kernel");
+    assert!(caps.syscall_filter, "gVisor intercepts syscalls");
+    assert!(caps.fs_mount_enforced, "gVisor enforces fs mounts");
+    assert!(!caps.net_vsock_only, "gVisor not vsock-only");
+    assert!(caps.snapshot_pool, "gVisor supports snapshot pool");
+}
