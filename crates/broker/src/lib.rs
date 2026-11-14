@@ -1002,3 +1002,126 @@ fn credential_canary_is_unique() {
     assert_ne!(c1, c2, "canary must be unique per call");
     assert!(c1.contains("test"), "canary must contain the name prefix");
 }
+
+#[test]
+fn broker_empty_save_load_roundtrip() {
+    let dir = std::env::temp_dir().join(format!("tc-broker-empty-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("broker.json");
+
+    let mut b = Broker::new();
+    b.set_master_key("0000000000000000000000000000000000000000000000000000000000000000")
+        .unwrap();
+    b.save(&path).unwrap();
+
+    std::env::set_var(
+        "TOOLCAGE_BROKER_KEY",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    );
+    let b2 = Broker::load(&path).unwrap();
+    assert!(b2.creds.is_empty(), "empty broker should have no credentials");
+    assert!(b2.inject("nonexistent", "github", "GET", "/").is_none());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn broker_credential_expiry_boundary() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let mut b = Broker::new();
+
+    // Expired credential (1 second ago) - should be denied
+    b.insert(Credential {
+        name: "expired".into(),
+        value: "secret".into(),
+        use_with: "github".into(),
+        methods: vec![],
+        paths: vec![],
+        expires_at: Some(now - 1),
+        encrypted_value: None,
+    });
+    assert_eq!(
+        b.inject("expired", "github", "GET", "/"),
+        None,
+        "expired credential should be denied"
+    );
+
+    // Expiring exactly now - allowed (now > exp is the check, not >=)
+    b.insert(Credential {
+        name: "expiring".into(),
+        value: "secret".into(),
+        use_with: "github".into(),
+        methods: vec![],
+        paths: vec![],
+        expires_at: Some(now),
+        encrypted_value: None,
+    });
+    assert_eq!(
+        b.inject("expiring", "github", "GET", "/"),
+        Some("secret"),
+        "expiring credential at exactly now is allowed (now > exp check)"
+    );
+
+    // Unexpired credential (1 second from now) - should be allowed
+    b.insert(Credential {
+        name: "unexpired".into(),
+        value: "secret".into(),
+        use_with: "github".into(),
+        methods: vec![],
+        paths: vec![],
+        expires_at: Some(now + 1),
+        encrypted_value: None,
+    });
+    assert_eq!(
+        b.inject("unexpired", "github", "GET", "/"),
+        Some("secret"),
+        "unexpired credential should be allowed"
+    );
+}
+
+#[test]
+fn broker_scrub_overlapping_secrets_various_lengths() {
+    let mut b = Broker::new();
+    b.insert(Credential {
+        name: "short".into(),
+        value: "abc".into(),
+        use_with: "github".into(),
+        methods: vec![],
+        paths: vec![],
+        expires_at: None,
+        encrypted_value: None,
+    });
+    b.insert(Credential {
+        name: "longer".into(),
+        value: "abcdef".into(),
+        use_with: "github".into(),
+        methods: vec![],
+        paths: vec![],
+        expires_at: None,
+        encrypted_value: None,
+    });
+    b.insert(Credential {
+        name: "contained".into(),
+        value: "def".into(),
+        use_with: "github".into(),
+        methods: vec![],
+        paths: vec![],
+        expires_at: None,
+        encrypted_value: None,
+    });
+
+    // "abcdef" contains "abc" and "def" - all should be redacted
+    let result = b.scrub("secret=abcdef end");
+    assert_eq!(result, "secret=[REDACTED] end");
+
+    // Just "abc" should be redacted
+    let result = b.scrub("value=abc end");
+    assert_eq!(result, "value=[REDACTED] end");
+
+    // Just "def" should be redacted
+    let result = b.scrub("value=def end");
+    assert_eq!(result, "value=[REDACTED] end");
+}
