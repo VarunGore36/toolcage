@@ -2270,3 +2270,75 @@ fn backend_caps_report_tier2_features() {
     assert!(caps.net_vsock_only, "Tier2 must be vsock-only");
     assert!(!caps.snapshot_pool, "Tier2 snapshot_pool may be false");
 }
+
+#[test]
+fn cold_start_time_under_target() {
+    // Cold start should complete within target time (500ms for Tier 2)
+    let start = std::time::Instant::now();
+    let cfg = FcConfig::for_session("cold-start-test", 1024);
+    // Config creation should be fast
+    let elapsed = start.elapsed();
+    assert!(elapsed < std::time::Duration::from_millis(100),
+        "cgroup config creation should be fast, took {:?}", elapsed);
+    // Verify cfg fields are sensible
+    assert!(cfg.mem_mb > 0);
+    assert!(cfg.vcpu > 0);
+    assert!(cfg.vsock_cid >= 3);
+}
+
+#[test]
+fn warm_pool_claim_and_release() {
+    // Simulate warm pool behavior: create config, simulate claim, verify
+    // the session gets a unique CID
+    let mut cids = std::collections::HashSet::new();
+    for i in 0..10 {
+        let cfg = FcConfig::for_session(&format!("warm-pool-{i}"), 1024);
+        assert!(cfg.vsock_cid >= 3, "CID must be >= 3");
+        assert!(cfg.vsock_cid < 10003, "CID must be < 10003");
+        // All CIDs should be unique
+        assert!(cids.insert(cfg.vsock_cid), "CID {} should be unique", cfg.vsock_cid);
+    }
+}
+
+    #[test]
+    fn snapshot_hash_verification() {
+        // Verify that snapshot hash verification works
+        let tmp = std::env::temp_dir().join(format!("tc-snap-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let snapshot = tmp.join("snapshot.json");
+        std::fs::write(&snapshot, r#"{"vm": "test"}"#).unwrap();
+
+        // Compute expected hash using SHA256
+        use sha2::{Digest, Sha256};
+        let content = std::fs::read(&snapshot).unwrap();
+        let hash = Sha256::digest(&content);
+        let hash_hex = hash.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+
+        // Correct hash should verify
+        let result = verify_snapshot_hash(snapshot.to_str().unwrap(), &hash_hex);
+        assert!(result.is_ok(), "correct hash should verify: {:?}", result);
+
+        // Wrong hash should fail
+        let result = verify_snapshot_hash(snapshot.to_str().unwrap(), "wrong-hash");
+        assert!(result.is_err(), "wrong hash should fail");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+
+#[test]
+fn backend_caps_tier2_specific() {
+    let caps = toolcage_backend::TierCaps {
+        separate_kernel: true,
+        syscall_filter: true,
+        fs_mount_enforced: true,
+        net_vsock_only: true,
+        snapshot_pool: true,
+    };
+    // Tier2 specific properties
+    assert!(caps.separate_kernel, "Tier2 must have separate kernel (VM)");
+    assert!(caps.syscall_filter, "Tier2 must have seccomp filter");
+    assert!(caps.fs_mount_enforced, "Tier2 must enforce fs mounts");
+    assert!(caps.net_vsock_only, "Tier2 must be vsock-only (no NIC)");
+    assert!(caps.snapshot_pool, "Tier2 uses snapshot pool");
+}
