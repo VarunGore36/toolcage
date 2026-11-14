@@ -990,6 +990,43 @@ mod tests {
         assert!(!d.allow, "path traversal in request target must be denied");
     }
 
+
+
+    #[test]
+
+    #[test]
+    fn fs_path_double_dotdot_denied() {
+        let p = sample();
+        let d = decide(
+            &p,
+            &Request {
+                action: "fs.read".into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: Some("/workspace/foo/../../../etc/shadow".into()),
+                argv: None,
+            },
+        );
+        assert!(!d.allow, "double dotdot escape must be denied");
+    }
+
+    #[test]
+    fn fs_path_workspace_allowed() {
+        let p = sample();
+        let d = decide(
+            &p,
+            &Request {
+                action: "fs.read".into(),
+                host: None,
+                method: None,
+                path: None,
+                fs_path: Some("/workspace/safe/file.txt".into()),
+                argv: None,
+            },
+        );
+        assert!(d.allow, "normal workspace path must be allowed");
+    }
 }
 
 #[cfg(test)]
@@ -1012,6 +1049,10 @@ mod trusted_exec_path_tests {
     fn absolute_system_tree_is_trusted() {
         for p in [
             "/bin/sh",
+
+
+
+
             "/usr/bin/git",
             "/usr/local/bin/tool", // POL-1: under the /usr/ prefix — trusted
             "/sbin/mkfs",
