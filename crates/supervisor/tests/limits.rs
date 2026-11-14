@@ -46,3 +46,64 @@ fn overcap_truncates_yes() {
     assert!(text.contains("truncated=true"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn normal_exec_unaffected() {
+    let dir = std::env::temp_dir().join("tc-limits-normal");
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let o = sup_at(&audit)
+        .exec_limits(&["/bin/echo".to_string(), "hello".to_string()], 30, 1024)
+        .unwrap();
+    assert!(o.allowed);
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "hello\n");
+    let text = std::fs::read_to_string(&audit).unwrap();
+    assert!(!text.contains("timeout=true"));
+    assert!(!text.contains("truncated=true"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn zero_timeout_kills_immediately() {
+    let dir = std::env::temp_dir().join("tc-limits-zero-timeout");
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let o = sup_at(&audit)
+        .exec_limits(&["/bin/sleep".to_string(), "30".to_string()], 0, 1024)
+        .unwrap();
+    // Zero timeout: sleep should be killed immediately
+    assert!(o.allowed);
+    let text = std::fs::read_to_string(&audit).unwrap();
+    assert!(text.contains("timeout=true"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn zero_cap_truncates_immediately() {
+    let dir = std::env::temp_dir().join("tc-limits-zero-cap");
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let o = sup_at(&audit)
+        .exec_limits(&["/bin/echo".to_string(), "hi".to_string()], 10, 0)
+        .unwrap();
+    assert!(o.allowed);
+    assert_eq!(o.stdout.len(), 0);
+    let text = std::fs::read_to_string(&audit).unwrap();
+    assert!(text.contains("truncated=true"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn empty_argv_is_rejected() {
+    let dir = std::env::temp_dir().join("tc-limits-empty-argv");
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let result = sup_at(&audit)
+        .exec_limits(&[], 5, 1024);
+    assert!(result.is_err(), "empty argv must be rejected");
+    let _ = std::fs::remove_dir_all(&dir);
+}
