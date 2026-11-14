@@ -103,3 +103,25 @@ fn ungated_denial_still_exits_2() {
         r.stderr
     );
 }
+
+#[test]
+fn unknown_host_denied_not_paused() {
+    // A host not in the allowlist is denied (exit 2), not paused (exit 3),
+    // even when approval would otherwise apply.
+    let r = mcp_call(
+        "http_fetch",
+        r#"{"host":"evil.example.com","method":"POST","path":"/x"}"#,
+    );
+    assert_eq!(
+        r.code,
+        Some(2),
+        "unknown host must be denied, not paused: {}{}",
+        r.stdout,
+        r.stderr
+    );
+    assert!(
+        r.stderr.contains("denied"),
+        "unknown host denial says 'denied': {}",
+        r.stderr
+    );
+}
