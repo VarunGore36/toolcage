@@ -441,4 +441,28 @@ mod sweep_tests {
         // Sweeping again finds nothing new.
         assert!(q.sweep_expired(2_000, 60).is_empty());
     }
+
+    #[test]
+    fn verdict_approve_then_sweep_stays_approved() {
+        let mut q = super::Queue::default();
+        let id = q.request("http.request", Some("example.com"), Some("GET"));
+        // Approve first
+        assert!(q.decide(&id, super::Verdict::Approve));
+        assert_eq!(q.resolve(&id), Some(true));
+        // Sweeping should not change an already-decided verdict
+        q.sweep_expired(1_000_000, 60);
+        assert_eq!(q.resolve(&id), Some(true));
+    }
+
+    #[test]
+    fn verdict_deny_then_sweep_stays_denied() {
+        let mut q = super::Queue::default();
+        let id = q.request("http.request", Some("evil.com"), Some("POST"));
+        // Deny first
+        assert!(q.decide(&id, super::Verdict::Deny));
+        assert_eq!(q.resolve(&id), Some(false));
+        // Sweeping should not change an already-decided verdict
+        q.sweep_expired(1_000_000, 60);
+        assert_eq!(q.resolve(&id), Some(false));
+    }
 }
