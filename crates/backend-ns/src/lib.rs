@@ -3632,3 +3632,22 @@ fn cgroup2_works_with_cgroup_mount() {
         "cgroup2 should not have controller subdirectory");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn cgroup_cleanup_removes_directory() {
+    if !cgroup_writable() {
+        eprintln!("skip: cgroup fs not available or read-only");
+        return;
+    }
+    let dir = match cgroup_mount("test", "cgroup-cleanup-test") {
+        Ok(d) => d,
+        Err(e) if e.to_string().contains("Permission denied") => {
+            eprintln!("skip: cgroup mount requires root: {e}");
+            return;
+        }
+        Err(e) => panic!("unexpected error: {e}"),
+    };
+    assert!(dir.exists(), "cgroup dir should exist after creation");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!dir.exists(), "cgroup dir should be removed after cleanup");
+}
