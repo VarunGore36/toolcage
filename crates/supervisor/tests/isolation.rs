@@ -96,3 +96,92 @@ fn unisolated_optin_runs_and_is_flagged() {
     toolcage_audit::verify(&audit).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn tier0_with_backend_executes() {
+    // With an explicit allow_unisolated=true and a tier0 backend, exec
+    // should succeed (the actual backend execution is covered by backend-ns
+    // tests, but we verify the supervisor wiring here).
+    let dir = std::env::temp_dir().join("tc-iso-tier0-backend");
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let mut sup = toolcage_supervisor::Supervisor {
+        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml"))
+            .unwrap(),
+        audit_path: audit.to_path_buf(),
+        session: "tier0-backend".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: true,
+        cap_key: None,
+        token_rev_id: String::new(),
+    };
+    // With allow_unisolated=true and tier0, exec runs (unisolated but audited)
+    let o = sup.exec(&["/bin/true".to_string()]).unwrap();
+    assert!(o.allowed);
+    assert!(o.rule_ids.contains(&"isolation:unisolated".to_string()));
+    let log = std::fs::read_to_string(&audit).unwrap();
+    assert!(log.contains("proc.exec"));
+    toolcage_audit::verify(&audit).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn audit_trail_has_intent_and_outcome() {
+    // Verify that the audit log contains both the intent (proc.exec request)
+    // and the outcome (allow/deny), ensuring fail-closed pairing (I4).
+    let dir = std::env::temp_dir().join("tc-iso-audit-trail");
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let mut sup = toolcage_supervisor::Supervisor {
+        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml"))
+            .unwrap(),
+        audit_path: audit.to_path_buf(),
+        session: "audit-trail".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: true,
+        cap_key: None,
+        token_rev_id: String::new(),
+    };
+    // Execute a command
+    let _ = sup.exec(&["/bin/echo".to_string(), "audit-trail".to_string()]).unwrap();
+    // Verify the audit log
+    let log = std::fs::read_to_string(&audit).unwrap();
+    assert!(log.contains("proc.exec"), "audit must contain proc.exec action");
+    assert!(log.contains("allow"), "audit must contain allow outcome");
+    // Verify the audit chain integrity
+    toolcage_audit::verify(&audit).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn denied_exec_is_audited() {
+    // A denied exec must still be audited (fail-closed: even denials are logged).
+    let dir = std::env::temp_dir().join("tc-iso-denied-audit");
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let mut sup = toolcage_supervisor::Supervisor {
+        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml"))
+            .unwrap(),
+        audit_path: audit.to_path_buf(),
+        session: "denied-audit".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: false,
+        cap_key: None,
+        token_rev_id: String::new(),
+    };
+    // Without allow_unisolated, exec should be denied
+    let o = sup.exec(&["/bin/echo".to_string(), "denied".to_string()]).unwrap();
+    assert!(!o.allowed);
+    // Verify the audit log records the denial
+    let log = std::fs::read_to_string(&audit).unwrap();
+    assert!(log.contains("proc.exec"), "audit must contain proc.exec action");
+    assert!(log.contains("deny"), "audit must contain deny outcome");
+    toolcage_audit::verify(&audit).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
