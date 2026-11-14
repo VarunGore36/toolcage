@@ -1513,3 +1513,44 @@ fn fs_policy_serialization() {
     assert_eq!(reparsed.fs.mounts[0].mode, "rw");
     assert_eq!(reparsed.fs.mounts[0].source, "/tmp/workspace");
 }
+
+#[test]
+fn limits_default_values() {
+    let limits = Limits::default();
+    assert_eq!(limits.cpu_seconds, 0);
+    assert_eq!(limits.memory_mb, 0);
+    assert_eq!(limits.egress_bytes, 0);
+    assert_eq!(limits.egress_requests, 0);
+}
+
+#[test]
+fn limits_all_set() {
+    let limits = Limits {
+        cpu_seconds: 300,
+        memory_mb: 1024,
+        egress_bytes: 1024 * 1024,
+        egress_requests: 1000,
+    };
+    assert_eq!(limits.cpu_seconds, 300);
+    assert_eq!(limits.memory_mb, 1024);
+    assert_eq!(limits.egress_bytes, 1024 * 1024);
+    assert_eq!(limits.egress_requests, 1000);
+}
+
+#[test]
+fn limits_serialization_roundtrip() {
+    use serde_json;
+    
+    let limits = Limits {
+        cpu_seconds: 60,
+        memory_mb: 512,
+        egress_bytes: 50 * 1024 * 1024,
+        egress_requests: 100,
+    };
+    let json = serde_json::to_string(&limits).unwrap();
+    let reparsed: Limits = serde_json::from_str(&json).unwrap();
+    assert_eq!(reparsed.cpu_seconds, 60);
+    assert_eq!(reparsed.memory_mb, 512);
+    assert_eq!(reparsed.egress_bytes, 50 * 1024 * 1024);
+    assert_eq!(reparsed.egress_requests, 100);
+}
