@@ -1000,4 +1000,11 @@ net:
         assert!(check_server_cmd(&["sh".to_string(), "-c".to_string(), "x".to_string()]).is_err());
         assert!(check_server_cmd(&["/bin/mcp-server".to_string()]).is_ok());
     }
+
+    #[test]
+    fn server_cmd_absolute_path_accepted() {
+        // Absolute paths should pass the exec policy check
+        assert!(check_server_cmd(&["/usr/bin/mcp-server".to_string()]).is_ok());
+        assert!(check_server_cmd(&["/bin/mcp-server".to_string()]).is_ok());
+    }
 }
