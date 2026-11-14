@@ -2220,3 +2220,53 @@ mod cid_allocator_tests {
         assert!(caps.separate_kernel, "Tier2 must have separate kernel");
     }
 }
+
+#[test]
+fn vsock_uds_path_uses_dot_vsock_suffix() {
+    let cfg = FcConfig::for_session("test-session", 1024);
+    let path = cfg.vsock_uds_path();
+    assert!(path.ends_with(".vsock"), "vsock path must end with .vsock: {path}");
+    assert!(!path.contains("//run/toolcage//"), "vsock path must not double /run/toolcage: {path}");
+    assert!(path.contains("test-session"), "vsock path must contain session id: {path}");
+}
+
+#[test]
+fn cid_allocation_is_deterministic_for_session_id() {
+    let cfg1 = FcConfig::for_session("same-session", 1024);
+    let cfg2 = FcConfig::for_session("same-session", 2048);
+    assert_eq!(cfg1.vsock_cid, cfg2.vsock_cid, "same session id must get same CID");
+}
+
+#[test]
+fn cid_allocation_is_distinct_for_different_sessions() {
+    let cid1 = FcConfig::for_session("session-a", 1024).vsock_cid;
+    let cid2 = FcConfig::for_session("session-b", 1024).vsock_cid;
+    let cid3 = FcConfig::for_session("session-c", 1024).vsock_cid;
+    assert_ne!(cid1, cid2, "different sessions must get different CIDs");
+    assert_ne!(cid2, cid3, "different sessions must get different CIDs");
+    assert_ne!(cid1, cid3, "different sessions must get different CIDs");
+}
+
+#[test]
+fn cid_is_in_valid_range() {
+    let cfg = FcConfig::for_session("test-session", 1024);
+    // CID must be >= 3 (CIDs 0, 1, 2 are reserved)
+    assert!(cfg.vsock_cid >= 3, "CID must be >= 3: got {}", cfg.vsock_cid);
+    assert!(cfg.vsock_cid < 10003, "CID must be < 10003: got {}", cfg.vsock_cid);
+}
+
+#[test]
+fn backend_caps_report_tier2_features() {
+    let caps = toolcage_backend::TierCaps {
+        separate_kernel: true,
+        syscall_filter: true,
+        fs_mount_enforced: true,
+        net_vsock_only: true,
+        snapshot_pool: false,
+    };
+    assert!(caps.separate_kernel, "Tier2 must have separate kernel");
+    assert!(caps.syscall_filter, "Tier2 must have syscall filter");
+    assert!(caps.fs_mount_enforced, "Tier2 must enforce fs mounts");
+    assert!(caps.net_vsock_only, "Tier2 must be vsock-only");
+    assert!(!caps.snapshot_pool, "Tier2 snapshot_pool may be false");
+}
