@@ -596,3 +596,21 @@ mod tests {
     }
 
 }
+
+#[test]
+fn backend_gv_probe_fields() {
+    let caps = GvBackend::probe();
+    // probe() should always return a valid GvProbe
+    assert!(caps.runsc_present == caps.runsc_version.is_some() || !caps.runsc_present);
+}
+
+#[test]
+fn backend_gv_runsc_probe_structure() {
+    let probe = GvBackend::probe();
+    // runsc_present and runsc_version should be consistent
+    if probe.runsc_present {
+        assert!(probe.runsc_version.is_some());
+    } else {
+        assert!(probe.runsc_version.is_none());
+    }
+}
