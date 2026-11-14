@@ -2342,3 +2342,53 @@ fn backend_caps_tier2_specific() {
     assert!(caps.net_vsock_only, "Tier2 must be vsock-only (no NIC)");
     assert!(caps.snapshot_pool, "Tier2 uses snapshot pool");
 }
+
+#[test]
+fn fc_config_for_session_fields() {
+    let cfg = FcConfig::for_session("test-session", 2048);
+    assert_eq!(cfg.mem_mb, 2048);
+    assert_eq!(cfg.vcpu, 1);
+    assert!(cfg.vsock_cid >= 3);
+    assert!(!cfg.boot_args.is_empty());
+}
+
+#[test]
+fn fc_config_vsock_path_format() {
+    let cfg = FcConfig::for_session("test-session", 1024);
+    let vsock_path = cfg.vsock_uds_path();
+    assert!(vsock_path.ends_with(".vsock"));
+    assert!(vsock_path.contains("test-session"));
+    assert!(!vsock_path.contains("//"));
+}
+
+#[test]
+fn tier2_caps_fields() {
+    let caps = toolcage_backend::TierCaps {
+        separate_kernel: true,
+        syscall_filter: true,
+        fs_mount_enforced: true,
+        net_vsock_only: true,
+        snapshot_pool: false,
+    };
+    assert!(caps.separate_kernel);
+    assert!(caps.syscall_filter);
+    assert!(caps.fs_mount_enforced);
+    assert!(caps.net_vsock_only);
+    assert!(!caps.snapshot_pool);
+}
+
+#[test]
+fn tier2_caps_all_false() {
+    let caps = toolcage_backend::TierCaps {
+        separate_kernel: false,
+        syscall_filter: false,
+        fs_mount_enforced: false,
+        net_vsock_only: false,
+        snapshot_pool: false,
+    };
+    assert!(!caps.separate_kernel);
+    assert!(!caps.syscall_filter);
+    assert!(!caps.fs_mount_enforced);
+    assert!(!caps.net_vsock_only);
+    assert!(!caps.snapshot_pool);
+}
