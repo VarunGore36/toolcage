@@ -495,3 +495,25 @@ fn supervisor_session_id_variants_final() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+
+#[test]
+fn supervisor_session_id_empty_allowed() {
+    let dir = std::env::temp_dir().join(format!("tc-iso-empty-sid-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let mut sup = toolcage_supervisor::Supervisor {
+        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+        audit_path: audit.to_path_buf(),
+        session: "".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: true,
+        cap_key: None,
+        token_rev_id: String::new(),
+    };
+    let o = sup.exec(&["/bin/true".to_string()]).unwrap();
+    assert!(o.allowed, "empty session ID should be allowed");
+    let _ = std::fs::remove_dir_all(&dir);
+}
