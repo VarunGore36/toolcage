@@ -1420,3 +1420,46 @@ mod exec_denylist_tests {
         ]));
     }
 }
+
+#[test]
+fn exec_policy_allowlist_validation() {
+    
+    // Empty allowlist means denylist-only (back-compat)
+    let pol = Policy::default();
+    assert!(pol.exec.allowlist.is_empty());
+
+    // Allowlist with specific binaries
+    let mut pol = Policy::default();
+    pol.exec.allowlist = vec!["echo".to_string(), "cat".to_string()];
+    assert_eq!(pol.exec.allowlist.len(), 2);
+    assert!(pol.exec.allowlist.contains(&"echo".to_string()));
+    assert!(pol.exec.allowlist.contains(&"cat".to_string()));
+    assert!(!pol.exec.allowlist.contains(&"sh".to_string()));
+
+    // Limits with cpu_seconds
+    let mut pol = Policy::default();
+    pol.limits.cpu_seconds = 300;
+    pol.limits.memory_mb = 512;
+    assert_eq!(pol.limits.cpu_seconds, 300);
+    assert_eq!(pol.limits.memory_mb, 512);
+    assert_eq!(pol.limits.egress_bytes, 0); // zero means unlimited
+    assert_eq!(pol.limits.egress_requests, 0);
+}
+
+#[test]
+fn exec_policy_limits_serialization() {
+    use serde_json;
+    
+    let mut pol = Policy::default();
+    pol.exec.allowlist = vec!["echo".to_string(), "cat".to_string()];
+    pol.limits.cpu_seconds = 300;
+    pol.limits.memory_mb = 512;
+    pol.limits.egress_bytes = 1024 * 1024;
+
+    let json = serde_json::to_string(&pol).unwrap();
+    let reparsed: Policy = serde_json::from_str(&json).unwrap();
+    assert_eq!(reparsed.exec.allowlist, vec!["echo".to_string(), "cat".to_string()]);
+    assert_eq!(reparsed.limits.cpu_seconds, 300);
+    assert_eq!(reparsed.limits.memory_mb, 512);
+    assert_eq!(reparsed.limits.egress_bytes, 1024 * 1024);
+}
