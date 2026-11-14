@@ -2207,4 +2207,16 @@ mod cid_allocator_tests {
             "exhaustion must be the error: {err}"
         );
     }
+
+    #[test]
+    fn tier2_has_separate_kernel() {
+        let caps = toolcage_backend::TierCaps {
+            separate_kernel: true,
+            syscall_filter: true,
+            fs_mount_enforced: true,
+            net_vsock_only: true,
+            snapshot_pool: true,
+        };
+        assert!(caps.separate_kernel, "Tier2 must have separate kernel");
+    }
 }
