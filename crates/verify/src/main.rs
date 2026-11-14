@@ -64,3 +64,56 @@ fn main() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_nibble_valid_chars() {
+        assert_eq!(hex_nibble(b'0'), Some(0));
+        assert_eq!(hex_nibble(b'9'), Some(9));
+        assert_eq!(hex_nibble(b'a'), Some(10));
+        assert_eq!(hex_nibble(b'f'), Some(15));
+        assert_eq!(hex_nibble(b'A'), Some(10));
+        assert_eq!(hex_nibble(b'F'), Some(15));
+    }
+
+    #[test]
+    fn hex_nibble_invalid_chars() {
+        assert!(hex_nibble(b'g').is_none());
+        assert!(hex_nibble(b'Z').is_none());
+        assert!(hex_nibble(b' ').is_none());
+        assert!(hex_nibble(b'\n').is_none());
+    }
+
+    #[test]
+    fn parse_hex32_valid() {
+        let key = parse_hex32("0000000000000000000000000000000000000000000000000000000000000000").unwrap();
+        assert_eq!(key, [0u8; 32]);
+
+        let key = parse_hex32("ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00").unwrap();
+        assert_eq!(key, [0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00]);
+    }
+
+    #[test]
+    fn parse_hex32_rejects_wrong_length() {
+        assert!(parse_hex32("").is_err());
+        assert!(parse_hex32("00").is_err());
+        assert!(parse_hex32("00000000000000000000000000000000000000000000000000000000000000").is_err()); // 63 chars
+        assert!(parse_hex32("00000000000000000000000000000000000000000000000000000000000000000").is_err()); // 65 chars
+    }
+
+    #[test]
+    fn parse_hex32_rejects_non_hex() {
+        assert!(parse_hex32("000000000000000000000000000000000000000000000000000000000000000g").is_err());
+        assert!(parse_hex32("00000000000000000000000000000000000000000000000000000000000000GG").is_err());
+        assert!(parse_hex32("GG00000000000000000000000000000000000000000000000000000000000000").is_err());
+    }
+
+    #[test]
+    fn parse_hex32_trims_whitespace() {
+        let key = parse_hex32("  0000000000000000000000000000000000000000000000000000000000000000  ").unwrap();
+        assert_eq!(key, [0u8; 32]);
+    }
+}
