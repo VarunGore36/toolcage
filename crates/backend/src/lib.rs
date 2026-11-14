@@ -109,6 +109,77 @@ mod tests {
         assert_eq!(spec.workspace_mb, 0);
         assert_eq!(spec.workspace, "/tmp/test-workspace");
     }
+    use super::*;
+
+    #[test]
+    fn tier_parse_handles_whitespace() {
+        // Tier::parse does not trim whitespace - exact match required
+        assert!(Tier::parse(" tier0 ").is_err());
+        assert!(Tier::parse("  TIER1  ").is_err());
+        assert!(Tier::parse("\tTier2\t").is_err());
+        // But trimmed versions work
+        assert_eq!(Tier::parse("tier0").unwrap(), Tier::Tier0);
+        assert_eq!(Tier::parse("TIER1").unwrap(), Tier::Tier1);
+        assert_eq!(Tier::parse("Tier2").unwrap(), Tier::Tier2);
+    }
+
+    #[test]
+    fn tier_caps_default_all_false() {
+        let caps = TierCaps {
+            separate_kernel: false,
+            syscall_filter: false,
+            fs_mount_enforced: false,
+            net_vsock_only: false,
+            snapshot_pool: false,
+        };
+        assert!(!caps.separate_kernel);
+        assert!(!caps.syscall_filter);
+        assert!(!caps.fs_mount_enforced);
+        assert!(!caps.net_vsock_only);
+        assert!(!caps.snapshot_pool);
+    }
+
+    #[test]
+    fn tier_caps_all_true() {
+        let caps = TierCaps {
+            separate_kernel: true,
+            syscall_filter: true,
+            fs_mount_enforced: true,
+            net_vsock_only: true,
+            snapshot_pool: true,
+        };
+        assert!(caps.separate_kernel);
+        assert!(caps.syscall_filter);
+        assert!(caps.fs_mount_enforced);
+        assert!(caps.net_vsock_only);
+        assert!(caps.snapshot_pool);
+    }
+
+    #[test]
+    fn session_spec_defaults() {
+        let spec = SessionSpec {
+            id: "test-session".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            cpu_millis: 0,
+            workspace_mb: 0,
+            workspace: "/workspace".into(),
+        };
+        assert_eq!(spec.id, "test-session");
+        assert_eq!(spec.tier, Tier::Tier0);
+        assert_eq!(spec.mem_mb, 0);
+        assert_eq!(spec.cpu_millis, 0);
+        assert_eq!(spec.workspace_mb, 0);
+        assert_eq!(spec.workspace, "/workspace");
+    }
+
+    #[test]
+    fn tier_equality_and_ordering() {
+        assert_eq!(Tier::Tier0, Tier::Tier0);
+        assert_ne!(Tier::Tier0, Tier::Tier1);
+        assert_ne!(Tier::Tier1, Tier::Tier2);
+        assert_ne!(Tier::Tier0, Tier::Tier2);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -148,3 +219,4 @@ pub trait Backend {
         anyhow::bail!("backend exec not implemented for tier {:?}", self.tier())
     }
 }
+
