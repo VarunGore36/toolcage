@@ -264,3 +264,12 @@ fn mcp_call_unknown_host_denied() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn doctor_command_runs() {
+    let status = cli_run(&[
+        "doctor",
+    ]);
+    // doctor should succeed if basic isolation is available
+    assert!(status.success(), "doctor should exit 0, got {:?}", status.code());
+}
