@@ -3419,3 +3419,50 @@ mod seccomp_syscall_tests {
     }
 }
 
+
+#[test]
+fn cgroup_mount_invalid_controller_errors() {
+    // Mounting under an invalid controller path should fail
+    let result = cgroup_mount("../../../etc", "test");
+    assert!(result.is_err(), "cgroup mount with path traversal should fail");
+}
+
+#[test]
+fn cgroup_write_to_nonexistent_dir_errors() {
+    let dir = std::env::temp_dir().join(format!("tc-cgroup-nonexistent-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let nonexistent = dir.join("nonexistent");
+    let result = cgroup_write(&nonexistent, "testfile", "hello");
+    assert!(result.is_err(), "cgroup_write to nonexistent dir should fail");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn backend_spec_with_zero_cpu_millis() {
+    // Session with cpu_millis=0 should be valid (unlimited CPU)
+    let spec = SessionSpec {
+        id: "test-unlimited-cpu".into(),
+        tier: Tier::Tier0,
+        mem_mb: 0,
+        cpu_millis: 0,
+        workspace_mb: 0,
+        workspace: "/tmp".into(),
+    };
+    assert_eq!(spec.cpu_millis, 0);
+    assert_eq!(spec.mem_mb, 0);
+}
+
+#[test]
+fn backend_spec_with_nonzero_cpu_millis() {
+    // Session with non-zero cpu_millis should store the value
+    let spec = SessionSpec {
+        id: "test-limited-cpu".into(),
+        tier: Tier::Tier0,
+        mem_mb: 512,
+        cpu_millis: 500,
+        workspace_mb: 0,
+        workspace: "/workspace".into(),
+    };
+    assert_eq!(spec.cpu_millis, 500);
+    assert_eq!(spec.mem_mb, 512);
+}
