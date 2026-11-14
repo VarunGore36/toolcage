@@ -944,9 +944,9 @@ mod tests {
             .unwrap();
         // A valid three-event log (same shape as the other checkpoint tests),
         // so verification reaches the checkpoint scan.
-        let mut w = super::Writer::open(&p).unwrap();
+        let mut w = Writer::open(&p).unwrap();
         for i in 0..3 {
-            w.append(super::Event {
+            w.append(Event {
                 seq: 0,
                 ts_wall: "2026-01-01T00:00:00Z".into(),
                 session: "s1".into(),
@@ -986,9 +986,9 @@ mod tests {
             let p = Path::new("audit.jsonl");
             let _ = std::fs::remove_file(p);
             let sk = [11u8; 32];
-            let mut w = super::Writer::open(p).unwrap();
+            let mut w = Writer::open(p).unwrap();
             for i in 0..3 {
-                w.append(super::Event {
+                w.append(Event {
                     seq: 0,
                     ts_wall: "2026-01-01T00:00:00Z".into(),
                     session: "s1".into(),
@@ -1006,7 +1006,7 @@ mod tests {
                 })
                 .unwrap();
             }
-            let (n, head) = super::verify(p).unwrap();
+            let (n, head) = verify(p).unwrap();
             assert_eq!(n, 3);
             let cp = super::sign_checkpoint(n, &head, "99", &sk).unwrap();
             let pk_hex = cp.pubkey_hex.clone();
@@ -1019,7 +1019,7 @@ mod tests {
             f.write_all(serde_json::to_string(&cp).unwrap().as_bytes())
                 .unwrap();
             // Relative path: used to fail with "no checkpoint files found".
-            super::verify_with_pubkey(p, Some(&pk))?;
+            verify_with_pubkey(p, Some(&pk))?;
             Ok(())
         })();
         let _ = std::env::set_current_dir(&prev_cwd);
@@ -1032,11 +1032,85 @@ mod tests {
         use serde_json::json;
         let body1 = json!({"seq": 1, "action": "test"});
         let body2 = json!({"seq": 1, "action": "test"});
-        let h1 = super::hash_for("genesis", &body1);
-        let h2 = super::hash_for("genesis", &body2);
+        let h1 = hash_for("genesis", &body1);
+        let h2 = hash_for("genesis", &body2);
         assert_eq!(h1, h2, "same inputs must produce same hash");
-        let h3 = super::hash_for("different", &body1);
+        let h3 = hash_for("different", &body1);
         assert_ne!(h1, h3, "different prev_hash must produce different hash");
         assert!(!h1.is_empty(), "hash must not be empty");
     }
+}
+
+#[test]
+fn event_seq_increments_monotonically() {
+    let dir = std::env::temp_dir().join(format!("tc-audit-seq-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("a.jsonl");
+    let mut w = Writer::open(&log).unwrap();
+    let mut last_seq: u64 = 0;
+    for i in 1..=5 {
+        let e = Event {
+            seq: i,
+            ts_wall: "2026-01-01T00:00:00Z".into(),
+            session: "s1".into(),
+            actor: "test".into(),
+            action: "proc.exec".into(),
+            request_hash: format!("hash-{}", i),
+            decision: "allow".into(),
+            rule_ids: vec![],
+            token_rev_id: "r".into(),
+            result: "ok".into(),
+            bytes: 0,
+            claimed_by: "host".into(),
+            prev_hash: "0".repeat(64),
+            hash: "1".repeat(64),
+        };
+        w.append(e).unwrap();
+        assert!(i > last_seq, "seq must increase: {i} <= {last_seq}");
+        last_seq = i;
+    }
+    drop(w);
+    let (n, _) = verify(&log).unwrap();
+    assert_eq!(n, 5, "all 5 events verified");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn event_hash_chain_is_sequential() {
+    let dir = std::env::temp_dir().join(format!("tc-audit-chain-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("a.jsonl");
+    let mut w = Writer::open(&log).unwrap();
+    let mut prev_hash = "0".repeat(64);
+    for i in 1..=5 {
+        let body = serde_json::json!({
+            "seq": i,
+            "action": "proc.exec",
+            "session": "s1",
+        });
+        let h = hash_for(&prev_hash, &body);
+        let e = Event {
+            seq: i,
+            ts_wall: "2026-01-01T00:00:00Z".into(),
+            session: "s1".into(),
+            actor: "test".into(),
+            action: "proc.exec".into(),
+            request_hash: h.clone(),
+            decision: "allow".into(),
+            rule_ids: vec![],
+            token_rev_id: "r".into(),
+            result: "ok".into(),
+            bytes: 0,
+            claimed_by: "host".into(),
+            prev_hash: prev_hash.clone(),
+            hash: h.clone(),
+        };
+        w.append(e).unwrap();
+        prev_hash = h;
+    }
+    drop(w);
+    let (n, head) = verify(&log).unwrap();
+    assert_eq!(n, 5, "all 5 events verified");
+    assert!(!head.is_empty(), "head hash is non-empty");
+    let _ = std::fs::remove_dir_all(&dir);
 }
