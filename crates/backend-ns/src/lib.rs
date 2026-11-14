@@ -71,9 +71,9 @@ use anyhow::Context;
 use nix::fcntl::{open, OFlag};
 use nix::sys::stat::Mode;
 use nix::unistd::{close, fork, pipe2, ForkResult};
-use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier, GUEST_PATH};
 use std::fs::create_dir_all;
 use std::io::Write;
+use toolcage_backend::{Backend, CommandResult, SessionSpec, Tier, GUEST_PATH};
 
 // Test fixture value: exec() takes `cap` from the caller now, so the 1 MiB
 // default lives in the tests that exercise the cap.
@@ -704,7 +704,11 @@ fn isolated_exec(
     // runs inside it; the previous shape ran it in the host PID namespace.
     // Cgroup: create session cgroup and set resource limits before fork
     let cgroup_dir = cgroup_mount("ns", &spec.id)?;
-    cgroup_write_max(&cgroup_dir, "cpu.max", &format!("{}", spec.cpu_millis * 1000))?;
+    cgroup_write_max(
+        &cgroup_dir,
+        "cpu.max",
+        &format!("{}", spec.cpu_millis * 1000),
+    )?;
     // On cgroup v1, also set cpu.cfs_quota_us/cpu.cfs_period_us for hard throttling.
     // On cgroup v2, cpu.max above is sufficient.
     if spec.cpu_millis > 0 && !cgroup2_available() {
@@ -713,14 +717,22 @@ fn isolated_exec(
         let _ = cgroup_write(&cgroup_dir, "cpu.cfs_quota_us", &quota.to_string());
         let _ = cgroup_write(&cgroup_dir, "cpu.cfs_period_us", &period.to_string());
     }
-    cgroup_write_max(&cgroup_dir, "memory.max", &format!("{}", spec.mem_mb * 1024 * 1024))?;
+    cgroup_write_max(
+        &cgroup_dir,
+        "memory.max",
+        &format!("{}", spec.mem_mb * 1024 * 1024),
+    )?;
     // Set memory swap limit: on cgroup v2 use memory.swap.max, on v1 use memory.memsw.limit_in_bytes
     if spec.mem_mb > 0 {
         let swap_bytes = spec.mem_mb * 1024 * 1024; // same as memory limit for swap
         if cgroup2_available() {
             let _ = cgroup_write(&cgroup_dir, "memory.swap.max", &swap_bytes.to_string());
         } else {
-            let _ = cgroup_write(&cgroup_dir, "memory.memsw.limit_in_bytes", &swap_bytes.to_string());
+            let _ = cgroup_write(
+                &cgroup_dir,
+                "memory.memsw.limit_in_bytes",
+                &swap_bytes.to_string(),
+            );
         }
     }
     cgroup_write_max(&cgroup_dir, "pids.max", "1024")?;
@@ -1535,7 +1547,9 @@ mod tests {
     #[test]
     fn tier0_exec_runs_command() {
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-exec-{}", std::process::id()));
@@ -1569,7 +1583,9 @@ mod tests {
     #[test]
     fn tier0_network_isolated() {
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         // Helper: try connect() to an external IP. Inside the new network
@@ -1640,7 +1656,9 @@ mod tests {
     #[test]
     fn tier0_environment_cleared() {
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-env-{}", std::process::id()));
@@ -1688,7 +1706,9 @@ mod tests {
     #[test]
     fn tier0_landlock_blocks_outside_workspace() {
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-landlock-{}", std::process::id()));
@@ -1902,7 +1922,7 @@ mod tests {
 
         for &nr in BLOCKED_SYSCALLS {
             assert_eq!(
-                crate::tests::run_filter(&insns, nr as i32),
+                crate::tests::run_filter(&insns, nr),
                 deny_verdict,
                 "blocked syscall {nr} must be denied with EPERM"
             );
@@ -1942,7 +1962,7 @@ mod tests {
             318, // getrandom
         ] {
             assert_eq!(
-                crate::tests::run_filter(&insns, nr as i32),
+                crate::tests::run_filter(&insns, nr),
                 SECCOMP_RET_ALLOW,
                 "ordinary syscall {nr} must be allowed"
             );
@@ -1955,7 +1975,7 @@ mod tests {
                 continue;
             }
             assert_eq!(
-                crate::tests::run_filter(&insns, nr as i32),
+                crate::tests::run_filter(&insns, nr),
                 SECCOMP_RET_ALLOW,
                 "syscall {nr} is not on the denylist and must be allowed"
             );
@@ -2039,7 +2059,9 @@ mod tests {
         // the audit log). Rust std marks its fds CLOEXEC, so open one by hand
         // to get a genuinely-inherited fd.
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-fdleak-{}", std::process::id()));
@@ -2097,7 +2119,9 @@ mod tests {
         // the guest. Put known content on fd 0 and verify the workload can't
         // read it.
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-stdin-{}", std::process::id()));
@@ -2147,7 +2171,9 @@ mod tests {
         //
         // Forced at the chdir site with a workspace that is a regular file.
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-childexit-{}", std::process::id()));
@@ -2205,7 +2231,9 @@ mod tests {
         // captured stderr pipe. (Also locks that the message is written in
         // full: v0 hardcoded a length that truncated it.)
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-execfail-{}", std::process::id()));
@@ -2450,7 +2478,9 @@ mod tests {
         // injection switch, so the tests running concurrently in this binary
         // are unaffected.
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-parentfail-{}", std::process::id()));
@@ -2520,7 +2550,9 @@ mod tests {
         // `$$` is the shell's getpid() — /proc is still the host's procfs, so
         // /proc/self would misleadingly show the host pid.
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-pidns-{}", std::process::id()));
@@ -2570,7 +2602,9 @@ mod tests {
         // Like any race test this is probabilistic: with the locking wrapper it
         // failed ~5 runs in 12 here.
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         // Keep libc locks hot in this process while the execs clone.
@@ -2645,7 +2679,9 @@ mod tests {
         // SIGKILLed at the 30 s deadline and recorded as a timeout — with
         // truncated=false and only the buffered ~64 KiB of output.
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-bigout-{}", std::process::id()));
@@ -2701,7 +2737,9 @@ mod tests {
         // 2 MiB also exceeds every pipe buffer on this host, so this is the
         // deterministic regression for the wait-then-drain deadlock.
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-overcap-{}", std::process::id()));
@@ -2740,7 +2778,9 @@ mod tests {
         // every run was killed at the hardcoded 30s). A 10s sleep with a 2s
         // timeout must be killed promptly, not after 30s.
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-timeout-{}", std::process::id()));
@@ -2784,7 +2824,9 @@ mod tests {
         // every run used the hardcoded 1 MiB). Output past cap is truncated
         // and the flag set.
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-cap-{}", std::process::id()));
@@ -3041,7 +3083,9 @@ mod exec_not_found_tests {
     #[test]
     fn exec_with_non_zero_exit() {
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-exit-{}", std::process::id()));
@@ -3056,7 +3100,9 @@ mod exec_not_found_tests {
         };
         let mut b = NsBackend::new();
         b.create(&spec).unwrap();
-        let r = b.exec(&spec.id, &["/bin/false".to_string()], 30, OUTPUT_CAP).unwrap();
+        let r = b
+            .exec(&spec.id, &["/bin/false".to_string()], 30, OUTPUT_CAP)
+            .unwrap();
         assert_eq!(r.exit_code, Some(1), "non-zero exit must be reported");
         b.destroy(&spec.id).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
@@ -3065,7 +3111,9 @@ mod exec_not_found_tests {
     #[test]
     fn exec_output_cap_truncates() {
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-cap-{}", std::process::id()));
@@ -3081,9 +3129,24 @@ mod exec_not_found_tests {
         let mut b = NsBackend::new();
         b.create(&spec).unwrap();
         // Request a tiny cap (10 bytes) - output should be truncated
-        let r = b.exec(&spec.id, &["/bin/echo".to_string(), "this-is-a-very-long-string-that-exceeds-the-cap".to_string()], 30, 10).unwrap();
+        let r = b
+            .exec(
+                &spec.id,
+                &[
+                    "/bin/echo".to_string(),
+                    "this-is-a-very-long-string-that-exceeds-the-cap".to_string(),
+                ],
+                30,
+                10,
+            )
+            .unwrap();
         assert!(r.truncated, "output over cap must be flagged as truncated");
-        assert!(r.stdout.len() <= 10, "output must be capped at {} bytes, got {}", 10, r.stdout.len());
+        assert!(
+            r.stdout.len() <= 10,
+            "output must be capped at {} bytes, got {}",
+            10,
+            r.stdout.len()
+        );
         b.destroy(&spec.id).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3091,7 +3154,9 @@ mod exec_not_found_tests {
     #[test]
     fn exec_stderr_is_captured() {
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-stderr-{}", std::process::id()));
@@ -3107,7 +3172,18 @@ mod exec_not_found_tests {
         let mut b = NsBackend::new();
         b.create(&spec).unwrap();
         // /bin/echo writes to stderr with >&2
-        let r = b.exec(&spec.id, &["/bin/sh".to_string(), "-c".to_string(), "echo stderr-msg >&2".to_string()], 30, OUTPUT_CAP).unwrap();
+        let r = b
+            .exec(
+                &spec.id,
+                &[
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "echo stderr-msg >&2".to_string(),
+                ],
+                30,
+                OUTPUT_CAP,
+            )
+            .unwrap();
         assert_eq!(r.exit_code, Some(0));
         assert_eq!(String::from_utf8_lossy(&r.stderr).trim(), "stderr-msg");
         b.destroy(&spec.id).unwrap();
@@ -3117,7 +3193,9 @@ mod exec_not_found_tests {
     #[test]
     fn exec_stdout_and_stderr_together() {
         if !crate::tests::isolated() || !cgroup_writable() {
-            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            eprintln!(
+                "skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)"
+            );
             return;
         }
         let dir = std::env::temp_dir().join(format!("tc-ns-stdout-stderr-{}", std::process::id()));
@@ -3133,7 +3211,18 @@ mod exec_not_found_tests {
         let mut b = NsBackend::new();
         b.create(&spec).unwrap();
         // Output to both stdout and stderr
-        let r = b.exec(&spec.id, &["/bin/sh".to_string(), "-c".to_string(), "echo stdout-msg; echo stderr-msg >&2".to_string()], 30, OUTPUT_CAP).unwrap();
+        let r = b
+            .exec(
+                &spec.id,
+                &[
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "echo stdout-msg; echo stderr-msg >&2".to_string(),
+                ],
+                30,
+                OUTPUT_CAP,
+            )
+            .unwrap();
         assert_eq!(r.exit_code, Some(0));
         assert_eq!(String::from_utf8_lossy(&r.stdout).trim(), "stdout-msg");
         assert_eq!(String::from_utf8_lossy(&r.stderr).trim(), "stderr-msg");
@@ -3146,6 +3235,7 @@ mod exec_not_found_tests {
 mod cgroup_tests {
     use super::*;
 
+    #[allow(dead_code)]
     fn cgroup_available() -> bool {
         std::path::Path::new("/sys/fs/cgroup").exists()
             && std::fs::metadata("/sys/fs/cgroup")
@@ -3247,10 +3337,16 @@ mod cgroup_tests {
         match cgroup_write_max(&dir, "cpu.max", "500000 100000") {
             Ok(()) => {
                 let content = std::fs::read_to_string(dir.join("cpu.max")).unwrap();
-                let parts: Vec<&str> = content.trim().split_whitespace().collect();
+                let parts: Vec<&str> = content.split_whitespace().collect();
                 assert_eq!(parts.len(), 2, "cpu.max must have quota period format");
-                assert_eq!(parts[0], "500000", "cpu.max quota must be 500000 microseconds");
-                assert_eq!(parts[1], "100000", "cpu.max period must be 100000 microseconds");
+                assert_eq!(
+                    parts[0], "500000",
+                    "cpu.max quota must be 500000 microseconds"
+                );
+                assert_eq!(
+                    parts[1], "100000",
+                    "cpu.max period must be 100000 microseconds"
+                );
             }
             Err(e) if e.to_string().contains("Permission denied") => {
                 eprintln!("skip: cgroup write requires root: {e}");
@@ -3280,7 +3376,11 @@ mod cgroup_tests {
         match cgroup_write_max(&dir, "memory.max", &bytes.to_string()) {
             Ok(()) => {
                 let content = std::fs::read_to_string(dir.join("memory.max")).unwrap();
-                assert_eq!(content.trim(), bytes.to_string(), "memory.max must be in bytes");
+                assert_eq!(
+                    content.trim(),
+                    bytes.to_string(),
+                    "memory.max must be in bytes"
+                );
             }
             Err(e) if e.to_string().contains("Permission denied") => {
                 eprintln!("skip: cgroup write requires root: {e}");
@@ -3327,7 +3427,11 @@ mod cgroup_tests {
             match cgroup_write(&dir, file, value) {
                 Ok(()) => {
                     let read_back = std::fs::read_to_string(dir.join(file)).unwrap();
-                    assert_eq!(read_back.trim(), value, "cgroup_write should persist value for {file}");
+                    assert_eq!(
+                        read_back.trim(),
+                        value,
+                        "cgroup_write should persist value for {file}"
+                    );
                 }
                 Err(e) if e.to_string().contains("Permission denied") => {
                     eprintln!("skip: cgroup write requires root: {e}");
@@ -3343,166 +3447,162 @@ mod cgroup_tests {
     fn cgroup_mount_invalid_controller_errors() {
         // Mounting under an invalid controller path should fail
         let result = cgroup_mount("../../../etc", "test");
-        assert!(result.is_err(), "cgroup mount with path traversal should fail");
-    }
-
-#[cfg(test)]
-#[cfg(test)]
-mod seccomp_syscall_tests {
-    use super::*;
-
-    #[test]
-    fn mount_family_syscalls_are_blocked() {
-        let insns = build_seccomp_insns();
-        let deny_verdict = SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA);
-
-        // mount family: workload must not create mounts Landlock doesn't anticipate
-        for nr in [
-            libc::SYS_mount,
-            libc::SYS_umount2,
-            libc::SYS_pivot_root,
-        ] {
-            assert_eq!(
-                crate::tests::run_filter(&insns, nr as i32),
-                deny_verdict,
-                "mount-family syscall {nr} must be denied"
-            );
-        }
-    }
-
-    #[test]
-    fn module_and_boot_syscalls_are_blocked() {
-        let insns = build_seccomp_insns();
-        let deny_verdict = SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA);
-
-        // module loading and kexec are privileged operations
-        for nr in [
-            libc::SYS_init_module,
-            libc::SYS_finit_module,
-            libc::SYS_kexec_load,
-            libc::SYS_reboot,
-            libc::SYS_iopl,
-            libc::SYS_ioperm,
-        ] {
-            assert_eq!(
-                crate::tests::run_filter(&insns, nr as i32),
-                deny_verdict,
-                "privileged syscall {nr} must be denied"
-            );
-        }
-    }
-
-    #[test]
-    fn socket_syscalls_are_blocked() {
-        let insns = build_seccomp_insns();
-        let deny_verdict = SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA);
-
-        // socket family: guest must not create network sockets
-        for nr in [
-            libc::SYS_socket,
-            libc::SYS_socketpair,
-            libc::SYS_accept4,
-            libc::SYS_recvmmsg,
-        ] {
-            assert_eq!(
-                crate::tests::run_filter(&insns, nr as i32),
-                deny_verdict,
-                "socket syscall {nr} must be denied"
-            );
-        }
-    }
-
-    #[test]
-    fn ptrace_and_ns_syscalls_are_blocked() {
-        let insns = build_seccomp_insns();
-        let deny_verdict = SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA);
-
-        // namespace manipulation and process inspection are blocked
-        for nr in [
-            libc::SYS_unshare,
-            libc::SYS_setns,
-            libc::SYS_ptrace,
-            libc::SYS_process_vm_writev,
-        ] {
-            assert_eq!(
-                crate::tests::run_filter(&insns, nr as i32),
-                deny_verdict,
-                "namespace/ptrace syscall {nr} must be denied"
-            );
-        }
-    }
-
-    #[test]
-    fn seccomp_filter_structure_is_valid() {
-        let insns = build_seccomp_insns();
-        assert!(!insns.is_empty(), "seccomp filter must not be empty");
-
-        // First instruction loads architecture from offset 4
-        assert_eq!(insns[0].k, 4, "first insn must load arch from offset 4");
-
-        // Last instruction must return ALLOW (catch-all)
-        let last = insns.last().unwrap();
-        assert_eq!(
-            last.k,
-            SECCOMP_RET_ALLOW as u32,
-            "last insn must return ALLOW"
+        assert!(
+            result.is_err(),
+            "cgroup mount with path traversal should fail"
         );
     }
 
-    #[test]
-    fn blocked_syscalls_have_no_duplicates() {
-        let mut seen = std::collections::HashSet::new();
-        for &nr in BLOCKED_SYSCALLS {
-            assert!(
-                seen.insert(nr),
-                "blocked syscall {nr} appears more than once"
-            );
+    #[cfg(test)]
+    #[cfg(test)]
+    mod seccomp_syscall_tests {
+        use super::*;
+
+        #[test]
+        fn mount_family_syscalls_are_blocked() {
+            let insns = build_seccomp_insns();
+            let deny_verdict = SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA);
+
+            // mount family: workload must not create mounts Landlock doesn't anticipate
+            for nr in [libc::SYS_mount, libc::SYS_umount2, libc::SYS_pivot_root] {
+                assert_eq!(
+                    crate::tests::run_filter(&insns, nr as i32),
+                    deny_verdict,
+                    "mount-family syscall {nr} must be denied"
+                );
+            }
+        }
+
+        #[test]
+        fn module_and_boot_syscalls_are_blocked() {
+            let insns = build_seccomp_insns();
+            let deny_verdict = SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA);
+
+            // module loading and kexec are privileged operations
+            for nr in [
+                libc::SYS_init_module,
+                libc::SYS_finit_module,
+                libc::SYS_kexec_load,
+                libc::SYS_reboot,
+                libc::SYS_iopl,
+                libc::SYS_ioperm,
+            ] {
+                assert_eq!(
+                    crate::tests::run_filter(&insns, nr as i32),
+                    deny_verdict,
+                    "privileged syscall {nr} must be denied"
+                );
+            }
+        }
+
+        #[test]
+        fn socket_syscalls_are_blocked() {
+            let insns = build_seccomp_insns();
+            let deny_verdict = SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA);
+
+            // socket family: guest must not create network sockets
+            for nr in [
+                libc::SYS_socket,
+                libc::SYS_socketpair,
+                libc::SYS_accept4,
+                libc::SYS_recvmmsg,
+            ] {
+                assert_eq!(
+                    crate::tests::run_filter(&insns, nr as i32),
+                    deny_verdict,
+                    "socket syscall {nr} must be denied"
+                );
+            }
+        }
+
+        #[test]
+        fn ptrace_and_ns_syscalls_are_blocked() {
+            let insns = build_seccomp_insns();
+            let deny_verdict = SECCOMP_RET_ERRNO | ((EPERM as u32) & SECCOMP_RET_DATA);
+
+            // namespace manipulation and process inspection are blocked
+            for nr in [
+                libc::SYS_unshare,
+                libc::SYS_setns,
+                libc::SYS_ptrace,
+                libc::SYS_process_vm_writev,
+            ] {
+                assert_eq!(
+                    crate::tests::run_filter(&insns, nr as i32),
+                    deny_verdict,
+                    "namespace/ptrace syscall {nr} must be denied"
+                );
+            }
+        }
+
+        #[test]
+        fn seccomp_filter_structure_is_valid() {
+            let insns = build_seccomp_insns();
+            assert!(!insns.is_empty(), "seccomp filter must not be empty");
+
+            // First instruction loads architecture from offset 4
+            assert_eq!(insns[0].k, 4, "first insn must load arch from offset 4");
+
+            // Last instruction must return ALLOW (catch-all)
+            let last = insns.last().unwrap();
+            assert_eq!(last.k, SECCOMP_RET_ALLOW, "last insn must return ALLOW");
+        }
+
+        #[test]
+        fn blocked_syscalls_have_no_duplicates() {
+            let mut seen = std::collections::HashSet::new();
+            for &nr in BLOCKED_SYSCALLS {
+                assert!(
+                    seen.insert(nr),
+                    "blocked syscall {nr} appears more than once"
+                );
+            }
         }
     }
-}
 
+    #[test]
+    fn cgroup_write_to_nonexistent_dir_errors() {
+        let dir =
+            std::env::temp_dir().join(format!("tc-cgroup-nonexistent-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let nonexistent = dir.join("nonexistent");
+        let result = cgroup_write(&nonexistent, "testfile", "hello");
+        assert!(
+            result.is_err(),
+            "cgroup_write to nonexistent dir should fail"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
-#[test]
+    #[test]
+    fn backend_spec_with_zero_cpu_millis() {
+        // Session with cpu_millis=0 should be valid (unlimited CPU)
+        let spec = SessionSpec {
+            id: "test-unlimited-cpu".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            cpu_millis: 0,
+            workspace_mb: 0,
+            workspace: "/tmp".into(),
+        };
+        assert_eq!(spec.cpu_millis, 0);
+        assert_eq!(spec.mem_mb, 0);
+    }
 
-#[test]
-fn cgroup_write_to_nonexistent_dir_errors() {
-    let dir = std::env::temp_dir().join(format!("tc-cgroup-nonexistent-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let nonexistent = dir.join("nonexistent");
-    let result = cgroup_write(&nonexistent, "testfile", "hello");
-    assert!(result.is_err(), "cgroup_write to nonexistent dir should fail");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn backend_spec_with_zero_cpu_millis() {
-    // Session with cpu_millis=0 should be valid (unlimited CPU)
-    let spec = SessionSpec {
-        id: "test-unlimited-cpu".into(),
-        tier: Tier::Tier0,
-        mem_mb: 0,
-        cpu_millis: 0,
-        workspace_mb: 0,
-        workspace: "/tmp".into(),
-    };
-    assert_eq!(spec.cpu_millis, 0);
-    assert_eq!(spec.mem_mb, 0);
-}
-
-#[test]
-fn backend_spec_with_nonzero_cpu_millis() {
-    // Session with non-zero cpu_millis should store the value
-    let spec = SessionSpec {
-        id: "test-limited-cpu".into(),
-        tier: Tier::Tier0,
-        mem_mb: 512,
-        cpu_millis: 500,
-        workspace_mb: 0,
-        workspace: "/workspace".into(),
-    };
-    assert_eq!(spec.cpu_millis, 500);
-    assert_eq!(spec.mem_mb, 512);
-}
+    #[test]
+    fn backend_spec_with_nonzero_cpu_millis() {
+        // Session with non-zero cpu_millis should store the value
+        let spec = SessionSpec {
+            id: "test-limited-cpu".into(),
+            tier: Tier::Tier0,
+            mem_mb: 512,
+            cpu_millis: 500,
+            workspace_mb: 0,
+            workspace: "/workspace".into(),
+        };
+        assert_eq!(spec.cpu_millis, 500);
+        assert_eq!(spec.mem_mb, 512);
+    }
 }
 
 #[test]
@@ -3628,8 +3728,13 @@ fn cgroup2_works_with_cgroup_mount() {
         .unwrap()
         .filter_map(|e| e.ok())
         .collect();
-    assert!(children.is_empty() || children.iter().all(|e| e.file_name() != "cgroup.controllers"),
-        "cgroup2 should not have controller subdirectory");
+    assert!(
+        children.is_empty()
+            || children
+                .iter()
+                .all(|e| e.file_name() != "cgroup.controllers"),
+        "cgroup2 should not have controller subdirectory"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

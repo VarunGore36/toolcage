@@ -109,7 +109,6 @@ mod tests {
         assert_eq!(spec.workspace_mb, 0);
         assert_eq!(spec.workspace, "/tmp/test-workspace");
     }
-    use super::*;
 
     #[test]
     fn tier_parse_handles_whitespace() {

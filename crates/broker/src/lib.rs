@@ -689,7 +689,7 @@ mod tests {
         );
         assert!(b2.inject("gh", "evil", "GET", "/").is_none()); // dest mismatch
         assert!(b2.inject("gh", "github", "POST", "/").is_none()); // method mismatch
-        // Restore previous env var
+                                                                   // Restore previous env var
         match prev_key {
             Some(k) => std::env::set_var("TOOLCAGE_BROKER_KEY", k),
             None => std::env::remove_var("TOOLCAGE_BROKER_KEY"),
@@ -987,26 +987,29 @@ fn credential_rotate_reencrypts() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("broker.json");
     let old_key = "0000000000000000000000000000000000000000000000000000000000000000";
-    let prev_key = std::env::var("TOOLCAGE_BROKER_KEY").ok();
-    std::env::set_var("TOOLCAGE_BROKER_KEY", old_key);
     b.set_master_key(old_key).unwrap();
     b.save(&path).unwrap();
 
     // Load with old key (from env var)
+    let prev_key = std::env::var("TOOLCAGE_BROKER_KEY").ok();
+    std::env::set_var("TOOLCAGE_BROKER_KEY", old_key);
     let mut b2 = Broker::load(&path).unwrap();
     assert_eq!(
         b2.inject("gh-token", "github", "GET", "/"),
         Some("old-secret")
     );
 
-    // Rotate to new key
+    // Rotate to new key using the proper rotate() function
     let new_key = "1111111111111111111111111111111111111111111111111111111111111111";
-    std::env::set_var("TOOLCAGE_BROKER_KEY", new_key);
-    b2.set_master_key(new_key).unwrap();
-    b2.save(&path).unwrap();
+    b2.rotate(&path, new_key).unwrap();
+    assert_eq!(
+        b2.inject("gh-token", "github", "GET", "/"),
+        Some("old-secret")
+    );
 
     // Load with new key (from env var)
-    let mut b3 = Broker::load(&path).unwrap();
+    std::env::set_var("TOOLCAGE_BROKER_KEY", new_key);
+    let b3 = Broker::load(&path).unwrap();
     assert_eq!(
         b3.inject("gh-token", "github", "GET", "/"),
         Some("old-secret")

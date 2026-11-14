@@ -496,7 +496,6 @@ fn supervisor_session_id_variants_final() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-
 #[test]
 fn supervisor_session_id_empty_allowed() {
     let dir = std::env::temp_dir().join(format!("tc-iso-empty-sid-{}", std::process::id()));
@@ -504,7 +503,8 @@ fn supervisor_session_id_empty_allowed() {
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
     let mut sup = toolcage_supervisor::Supervisor {
-        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml"))
+            .unwrap(),
         audit_path: audit.to_path_buf(),
         session: "".into(),
         tier: toolcage_backend::Tier::Tier0,

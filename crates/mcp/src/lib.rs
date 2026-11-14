@@ -1017,11 +1017,11 @@ net:
         assert_eq!(INVALID_PARAMS, -32602);
         assert_eq!(INTERNAL_ERROR, -32603);
         // All error codes are negative
-        assert!(PARSE_ERROR < 0);
-        assert!(INVALID_REQUEST < 0);
-        assert!(METHOD_NOT_FOUND < 0);
-        assert!(INVALID_PARAMS < 0);
-        assert!(INTERNAL_ERROR < 0);
+        const _: () = assert!(PARSE_ERROR < 0);
+        const _: () = assert!(INVALID_REQUEST < 0);
+        const _: () = assert!(METHOD_NOT_FOUND < 0);
+        const _: () = assert!(INVALID_PARAMS < 0);
+        const _: () = assert!(INTERNAL_ERROR < 0);
     }
 
     #[test]

@@ -1,5 +1,5 @@
-use toolcage_backend_ns::NsBackend;
 use toolcage_backend::{Backend, SessionSpec, Tier};
+use toolcage_backend_ns::NsBackend;
 
 fn cgroup_available() -> bool {
     std::path::Path::new("/sys/fs/cgroup").is_dir()

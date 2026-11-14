@@ -1472,15 +1472,17 @@ fn exec_policy_limits_serialization() {
 fn net_policy_serialization() {
     use serde_json;
 
-    let mut pol = Policy::default();
-    pol.net = NetPolicy {
-        mode: "allowlist".into(),
-        hosts: vec![HostRule {
-            host: Some("example.com".into()),
-            alias: None,
-            methods: vec!["GET".into(), "POST".into()],
-            paths: vec!["/api/*".into()],
-        }],
+    let pol = Policy {
+        net: NetPolicy {
+            mode: "allowlist".into(),
+            hosts: vec![HostRule {
+                host: Some("example.com".into()),
+                alias: None,
+                methods: vec!["GET".into(), "POST".into()],
+                paths: vec!["/api/*".into()],
+            }],
+        },
+        ..Policy::default()
     };
 
     let json = serde_json::to_string(&pol).unwrap();
@@ -1499,13 +1501,15 @@ fn net_policy_serialization() {
 fn fs_policy_serialization() {
     use serde_json;
 
-    let mut pol = Policy::default();
-    pol.fs = FsPolicy {
-        mounts: vec![Mount {
-            path: "/workspace".into(),
-            mode: "rw".into(),
-            source: "/tmp/workspace".into(),
-        }],
+    let pol = Policy {
+        fs: FsPolicy {
+            mounts: vec![Mount {
+                path: "/workspace".into(),
+                mode: "rw".into(),
+                source: "/tmp/workspace".into(),
+            }],
+        },
+        ..Policy::default()
     };
 
     let json = serde_json::to_string(&pol).unwrap();
@@ -1558,34 +1562,35 @@ fn limits_serialization_roundtrip() {
 }
 
 #[test]
+fn exec_policy_serialization() {
+    use serde_json;
 
-    #[test]
-    fn exec_policy_serialization() {
-        use serde_json;
+    let mut pol = Policy::default();
+    pol.exec.allowlist = vec!["echo".to_string(), "cat".to_string()];
+    pol.limits.cpu_seconds = 60;
+    pol.limits.memory_mb = 512;
 
-        let mut pol = Policy::default();
-        pol.exec.allowlist = vec!["echo".to_string(), "cat".to_string()];
-        pol.limits.cpu_seconds = 60;
-        pol.limits.memory_mb = 512;
+    let json = serde_json::to_string(&pol).unwrap();
+    let reparsed: Policy = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        reparsed.exec.allowlist,
+        vec!["echo".to_string(), "cat".to_string()]
+    );
+    assert_eq!(reparsed.limits.cpu_seconds, 60);
+    assert_eq!(reparsed.limits.memory_mb, 512);
+}
 
-        let json = serde_json::to_string(&pol).unwrap();
-        let reparsed: Policy = serde_json::from_str(&json).unwrap();
-        assert_eq!(reparsed.exec.allowlist, vec!["echo".to_string(), "cat".to_string()]);
-        assert_eq!(reparsed.limits.cpu_seconds, 60);
-        assert_eq!(reparsed.limits.memory_mb, 512);
-    }
+#[test]
+fn exec_policy_empty_allowlist() {
+    let pol = Policy::default();
+    assert!(pol.exec.allowlist.is_empty());
+    assert_eq!(pol.exec.allowlist.len(), 0);
+}
 
-    #[test]
-    fn exec_policy_empty_allowlist() {
-        let pol = Policy::default();
-        assert!(pol.exec.allowlist.is_empty());
-        assert_eq!(pol.exec.allowlist.len(), 0);
-    }
-
-    #[test]
-    fn exec_policy_single_binary() {
-        let mut pol = Policy::default();
-        pol.exec.allowlist = vec!["echo".to_string()];
-        assert_eq!(pol.exec.allowlist.len(), 1);
-        assert_eq!(pol.exec.allowlist[0], "echo");
-    }
+#[test]
+fn exec_policy_single_binary() {
+    let mut pol = Policy::default();
+    pol.exec.allowlist = vec!["echo".to_string()];
+    assert_eq!(pol.exec.allowlist.len(), 1);
+    assert_eq!(pol.exec.allowlist[0], "echo");
+}
