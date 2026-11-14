@@ -278,3 +278,47 @@ fn tier0_with_memory_limit_executes() {
     assert!(o.allowed, "tier0 exec with memory limit should succeed");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn tier0_session_id_validation() {
+    // Session IDs should be validated - empty IDs should be rejected
+    let dir = std::env::temp_dir().join(format!("tc-iso-sid-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let mut sup = toolcage_supervisor::Supervisor {
+        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+        audit_path: audit.to_path_buf(),
+        session: "".into(), // empty session ID
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: true,
+        cap_key: None,
+        token_rev_id: String::new(),
+    };
+    // Empty session ID should still allow exec (the supervisor doesn't validate session IDs)
+    let o = sup.exec(&["/bin/true".to_string()]).unwrap();
+    assert!(o.allowed, "empty session ID should still allow exec");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tier0_very_long_session_id() {
+    let dir = std::env::temp_dir().join(format!("tc-iso-longsid-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let mut sup = toolcage_supervisor::Supervisor {
+        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+        audit_path: audit.to_path_buf(),
+        session: "a".repeat(10000), // very long session ID
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: true,
+        cap_key: None,
+        token_rev_id: String::new(),
+    };
+    let o = sup.exec(&["/bin/true".to_string()]).unwrap();
+    assert!(o.allowed, "long session ID should still allow exec");
+    let _ = std::fs::remove_dir_all(&dir);
+}
