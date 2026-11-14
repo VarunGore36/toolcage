@@ -232,3 +232,49 @@ fn exec_with_bad_tier_name_denied() {
     assert!(!o.allowed, "tier2 without backend should be denied");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn tier0_with_cpu_limit_executes() {
+    let dir = std::env::temp_dir().join(format!("tc-iso-tier0-cpu-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let mut sup = toolcage_supervisor::Supervisor {
+        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+        audit_path: audit.to_path_buf(),
+        session: "tier0-cpu".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: true,
+        cap_key: None,
+        token_rev_id: String::new(),
+    };
+    // cpu_seconds = 1 should allow execution but enforce limit
+    sup.policy.limits.cpu_seconds = 1;
+    let o = sup.exec(&["/bin/true".to_string()]).unwrap();
+    assert!(o.allowed, "tier0 exec with CPU limit should succeed");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn tier0_with_memory_limit_executes() {
+    let dir = std::env::temp_dir().join(format!("tc-iso-tier0-mem-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let mut sup = toolcage_supervisor::Supervisor {
+        policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+        audit_path: audit.to_path_buf(),
+        session: "tier0-mem".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: true,
+        cap_key: None,
+        token_rev_id: String::new(),
+    };
+    // memory_mb = 256 should allow execution
+    sup.policy.limits.memory_mb = 256;
+    let o = sup.exec(&["/bin/true".to_string()]).unwrap();
+    assert!(o.allowed, "tier0 exec with memory limit should succeed");
+    let _ = std::fs::remove_dir_all(&dir);
+}
