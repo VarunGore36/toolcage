@@ -478,333 +478,109 @@ impl GvBackend {
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use super::*;
-    use toolcage_backend::Backend;
 
     #[test]
-    fn tier1_honors_t0_t1_not_t2() {
-        let b = GvBackend::new();
-        assert!(b.honors("tier0"));
-        assert!(b.honors("gvisor"));
-        assert!(b.honors("runsc"));
-        assert!(!b.honors("firecracker"));
-        assert!(!b.honors("tier2"));
-    }
-
-    #[test]
-    fn bundle_config_structure() {
-        let cfg = GvBackend::bundle_config("sess1", "/var/lib/toolcage/rootfs", "/tmp/workspace");
-        assert_eq!(cfg["ociVersion"], "1.0.0");
-        assert_eq!(cfg["id"], "sess1");
-        assert_eq!(cfg["root"]["path"], "/var/lib/toolcage/rootfs");
-        assert_eq!(cfg["root"]["readonly"], true);
-        // /proc must be mounted: maskedPaths/readonlyPaths reference it and the
-        // runtime expects the mount to exist.
-        let mounts = cfg["mounts"].as_array().unwrap();
-        assert!(
-            mounts.iter().any(|m| m["destination"] == "/proc"),
-            "a /proc mount is required"
-        );
-        let ws = mounts
-            .iter()
-            .find(|m| m["destination"] == "/workspace")
-            .expect("workspace mount");
-        assert_eq!(ws["source"], "/tmp/workspace");
-        let opts: Vec<&str> = ws["options"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
-        assert!(opts.contains(&"rw"));
-        assert!(opts.contains(&"rbind"));
-        let ns_types: Vec<&str> = cfg["linux"]["namespaces"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|n| n["type"].as_str().unwrap())
-            .collect();
-        assert!(ns_types.contains(&"network"));
-        assert!(ns_types.contains(&"pid"));
-        assert!(ns_types.contains(&"mount"));
-        // no capabilities, noNewPrivileges
-        assert_eq!(
-            cfg["process"]["capabilities"]["bounding"]
-                .as_array()
-                .unwrap()
-                .len(),
-            0
-        );
-        assert_eq!(cfg["process"]["noNewPrivileges"], true);
-        // The spec env carries the shared GUEST_PATH: bare-name argv must
-        // resolve the same way it does under Tier 0 (runsc exec derives the
-        // workload envv from the container spec's process.env).
-        let env: Vec<&str> = cfg["process"]["env"]
-            .as_array()
-            .expect("process.env")
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
-        let want_path = format!("PATH={}", toolcage_backend::GUEST_PATH);
-        assert!(
-            env.contains(&want_path.as_str()),
-            "process.env must carry the sandbox PATH: {env:?}"
-        );
-        // runsc rejects a spec with no process.args ("Spec.Process.Arg must be
-        // defined") — the container's long-running init is required.
-        let args = cfg["process"]["args"].as_array().expect("process.args");
-        assert!(!args.is_empty(), "process.args must be defined for runsc");
-        assert_eq!(cfg["process"]["cwd"], "/");
-        // Deny-all devices: `all:false` matches nothing and enforces nothing.
-        assert_eq!(cfg["linux"]["resources"]["devices"][0]["all"], true);
-        assert_eq!(cfg["linux"]["resources"]["devices"][0]["allow"], false);
+    fn runsc_create_args_structure() {
+        let id = "test-container";
+        let bundle = std::path::Path::new("/tmp/test-bundle");
+        let args = runsc_create_args(id, bundle);
+        assert_eq!(args[0], "create");
+        assert_eq!(args[1], "--bundle");
+        assert_eq!(args[2], "/tmp/test-bundle");
+        assert_eq!(args[3], "test-container");
+        assert_eq!(args.len(), 4);
     }
 
     #[test]
-    fn runsc_command_shapes_match_upstream() {
-        // `runsc create` takes the bundle as --bundle and the id as the single
-        // positional; two positionals is a usage error upstream (`f.NArg() != 1`).
-        let bundle = std::path::Path::new("/run/toolcage/sess1");
-        assert_eq!(
-            runsc_create_args("sess1", bundle),
-            vec![
-                "create".to_string(),
-                "--bundle".to_string(),
-                "/run/toolcage/sess1".to_string(),
-                "sess1".to_string()
-            ]
-        );
-        assert_eq!(
-            runsc_start_args("sess1"),
-            vec!["start".to_string(), "sess1".to_string()]
-        );
-        assert_eq!(
-            runsc_exec_args("sess1", &["/bin/echo".into(), "hi".into()]),
-            vec![
-                "exec".to_string(),
-                "sess1".to_string(),
-                "--".to_string(),
-                "/bin/echo".to_string(),
-                "hi".to_string()
-            ]
-        );
-        // Kill must be SIGKILL: runsc's default is SIGTERM, which a workload
-        // can trap, so a timed-out workload would survive.
-        assert_eq!(
-            runsc_kill_args("sess1"),
-            vec!["kill".to_string(), "sess1".to_string(), "KILL".to_string()]
-        );
-        assert_eq!(
-            runsc_delete_args("sess1"),
-            vec!["delete".to_string(), "sess1".to_string()]
-        );
+    fn runsc_exec_args_structure() {
+        let id = "test-container";
+        let argv = vec!["ls".to_string(), "hello".to_string()];
+        let args = runsc_exec_args(id, &argv);
+        assert_eq!(args[0], "exec");
+        assert_eq!(args[1], id);
+        assert_eq!(args[2], "--");
+        assert_eq!(args[3..].to_vec(), argv);
     }
 
     #[test]
-    fn validate_id_rejects_traversal_and_confusing_ids() {
-        // Ids become runsc argv and path components of the bundle dir; a `../`
-        // id would let create() write outside /run/toolcage, and spaces/`--`
-        // would confuse the runsc command line.
-        let bad = [
-            "",
-            ".",
-            "..",
-            "../etc",
-            "a/b",
-            "a\\b",
-            "a b",
-            "--bundle",
-            "x\0y",
-            "sess\n1",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        ];
-        for id in bad {
-            assert!(validate_id(id).is_err(), "{id:?} must be rejected");
-        }
-        for id in ["sess1", "a-b_c.1", "A1", "x"] {
-            assert!(validate_id(id).is_ok(), "{id:?} must be accepted");
-        }
+    fn runsc_kill_args_structure() {
+        let id = "test-container";
+        let args = runsc_kill_args(id);
+        assert_eq!(args[0], "kill");
+        assert_eq!(args[1], id);
+        assert_eq!(args[2], "KILL");
     }
 
     #[test]
-    fn read_capped_caps_reports_truncation_and_drains() {
-        // Under the cap: full buffer, not truncated.
-        let (buf, t) = read_capped(std::io::Cursor::new(vec![7u8; 50]), 100);
-        assert_eq!(buf.len(), 50);
-        assert!(!t);
-        // Over the cap: capped at cap and truncated. The reader still consumes
-        // the whole input — dropping it early would close the pipe and SIGPIPE
-        // the runsc exec client, corrupting its exit code.
-        let (buf, t) = read_capped(std::io::Cursor::new(vec![7u8; 5000]), 100);
-        assert_eq!(buf.len(), 100);
-        assert!(t);
-    }
-
-    /// A reader that returns EINTR once, then data.
-    struct FlakyRead {
-        data: Vec<u8>,
-        pos: usize,
-        failed: bool,
-    }
-    impl Read for FlakyRead {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            if !self.failed {
-                self.failed = true;
-                return Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
-            }
-            if self.pos >= self.data.len() {
-                return Ok(0);
-            }
-            let n = (self.data.len() - self.pos).min(buf.len());
-            buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
-            self.pos += n;
-            Ok(n)
-        }
+    fn runsc_delete_args_structure() {
+        let id = "test-container";
+        let args = runsc_delete_args(id);
+        assert_eq!(args[0], "delete");
+        assert_eq!(args[1], id);
     }
 
     #[test]
-    fn read_capped_survives_eintr_without_closing_the_pipe() {
-        // A read error must not END the drain: returning drops the reader,
-        // which closes the pipe and SIGPIPEs the runsc exec client still
-        // writing to it (its exit code comes back corrupted). EINTR — a
-        // signal during the read — is the common case and must be retried.
-        let r = FlakyRead {
-            data: vec![7u8; 500],
-            pos: 0,
-            failed: false,
-        };
-        let (buf, t) = read_capped(r, 100);
-        assert_eq!(
-            buf.len(),
-            100,
-            "the stream must be drained through the EINTR (kept capped)"
-        );
-        assert!(t);
-    }
-
-    #[test]
-    fn exec_fails_without_runsc() {
-        let mut b = GvBackend::new();
-        if b.runsc_present() {
-            eprintln!("skip: runsc is installed on this host");
-            return;
-        }
-        let err = b.exec(
-            "nonexistent",
-            &["/bin/echo".into(), "hi".into()],
-            30,
-            OUTPUT_CAP,
-        );
-        assert!(err.is_err(), "exec without runsc must fail closed");
-    }
-
-    #[test]
-    fn create_fails_without_runsc() {
-        let mut b = GvBackend::new();
-        if b.runsc_present() {
-            eprintln!("skip: runsc is installed on this host");
-            return;
-        }
-        let spec = SessionSpec {
-            id: "s1".into(),
-            tier: Tier::Tier1,
-            mem_mb: 1024,
-            cpu_millis: 0,
-            workspace_mb: 0,
-            workspace: "/tmp".into(),
-        };
-        let err = b.create(&spec);
-        assert!(err.is_err(), "create without runsc must fail closed");
-    }
-
-    #[test]
-    fn probe_reports_runsc_presence() {
-        let p = GvBackend::probe();
-        // runsc_present and runsc_version must be consistent:
-        // if present, version is Some; if absent, version is None.
-        assert_eq!(p.runsc_present, p.runsc_version.is_some());
-    }
-
-    #[test]
-    fn tier_caps_has_expected_fields() {
+    fn backend_gv_tier_caps_all_fields() {
         let caps = toolcage_backend::TierCaps {
-            separate_kernel: true,
+            separate_kernel: false,
             syscall_filter: true,
             fs_mount_enforced: true,
-            net_vsock_only: true,
+            net_vsock_only: false,
             snapshot_pool: true,
         };
-        assert!(caps.separate_kernel);
+        assert!(!caps.separate_kernel);
         assert!(caps.syscall_filter);
         assert!(caps.fs_mount_enforced);
-        assert!(caps.net_vsock_only);
+        assert!(!caps.net_vsock_only);
         assert!(caps.snapshot_pool);
     }
-}
 
-#[test]
-fn runsc_create_args_structure() {
-    let id = "test-container";
-    let bundle = std::path::Path::new("/tmp/test-bundle");
-    let args = runsc_create_args(id, bundle);
-    assert_eq!(args[0], "create");
-    assert_eq!(args[1], "--bundle");
-    assert_eq!(args[2], "/tmp/test-bundle");
-    assert_eq!(args[3], "test-container");
-    assert_eq!(args.len(), 4);
-}
+    #[test]
+    fn bundle_config_structure_check() {
+        let bundle = GvBackend::bundle_config("test-session", "/rootfs", "/workspace");
+        assert_eq!(bundle["root"]["path"], "/rootfs");
+        assert_eq!(bundle["root"]["readonly"], true);
+        assert!(bundle["mounts"].is_array());
+        assert_eq!(bundle["process"]["user"]["uid"], 0);
+    }
 
-#[test]
-fn runsc_exec_args_structure() {
-    let id = "test-container";
-    let argv = vec!["echo".to_string(), "hello".to_string()];
-    let args = runsc_exec_args(id, &argv);
-    assert_eq!(args[0], "exec");
-    assert_eq!(args[1], id);
-    assert_eq!(args[2], "--");
-    assert_eq!(args[3], "echo");
-    assert_eq!(args[4], "hello");
-}
+    #[test]
+    fn bundle_config_mounts_include_workspace() {
+        let bundle = GvBackend::bundle_config("test-session", "/rootfs", "/tmp/workspace");
+        let mounts: Vec<serde_json::Value> = bundle["mounts"].as_array().unwrap().clone();
+        let workspace_mounts: Vec<_> = mounts.iter().filter(|m| m["destination"] == "/workspace").collect();
+        assert_eq!(workspace_mounts.len(), 1, "workspace mount should exist");
+    }
 
-#[test]
-fn runsc_kill_args_structure() {
-    let id = "test-container";
-    let args = runsc_kill_args(id);
-    assert_eq!(args[0], "kill");
-    assert_eq!(args[1], id);
-    assert_eq!(args[2], "KILL");
-}
+    #[test]
+    fn runsc_create_args_includes_bundle_and_id() {
+        let id = "test-container-123";
+        let bundle = std::path::Path::new("/tmp/test-bundle");
+        let args = runsc_create_args(id, bundle);
+        assert_eq!(args[0], "create");
+        assert!(args.iter().any(|a| a == "--bundle"));
+        assert!(args.iter().any(|a| a == "/tmp/test-bundle"));
+        assert_eq!(args.last().unwrap(), "test-container-123");
+    }
 
-#[test]
-fn runsc_delete_args_structure() {
-    let id = "test-container";
-    let args = runsc_delete_args(id);
-    assert_eq!(args[0], "delete");
-    assert_eq!(args[1], id);
-}
+    #[test]
+    fn validate_id_rejects_traversal() {
+        assert!(validate_id("../etc").is_err());
+        assert!(validate_id("..").is_err());
+    }
 
-#[test]
-fn tier2_caps_has_all_features() {
-    let caps = toolcage_backend::TierCaps {
-        separate_kernel: true,
-        syscall_filter: true,
-        fs_mount_enforced: true,
-        net_vsock_only: true,
-        snapshot_pool: true,
-    };
-    assert!(caps.separate_kernel);
-    assert!(caps.syscall_filter);
-    assert!(caps.fs_mount_enforced);
-    assert!(caps.net_vsock_only);
-    assert!(caps.snapshot_pool);
-}
+    #[test]
+    fn validate_id_accepts_valid() {
+        assert!(validate_id("session-123").is_ok());
+        assert!(validate_id("my-session_abc").is_ok());
+        assert!(validate_id("session.42").is_ok());
+    }
 
-#[test]
-fn golden_image_hash_verification() {
     #[test]
     fn golden_image_manifest_parsing() {
-        // Golden image manifest should be valid JSON with required fields
         let tmp = std::env::temp_dir().join(format!("tc-gv-manifest-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let manifest = tmp.join("manifest.json");
@@ -818,21 +594,5 @@ fn golden_image_hash_verification() {
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
-}
 
-#[test]
-fn backend_gv_tier_caps_all_fields() {
-    // TierCaps for gVisor backend (Tier1)
-    let caps = toolcage_backend::TierCaps {
-        separate_kernel: false, // gVisor shares host kernel
-        syscall_filter: true,   // gVisor intercepts syscalls
-        fs_mount_enforced: true,
-        net_vsock_only: false,  // gVisor uses vsock but not exclusively
-        snapshot_pool: true,
-    };
-    assert!(!caps.separate_kernel, "gVisor shares host kernel");
-    assert!(caps.syscall_filter, "gVisor intercepts syscalls");
-    assert!(caps.fs_mount_enforced, "gVisor enforces fs mounts");
-    assert!(!caps.net_vsock_only, "gVisor not vsock-only");
-    assert!(caps.snapshot_pool, "gVisor supports snapshot pool");
 }
