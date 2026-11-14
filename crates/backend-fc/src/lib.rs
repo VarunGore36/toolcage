@@ -2392,3 +2392,20 @@ fn tier2_caps_all_false() {
     assert!(!caps.net_vsock_only);
     assert!(!caps.snapshot_pool);
 }
+
+#[test]
+
+fn tier_caps_default_all_false() {
+    let caps = toolcage_backend::TierCaps {
+        separate_kernel: false,
+        syscall_filter: false,
+        fs_mount_enforced: false,
+        net_vsock_only: false,
+        snapshot_pool: false,
+    };
+    assert!(!caps.separate_kernel);
+    assert!(!caps.syscall_filter);
+    assert!(!caps.fs_mount_enforced);
+    assert!(!caps.net_vsock_only);
+    assert!(!caps.snapshot_pool);
+}
