@@ -3113,6 +3113,33 @@ mod exec_not_found_tests {
         b.destroy(&spec.id).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn exec_stdout_and_stderr_together() {
+        if !crate::tests::isolated() || !cgroup_writable() {
+            eprintln!("skip: tier0 unavailable (userns/mount/net/ipc/pid/uts or cgroup not writable)");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("tc-ns-stdout-stderr-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spec = SessionSpec {
+            id: "t-stdout-stderr".into(),
+            tier: Tier::Tier0,
+            mem_mb: 0,
+            cpu_millis: 0,
+            workspace_mb: 0,
+            workspace: dir.display().to_string(),
+        };
+        let mut b = NsBackend::new();
+        b.create(&spec).unwrap();
+        // Output to both stdout and stderr
+        let r = b.exec(&spec.id, &["/bin/sh".to_string(), "-c".to_string(), "echo stdout-msg; echo stderr-msg >&2".to_string()], 30, OUTPUT_CAP).unwrap();
+        assert_eq!(r.exit_code, Some(0));
+        assert_eq!(String::from_utf8_lossy(&r.stdout).trim(), "stdout-msg");
+        assert_eq!(String::from_utf8_lossy(&r.stderr).trim(), "stderr-msg");
+        b.destroy(&spec.id).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]
