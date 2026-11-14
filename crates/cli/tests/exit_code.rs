@@ -93,3 +93,33 @@ fn allowed_echo_exec_succeeds() {
         status.code()
     );
 }
+
+#[test]
+fn fetch_unknown_host_denied() {
+    let dir = std::env::temp_dir().join("tc-fetch-deny");
+    std::fs::create_dir_all(&dir).unwrap();
+    let policy =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/policy-v0.yaml");
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+    let status = cli_run(&[
+        "fetch",
+        "--unsafe-no-isolation",
+        "--policy",
+        policy.to_str().unwrap(),
+        "--audit",
+        audit.to_str().unwrap(),
+        "--host",
+        "evil.example.com",
+        "--method",
+        "GET",
+        "--path",
+        "/",
+    ]);
+    assert!(
+        !status.success(),
+        "fetch to unknown host must be denied, got {:?}",
+        status.code()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
