@@ -1463,3 +1463,53 @@ fn exec_policy_limits_serialization() {
     assert_eq!(reparsed.limits.memory_mb, 512);
     assert_eq!(reparsed.limits.egress_bytes, 1024 * 1024);
 }
+
+#[test]
+fn net_policy_serialization() {
+    use serde_json;
+    
+    let mut pol = Policy::default();
+    pol.net = NetPolicy {
+        mode: "allowlist".into(),
+        hosts: vec![
+            HostRule {
+                host: Some("example.com".into()),
+                alias: None,
+                methods: vec!["GET".into(), "POST".into()],
+                paths: vec!["/api/*".into()],
+            },
+        ],
+    };
+
+    let json = serde_json::to_string(&pol).unwrap();
+    let reparsed: Policy = serde_json::from_str(&json).unwrap();
+    assert_eq!(reparsed.net.mode, "allowlist");
+    assert_eq!(reparsed.net.hosts.len(), 1);
+    assert_eq!(reparsed.net.hosts[0].host.as_deref(), Some("example.com"));
+    assert_eq!(reparsed.net.hosts[0].methods, vec!["GET".to_string(), "POST".to_string()]);
+    assert_eq!(reparsed.net.hosts[0].paths, vec!["/api/*".to_string()]);
+}
+
+#[test]
+fn fs_policy_serialization() {
+    use serde_json;
+    
+
+    let mut pol = Policy::default();
+    pol.fs = FsPolicy {
+        mounts: vec![
+            Mount {
+                path: "/workspace".into(),
+                mode: "rw".into(),
+                source: "/tmp/workspace".into(),
+            },
+        ],
+    };
+
+    let json = serde_json::to_string(&pol).unwrap();
+    let reparsed: Policy = serde_json::from_str(&json).unwrap();
+    assert_eq!(reparsed.fs.mounts.len(), 1);
+    assert_eq!(reparsed.fs.mounts[0].path, "/workspace");
+    assert_eq!(reparsed.fs.mounts[0].mode, "rw");
+    assert_eq!(reparsed.fs.mounts[0].source, "/tmp/workspace");
+}
