@@ -36,7 +36,7 @@ const MASTER_KEY_LEN: usize = 32; // bytes
 
 /// A credential held in memory as plaintext (needed for inject).
 /// `encrypted_value` is set only when loaded from disk for rotation.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Credential {
     pub name: String,
     pub use_with: String,
@@ -1124,4 +1124,58 @@ fn broker_scrub_overlapping_secrets_various_lengths() {
     // Just "def" should be redacted
     let result = b.scrub("value=def end");
     assert_eq!(result, "value=[REDACTED] end");
+}
+
+#[test]
+fn credential_serde_roundtrip() {
+    let cred = Credential {
+        name: "gh-token".into(),
+        value: "ghp_secret123".into(),
+        use_with: "github".into(),
+        methods: vec!["POST".into()],
+        paths: vec!["/repos/acme/**".into()],
+        expires_at: Some(9999999999),
+        encrypted_value: None,
+    };
+
+    let json = serde_json::to_string(&cred).unwrap();
+    let reparsed: Credential = serde_json::from_str(&json).unwrap();
+    assert_eq!(reparsed.name, "gh-token");
+    assert_eq!(reparsed.value, "ghp_secret123");
+    assert_eq!(reparsed.use_with, "github");
+    assert_eq!(reparsed.methods, vec!["POST".to_string()]);
+    assert_eq!(reparsed.paths, vec!["/repos/acme/**".to_string()]);
+    assert_eq!(reparsed.expires_at, Some(9999999999));
+    assert_eq!(reparsed.encrypted_value, None);
+}
+
+#[test]
+fn broker_credential_expires_at_none_means_unlimited() {
+    let mut b = Broker::new();
+    b.insert(Credential {
+        name: "never-expire".into(),
+        value: "secret".into(),
+        use_with: "github".into(),
+        methods: vec![],
+        paths: vec![],
+        expires_at: None,
+        encrypted_value: None,
+    });
+    // Never-expires credential should always be injectable
+    assert_eq!(b.inject("never-expire", "github", "GET", "/"), Some("secret"));
+}
+
+#[test]
+fn broker_inject_unknown_name_returns_none() {
+    let mut b = Broker::new();
+    b.insert(Credential {
+        name: "existing".into(),
+        value: "secret".into(),
+        use_with: "github".into(),
+        methods: vec![],
+        paths: vec![],
+        expires_at: None,
+        encrypted_value: None,
+    });
+    assert_eq!(b.inject("nonexistent", "github", "GET", "/"), None);
 }
