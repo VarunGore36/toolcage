@@ -532,7 +532,7 @@ mod tests {
     #[test]
     fn guest_msg_id_rejects_too_long() {
         let m = GuestMsg {
-            id: "a".repeat(200).into(),
+            id: "a".repeat(200),
             op: GuestOp::PutFile {
                 path: "/workspace/foo".into(),
                 bytes: 1,

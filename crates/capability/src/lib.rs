@@ -1371,7 +1371,7 @@ fn attenuate_cannot_widen_methods() {
 
     // Attenuate with empty methods — must NOT become wildcard
     // Attenuate with same rights (subset, not widen)
-    let child = parent.attenuate(&key, "child".into(), Rights {
+    let child = parent.attenuate(&key, "child", Rights {
         fs_prefixes: vec!["/workspace".into()],
         net_hosts: vec!["example.com".into()],
         methods: vec!["GET".into()],

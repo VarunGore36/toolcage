@@ -993,8 +993,6 @@ mod tests {
 
 
     #[test]
-
-    #[test]
     fn fs_path_double_dotdot_denied() {
         let p = sample();
         let d = decide(
