@@ -3155,7 +3155,7 @@ mod cgroup_tests {
 
     #[test]
     fn cgroup_mount_creates_directory() {
-        if !cgroup_available() {
+        if !cgroup_writable() {
             eprintln!("skip: cgroup fs not available or read-only");
             return;
         }
@@ -3174,7 +3174,7 @@ mod cgroup_tests {
 
     #[test]
     fn cgroup_write_writes_value() {
-        if !cgroup_available() {
+        if !cgroup_writable() {
             eprintln!("skip: cgroup fs not available or read-only");
             return;
         }
@@ -3202,7 +3202,7 @@ mod cgroup_tests {
 
     #[test]
     fn cgroup_write_max_writes_value() {
-        if !cgroup_available() {
+        if !cgroup_writable() {
             eprintln!("skip: cgroup fs not available or read-only");
             return;
         }
@@ -3230,7 +3230,7 @@ mod cgroup_tests {
 
     #[test]
     fn cpu_max_format_is_millis_per_period() {
-        if !cgroup_available() {
+        if !cgroup_writable() {
             eprintln!("skip: cgroup fs not available or read-only");
             return;
         }
@@ -3263,7 +3263,7 @@ mod cgroup_tests {
 
     #[test]
     fn memory_max_format_is_bytes() {
-        if !cgroup_available() {
+        if !cgroup_writable() {
             eprintln!("skip: cgroup fs not available or read-only");
             return;
         }
@@ -3305,7 +3305,7 @@ mod cgroup_tests {
 
     #[test]
     fn cgroup_write_various_values() {
-        if !cgroup_available() {
+        if !cgroup_writable() {
             eprintln!("skip: cgroup fs not available or read-only");
             return;
         }
@@ -3607,4 +3607,28 @@ fn session_spec_with_limits() {
     assert_eq!(spec.cpu_millis, 500);
     assert_eq!(spec.workspace_mb, 256);
     assert_eq!(spec.workspace, "/workspace");
+}
+
+#[test]
+fn cgroup2_works_with_cgroup_mount() {
+    if !cgroup_writable() {
+        eprintln!("skip: cgroup fs not available or read-only");
+        return;
+    }
+    let dir = match cgroup_mount("test", "cgroup2-test") {
+        Ok(d) => d,
+        Err(e) if e.to_string().contains("Permission denied") => {
+            eprintln!("skip: cgroup mount requires root: {e}");
+            return;
+        }
+        Err(e) => panic!("unexpected error: {e}"),
+    };
+    // cgroup2 should not have a controller subdirectory
+    let children: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert!(children.is_empty() || children.iter().all(|e| e.file_name() != "cgroup.controllers"),
+        "cgroup2 should not have controller subdirectory");
+    let _ = std::fs::remove_dir_all(&dir);
 }
