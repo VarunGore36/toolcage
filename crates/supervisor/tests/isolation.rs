@@ -378,3 +378,54 @@ fn supervisor_session_id_variants() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn supervisor_tier0_with_different_policies() {
+    let dir = std::env::temp_dir().join(format!("tc-iso-policy-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+
+    // Test with different CPU limits
+    for cpu_seconds in [0, 1, 5, 30, 300] {
+        let mut sup = toolcage_supervisor::Supervisor {
+            policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+            audit_path: audit.to_path_buf(),
+            session: format!("tier0-cpu-{cpu_seconds}"),
+            tier: toolcage_backend::Tier::Tier0,
+            backend: None,
+            allow_unisolated: true,
+            cap_key: None,
+            token_rev_id: String::new(),
+        };
+        sup.policy.limits.cpu_seconds = cpu_seconds;
+        let o = sup.exec(&["/bin/true".to_string()]).unwrap();
+        assert!(o.allowed, "tier0 exec with cpu_seconds={cpu_seconds} should succeed");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn supervisor_tier0_with_different_memory_limits() {
+    let dir = std::env::temp_dir().join(format!("tc-iso-mem-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+
+    for memory_mb in [0, 64, 256, 1024, 4096] {
+        let mut sup = toolcage_supervisor::Supervisor {
+            policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap(),
+            audit_path: audit.to_path_buf(),
+            session: format!("tier0-mem-{memory_mb}"),
+            tier: toolcage_backend::Tier::Tier0,
+            backend: None,
+            allow_unisolated: true,
+            cap_key: None,
+            token_rev_id: String::new(),
+        };
+        sup.policy.limits.memory_mb = memory_mb;
+        let o = sup.exec(&["/bin/true".to_string()]).unwrap();
+        assert!(o.allowed, "tier0 exec with memory_mb={memory_mb} should succeed");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
