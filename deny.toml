@@ -16,11 +16,8 @@ allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "MIT",
-    "BSD-2-Clause",
     "BSD-3-Clause",
-    "ISC",
     "Unicode-3.0",
-    "Zlib",
     # fuzz/ tree only: libfuzzer-sys ships compiler-rt-derived runtime pieces
     # under (MIT OR Apache-2.0) AND NCSA — permissive, fuzzing-only.
     "NCSA",
