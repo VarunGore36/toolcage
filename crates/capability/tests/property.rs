@@ -212,3 +212,94 @@ fn revocation_subtree_holds_over_200_seeds() {
         }
     }
 }
+
+/// Expiry enforcement: a token with expires_at in the past is denied.
+/// A pre-epoch clock (broken VM RTC) must also deny — u64::MAX > any finite expiry.
+#[test]
+fn expiry_enforced_and_pre_epoch_denies() {
+    let k = Key::from_bytes([7u8; 32]);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    // Token expired 1 hour ago
+    let expired = Token::root(
+        &k,
+        "expired",
+        Rights {
+            fs_prefixes: vec!["/workspace".into()],
+            net_hosts: vec!["github".into()],
+            methods: vec!["GET".into()],
+            cred_use: vec![],
+            budget_bytes: 1000,
+            expires_at: now.saturating_sub(3600),
+        },
+    )
+    .unwrap();
+    assert!(!expired.allows(&k, Some("/workspace"), Some("github"), Some("GET"), None));
+
+    // Token expires in 1 hour (valid)
+    let valid = Token::root(
+        &k,
+        "valid",
+        Rights {
+            fs_prefixes: vec!["/workspace".into()],
+            net_hosts: vec!["github".into()],
+            methods: vec!["GET".into()],
+            cred_use: vec![],
+            budget_bytes: 1000,
+            expires_at: now.saturating_add(3600),
+        },
+    )
+    .unwrap();
+    assert!(valid.allows(&k, Some("/workspace"), Some("github"), Some("GET"), None));
+
+    // Token with expires_at = 0 (no expiry)
+    let no_expiry = Token::root(
+        &k,
+        "no-expiry",
+        Rights {
+            fs_prefixes: vec!["/workspace".into()],
+            net_hosts: vec!["github".into()],
+            methods: vec!["GET".into()],
+            cred_use: vec![],
+            budget_bytes: 1000,
+            expires_at: 0,
+        },
+    )
+    .unwrap();
+    assert!(no_expiry.allows(&k, Some("/workspace"), Some("github"), Some("GET"), None));
+
+    // Simulate pre-epoch clock: u64::MAX > any finite expiry, so token is expired
+    let pre_epoch = Token::root(
+        &k,
+        "pre-epoch",
+        Rights {
+            fs_prefixes: vec!["/workspace".into()],
+            net_hosts: vec!["github".into()],
+            methods: vec!["GET".into()],
+            cred_use: vec![],
+            budget_bytes: 1000,
+            expires_at: now.saturating_add(3600),
+        },
+    )
+    .unwrap();
+    assert!(!pre_epoch.allows_at(&k, Some("/workspace"), Some("github"), Some("GET"), None, u64::MAX));
+
+    // Simulate pre-epoch clock with no-expiry token: 0 is never > u64::MAX, so it's valid
+    let no_expiry_pre_epoch = Token::root(
+        &k,
+        "no-expiry-pre-epoch",
+        Rights {
+            fs_prefixes: vec!["/workspace".into()],
+            net_hosts: vec!["github".into()],
+            methods: vec!["GET".into()],
+            cred_use: vec![],
+            budget_bytes: 1000,
+            expires_at: 0,
+        },
+    )
+    .unwrap();
+    assert!(no_expiry_pre_epoch.allows_at(&k, Some("/workspace"), Some("github"), Some("GET"), None, u64::MAX));
+}
