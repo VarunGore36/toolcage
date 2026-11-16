@@ -5,6 +5,14 @@ All notable changes to toolcage will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- `crates/cli`: dual-auth validation — `fetch` and `mcp` now require both `--token` and `--key-hex` when either is provided (prevents silent policy-only fallback)
+- `crates/mcp`: explicit argv validation for `run_command` — missing/empty argv now fails with clear `[args:argv required]` instead of downstream error
+- `crates/backend-ns`: cgroup cleanup path fix — `destroy()` now matches `cgroup_mount()` logic for both cgroup v1 and v2
+
+### Changed
+- `crates/deny.toml`: removed unused license allowances (BSD-2-Clause, ISC, Zlib) — only NCSA remains for fuzz/ tree
+
+### Fixed
 - `backend-fc`: Firecracker microVM Tier 2 driver with REST API boot, vsock exec, snapshot pool, snapshot head-bound checkpoints, warm pool
 - `crates/proxy`: real egress proxy dialer with DNS control, metadata/link-local blocking, TLS (native-tls), per-destination byte/request budgets
 - `crates/broker`: encrypted-at-rest credential store (XChaCha20-Poly1305), per-credential expiry, master key rotation
