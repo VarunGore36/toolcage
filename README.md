@@ -267,6 +267,20 @@ toolcage token revoke --rev session-42 --out revoked.json
 ```
 
 Use with `--token` + `--key-hex` on `fetch`, `mcp serve`, `mcp call` for **dual-auth** (policy AND token).
+Both flags are required together — providing only one is a configuration error.
+
+---
+
+## MCP Tools
+
+| Tool | Policy Action | Required Args |
+|------|---------------|---------------|
+| `run_command` | `proc.exec` | `argv: string[]` (non-empty) |
+| `read_file` | `fs.read` | `path: string` |
+| `write_file` | `fs.write` | `path: string` |
+| `http_fetch` | `http.request` | `host`, `method`, `path` |
+
+> All arguments are **required** — no permissive defaults. Missing `argv`, `host`, `method`, or `path` fails with clear `[args:...]` errors.
 
 ---
 
