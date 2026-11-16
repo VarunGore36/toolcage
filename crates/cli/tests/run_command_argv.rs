@@ -71,7 +71,11 @@ fn mcp_call_run_command_missing_argv_fails() {
 
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("[args:argv required]"), "stderr was: {}", stderr);
+    assert!(
+        stderr.contains("[args:argv required]"),
+        "stderr was: {}",
+        stderr
+    );
 }
 
 #[test]
@@ -99,7 +103,11 @@ fn mcp_call_run_command_empty_argv_fails() {
 
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("[args:argv cannot be empty]"), "stderr was: {}", stderr);
+    assert!(
+        stderr.contains("[args:argv cannot be empty]"),
+        "stderr was: {}",
+        stderr
+    );
 }
 
 #[test]
@@ -132,5 +140,9 @@ fn mcp_call_run_command_valid_argv_succeeds_with_unsafe_no_isolation() {
     assert!(!stderr.contains("argv required"));
     assert!(!stderr.contains("argv cannot be empty"));
     // The command should succeed (exit 0)
-    assert!(out.status.success(), "expected success with --unsafe-no-isolation, stderr: {}", stderr);
+    assert!(
+        out.status.success(),
+        "expected success with --unsafe-no-isolation, stderr: {}",
+        stderr
+    );
 }

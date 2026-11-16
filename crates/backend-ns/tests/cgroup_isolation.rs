@@ -51,7 +51,7 @@ fn destroy_cleans_up_cgroup_directory() {
     };
     let mut backend = NsBackend::new();
     backend.create(&spec).unwrap();
-    
+
     // Verify cgroup directory exists after create (check both v1 and v2 paths)
     let cgroup_dir_v1 = format!("/sys/fs/cgroup/ns/toolcage/{}", session_id);
     let cgroup_dir_v2 = format!("/sys/fs/cgroup/toolcage/{}", session_id);
@@ -60,15 +60,24 @@ fn destroy_cleans_up_cgroup_directory() {
     } else {
         cgroup_dir_v1.clone()
     };
-    assert!(std::path::Path::new(&cgroup_dir).exists(), "cgroup dir should exist after create");
-    
+    assert!(
+        std::path::Path::new(&cgroup_dir).exists(),
+        "cgroup dir should exist after create"
+    );
+
     // Destroy the session
     backend.destroy(&session_id).unwrap();
-    
+
     // Verify cgroup directory is cleaned up after destroy (check both v1 and v2 paths)
-    assert!(!std::path::Path::new(&cgroup_dir_v1).exists(), "cgroup v1 dir should be cleaned up after destroy");
-    assert!(!std::path::Path::new(&cgroup_dir_v2).exists(), "cgroup v2 dir should be cleaned up after destroy");
-    
+    assert!(
+        !std::path::Path::new(&cgroup_dir_v1).exists(),
+        "cgroup v1 dir should be cleaned up after destroy"
+    );
+    assert!(
+        !std::path::Path::new(&cgroup_dir_v2).exists(),
+        "cgroup v2 dir should be cleaned up after destroy"
+    );
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 

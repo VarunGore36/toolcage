@@ -72,7 +72,11 @@ fn write_token(dir: &std::path::Path) -> PathBuf {
 
 fn write_key(dir: &std::path::Path) -> PathBuf {
     let p = dir.join("key.hex");
-    fs::write(&p, "0000000000000000000000000000000000000000000000000000000000000000").unwrap();
+    fs::write(
+        &p,
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    )
+    .unwrap();
     p
 }
 
@@ -148,7 +152,10 @@ fn fetch_key_without_token_fails() {
 
 #[test]
 fn mcp_serve_token_without_key_fails() {
-    let dir = std::env::temp_dir().join(format!("tc-dual-auth-mcp-token-only-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "tc-dual-auth-mcp-token-only-{}",
+        std::process::id()
+    ));
     fs::create_dir_all(&dir).unwrap();
     let policy = write_policy(&dir);
     let audit = write_audit(&dir);
@@ -175,7 +182,8 @@ fn mcp_serve_token_without_key_fails() {
 
 #[test]
 fn mcp_serve_key_without_token_fails() {
-    let dir = std::env::temp_dir().join(format!("tc-dual-auth-mcp-key-only-{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("tc-dual-auth-mcp-key-only-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let policy = write_policy(&dir);
     let audit = write_audit(&dir);
@@ -202,7 +210,10 @@ fn mcp_serve_key_without_token_fails() {
 
 #[test]
 fn mcp_call_token_without_key_fails() {
-    let dir = std::env::temp_dir().join(format!("tc-dual-auth-mcp-call-token-only-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "tc-dual-auth-mcp-call-token-only-{}",
+        std::process::id()
+    ));
     fs::create_dir_all(&dir).unwrap();
     let policy = write_policy(&dir);
     let audit = write_audit(&dir);
@@ -233,7 +244,10 @@ fn mcp_call_token_without_key_fails() {
 
 #[test]
 fn mcp_call_key_without_token_fails() {
-    let dir = std::env::temp_dir().join(format!("tc-dual-auth-mcp-call-key-only-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "tc-dual-auth-mcp-call-key-only-{}",
+        std::process::id()
+    ));
     fs::create_dir_all(&dir).unwrap();
     let policy = write_policy(&dir);
     let audit = write_audit(&dir);

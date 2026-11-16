@@ -285,7 +285,14 @@ fn expiry_enforced_and_pre_epoch_denies() {
         },
     )
     .unwrap();
-    assert!(!pre_epoch.allows_at(&k, Some("/workspace"), Some("github"), Some("GET"), None, u64::MAX));
+    assert!(!pre_epoch.allows_at(
+        &k,
+        Some("/workspace"),
+        Some("github"),
+        Some("GET"),
+        None,
+        u64::MAX
+    ));
 
     // Simulate pre-epoch clock with no-expiry token: 0 is never > u64::MAX, so it's valid
     let no_expiry_pre_epoch = Token::root(
@@ -301,5 +308,12 @@ fn expiry_enforced_and_pre_epoch_denies() {
         },
     )
     .unwrap();
-    assert!(no_expiry_pre_epoch.allows_at(&k, Some("/workspace"), Some("github"), Some("GET"), None, u64::MAX));
+    assert!(no_expiry_pre_epoch.allows_at(
+        &k,
+        Some("/workspace"),
+        Some("github"),
+        Some("GET"),
+        None,
+        u64::MAX
+    ));
 }

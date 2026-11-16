@@ -580,7 +580,11 @@ fn load_key(p: &Option<PathBuf>) -> anyhow::Result<Option<toolcage_capability::K
 /// Validate that token and key_hex are either both provided or both absent.
 /// Dual-auth requires both: the token carries the attenuated rights, the key
 /// verifies its HMAC. Providing only one is a configuration error.
-fn validate_dual_auth(token: &Option<PathBuf>, key_hex: &Option<PathBuf>, context: &str) -> anyhow::Result<()> {
+fn validate_dual_auth(
+    token: &Option<PathBuf>,
+    key_hex: &Option<PathBuf>,
+    context: &str,
+) -> anyhow::Result<()> {
     let has_token = token.is_some();
     let has_key = key_hex.is_some();
     if has_token != has_key {
@@ -603,7 +607,8 @@ fn main() -> anyhow::Result<()> {
             unsafe_no_isolation,
             argv,
         } => {
-            let text = std::fs::read_to_string(&policy).with_context(|| format!("read policy from {}", policy.display()))?;
+            let text = std::fs::read_to_string(&policy)
+                .with_context(|| format!("read policy from {}", policy.display()))?;
             let pol = toolcage_policy::load_yaml(&text)?;
             // Fail-closed tier selection: refuse policy the backend cannot honor.
             let t = toolcage_backend::Tier::parse(&tier)?;
@@ -653,7 +658,8 @@ fn main() -> anyhow::Result<()> {
             method,
             path,
         } => {
-            let text = std::fs::read_to_string(&policy).with_context(|| format!("read policy from {}", policy.display()))?;
+            let text = std::fs::read_to_string(&policy)
+                .with_context(|| format!("read policy from {}", policy.display()))?;
             let pol = toolcage_policy::load_yaml(&text)?;
             let d = toolcage_proxy::decide(&pol, &host, &method, &path);
             println!(
@@ -683,7 +689,8 @@ fn main() -> anyhow::Result<()> {
             revocations,
             revocation_file,
         } => {
-            let text = std::fs::read_to_string(&policy).with_context(|| format!("read policy from {}", policy.display()))?;
+            let text = std::fs::read_to_string(&policy)
+                .with_context(|| format!("read policy from {}", policy.display()))?;
             let pol = toolcage_policy::load_yaml(&text)?;
             validate_dual_auth(&token, &key_hex, "fetch")?;
             let cap_key = load_key(&key_hex)?;
@@ -927,7 +934,8 @@ fn main() -> anyhow::Result<()> {
                 revocation_file,
                 learn,
             } => {
-                let text = std::fs::read_to_string(&policy).with_context(|| format!("read policy from {}", policy.display()))?;
+                let text = std::fs::read_to_string(&policy)
+                    .with_context(|| format!("read policy from {}", policy.display()))?;
                 let pol = toolcage_policy::load_yaml(&text)?;
                 validate_dual_auth(&token, &key_hex, "mcp serve")?;
                 let t = toolcage_backend::Tier::parse(&tier)?;
@@ -1169,7 +1177,8 @@ fn main() -> anyhow::Result<()> {
                 learn,
                 approve,
             } => {
-                let text = std::fs::read_to_string(&policy).with_context(|| format!("read policy from {}", policy.display()))?;
+                let text = std::fs::read_to_string(&policy)
+                    .with_context(|| format!("read policy from {}", policy.display()))?;
                 let pol = toolcage_policy::load_yaml(&text)?;
                 validate_dual_auth(&token, &key_hex, "mcp serve")?;
                 let t = toolcage_backend::Tier::parse(&tier)?;
