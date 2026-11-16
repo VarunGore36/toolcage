@@ -180,8 +180,16 @@ pub fn route(
     }
     match name {
         "run_command" => {
-            let argv: Vec<String> =
-                serde_json::from_value(args.get("argv").cloned().unwrap_or_default())?;
+            let argv: Vec<String> = args
+                .get("argv")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| anyhow::anyhow!("denied [args:argv required]"))?
+                .iter()
+                .map(|v| v.as_str().unwrap_or("").to_string())
+                .collect();
+            if argv.is_empty() {
+                anyhow::bail!("denied [args:argv cannot be empty]");
+            }
             let o = sup.exec(&argv)?;
             if !o.allowed {
                 anyhow::bail!("denied {:?}", o.rule_ids);
