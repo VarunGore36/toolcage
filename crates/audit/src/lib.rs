@@ -629,8 +629,8 @@ mod tests {
                 result: "ok".into(),
                 bytes: 0,
                 claimed_by: "host".into(),
-                prev_hash: String::new(),
-                hash: String::new(),
+                prev_hash: String::default(),
+                hash: String::default(),
             })
             .unwrap();
         }
@@ -674,8 +674,8 @@ mod tests {
             result: "ok".into(),
             bytes: 0,
             claimed_by: "host".into(),
-            prev_hash: String::new(),
-            hash: String::new(),
+            prev_hash: String::default(),
+            hash: String::default(),
         }
     }
 
@@ -816,8 +816,8 @@ mod tests {
                 result: "ok".into(),
                 bytes: 0,
                 claimed_by: "host".into(),
-                prev_hash: String::new(),
-                hash: String::new(),
+                prev_hash: String::default(),
+                hash: String::default(),
             })
             .unwrap();
         }
@@ -959,8 +959,8 @@ mod tests {
                 result: "ok".into(),
                 bytes: 0,
                 claimed_by: "host".into(),
-                prev_hash: String::new(),
-                hash: String::new(),
+                prev_hash: String::default(),
+                hash: String::default(),
             })
             .unwrap();
         }
@@ -1001,8 +1001,8 @@ mod tests {
                     result: "ok".into(),
                     bytes: 0,
                     claimed_by: "host".into(),
-                    prev_hash: String::new(),
-                    hash: String::new(),
+                    prev_hash: String::default(),
+                    hash: String::default(),
                 })
                 .unwrap();
             }
