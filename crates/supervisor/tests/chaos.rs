@@ -13,7 +13,7 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         tier: toolcage_backend::Tier::Tier0,
         backend: None,
         allow_unisolated: false,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
         cap_key: None,
     }
 }
@@ -32,7 +32,7 @@ fn audit_write_failure_denies_action() {
         tier: toolcage_backend::Tier::Tier0,
         backend: None,
         allow_unisolated: false,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
         cap_key: None,
     };
     let b = toolcage_broker::Broker::new();
@@ -167,7 +167,7 @@ fn over_egress_budget_denies_fail_closed() {
         tier: toolcage_backend::Tier::Tier0,
         backend: None,
         allow_unisolated: false,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
         cap_key: None,
     };
     let b = toolcage_broker::Broker::new();
@@ -271,12 +271,12 @@ fn panic_freeze_taints_and_keeps_the_chain_verifiable() {
         request_hash: "h".into(),
         decision: "allow".into(),
         rule_ids: vec![],
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
         result: "ok".into(),
         bytes: 0,
         claimed_by: "host".into(),
-        prev_hash: String::new(),
-        hash: String::new(),
+        prev_hash: String::default(),
+        hash: String::default(),
     })
     .unwrap();
     drop(w);
@@ -315,12 +315,12 @@ fn panic_freeze_taints_and_keeps_the_chain_verifiable() {
         request_hash: "h".into(),
         decision: "allow".into(),
         rule_ids: vec![],
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
         result: "ok".into(),
         bytes: 0,
         claimed_by: "host".into(),
-        prev_hash: String::new(),
-        hash: String::new(),
+        prev_hash: String::default(),
+        hash: String::default(),
     })
     .unwrap();
     drop(w);
@@ -371,12 +371,12 @@ fn panic_freeze_blocks_writes_and_cannot_be_erased() {
         request_hash: "h".into(),
         decision: "allow".into(),
         rule_ids: vec![],
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
         result: "ok".into(),
         bytes: 0,
         claimed_by: "host".into(),
-        prev_hash: String::new(),
-        hash: String::new(),
+        prev_hash: String::default(),
+        hash: String::default(),
     })
     .unwrap();
     drop(w);

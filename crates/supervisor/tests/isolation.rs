@@ -16,7 +16,7 @@ fn sup_at(
         backend: None,
         allow_unisolated,
         cap_key: None,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
     }
 }
 
@@ -115,7 +115,7 @@ fn tier0_with_backend_executes() {
         backend: None,
         allow_unisolated: true,
         cap_key: None,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
     };
     // With allow_unisolated=true and tier0, exec runs (unisolated but audited)
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
@@ -144,7 +144,7 @@ fn audit_trail_has_intent_and_outcome() {
         backend: None,
         allow_unisolated: true,
         cap_key: None,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
     };
     // Execute a command
     let _ = sup
@@ -178,7 +178,7 @@ fn denied_exec_is_audited() {
         backend: None,
         allow_unisolated: false,
         cap_key: None,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
     };
     // Without allow_unisolated, exec should be denied
     let o = sup
@@ -214,7 +214,7 @@ fn tier1_backend_unavailable_denies() {
         backend: None,
         allow_unisolated: false,
         cap_key: None,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
     };
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
     assert!(!o.allowed, "tier1 without backend should be denied");
@@ -238,7 +238,7 @@ fn exec_with_bad_tier_name_denied() {
         backend: None,
         allow_unisolated: false,
         cap_key: None,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
     };
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
     assert!(!o.allowed, "tier2 without backend should be denied");
@@ -260,7 +260,7 @@ fn tier0_with_cpu_limit_executes() {
         backend: None,
         allow_unisolated: true,
         cap_key: None,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
     };
     // cpu_seconds = 1 should allow execution but enforce limit
     sup.policy.limits.cpu_seconds = 1;
@@ -284,7 +284,7 @@ fn tier0_with_memory_limit_executes() {
         backend: None,
         allow_unisolated: true,
         cap_key: None,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
     };
     // memory_mb = 256 should allow execution
     sup.policy.limits.memory_mb = 256;
@@ -309,7 +309,7 @@ fn tier0_session_id_validation() {
         backend: None,
         allow_unisolated: true,
         cap_key: None,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
     };
     // Empty session ID should still allow exec (the supervisor doesn't validate session IDs)
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
@@ -332,7 +332,7 @@ fn tier0_very_long_session_id() {
         backend: None,
         allow_unisolated: true,
         cap_key: None,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
     };
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
     assert!(o.allowed, "long session ID should still allow exec");
@@ -354,7 +354,7 @@ fn tier0_unisolated_executes() {
         backend: None,
         allow_unisolated: true,
         cap_key: None,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
     };
     let o = sup
         .exec(&["/bin/echo".to_string(), "unisolated".to_string()])
@@ -394,7 +394,7 @@ fn supervisor_session_id_variants() {
             backend: None,
             allow_unisolated: true,
             cap_key: None,
-            token_rev_id: String::new(),
+            token_rev_id: String::default(),
         };
         let o = sup.exec(&["/bin/true".to_string()]).unwrap();
         assert!(o.allowed, "session ID '{session_id}' should be allowed");
@@ -420,7 +420,7 @@ fn supervisor_tier0_with_different_policies() {
             backend: None,
             allow_unisolated: true,
             cap_key: None,
-            token_rev_id: String::new(),
+            token_rev_id: String::default(),
         };
         sup.policy.limits.cpu_seconds = cpu_seconds;
         let o = sup.exec(&["/bin/true".to_string()]).unwrap();
@@ -449,7 +449,7 @@ fn supervisor_tier0_with_different_memory_limits() {
             backend: None,
             allow_unisolated: true,
             cap_key: None,
-            token_rev_id: String::new(),
+            token_rev_id: String::default(),
         };
         sup.policy.limits.memory_mb = memory_mb;
         let o = sup.exec(&["/bin/true".to_string()]).unwrap();
@@ -488,7 +488,7 @@ fn supervisor_session_id_variants_final() {
             backend: None,
             allow_unisolated: true,
             cap_key: None,
-            token_rev_id: String::new(),
+            token_rev_id: String::default(),
         };
         let o = sup.exec(&["/bin/true".to_string()]).unwrap();
         assert!(o.allowed, "session ID '{session_id}' should be allowed");
@@ -511,7 +511,7 @@ fn supervisor_session_id_empty_allowed() {
         backend: None,
         allow_unisolated: true,
         cap_key: None,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
     };
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
     assert!(o.allowed, "empty session ID should be allowed");
