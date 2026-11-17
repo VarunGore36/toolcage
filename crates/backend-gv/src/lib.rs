@@ -545,7 +545,7 @@ mod tests {
     #[test]
     fn bundle_config_mounts_include_workspace() {
         let bundle = GvBackend::bundle_config("test-session", "/rootfs", "/tmp/workspace");
-        let mounts: Vec<serde_json::Value> = bundle["mounts"].as_array().unwrap().clone();
+        let mounts: Vec<serde_json::Value> = bundle["mounts"].as_array().unwrap().to_vec();
         let workspace_mounts: Vec<_> = mounts
             .iter()
             .filter(|m| m["destination"] == "/workspace")
