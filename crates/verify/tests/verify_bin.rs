@@ -22,12 +22,12 @@ fn mklog(dir: &std::path::Path) -> (PathBuf, String) {
             request_hash: "h".into(),
             decision: "allow".into(),
             rule_ids: vec![],
-            token_rev_id: String::new(),
+            token_rev_id: String::default(),
             result: "ok".into(),
             bytes: 0,
             claimed_by: "host".into(),
-            prev_hash: String::new(),
-            hash: String::new(),
+            prev_hash: String::default(),
+            hash: String::default(),
         })
         .unwrap();
     }
