@@ -366,7 +366,7 @@ impl Token {
             parent: Some(self.rev_id.clone()),
             ancestors,
             rights: narrow,
-            tag: String::new(),
+            tag: String::default(),
         };
         let tag = hex_lower(
             &mac_for(key, &t.rev_id, &t.parent, &t.ancestors, &t.rights)
@@ -897,7 +897,7 @@ mod tests {
                 budget_bytes: 0,
                 expires_at: 0,
             },
-            tag: String::new(),
+            tag: String::default(),
         };
         let mut rl = RevocationList::default();
         rl.track(&mk("a", "b"));
@@ -1025,7 +1025,7 @@ mod tests {
         assert!(r.verify_tag(&key()));
         let relabeled = Token {
             rev_id: r.rev_id.clone(),
-            parent: Some(String::new()),
+            parent: Some(String::default()),
             ancestors: r.ancestors.clone(),
             rights: r.rights.clone(),
             tag: r.tag.clone(),
@@ -1039,10 +1039,10 @@ mod tests {
         let child_of_empty = {
             let t = Token {
                 rev_id: "r9".into(),
-                parent: Some(String::new()),
+                parent: Some(String::default()),
                 ancestors: Vec::new(),
                 rights: r.rights.clone(),
-                tag: String::new(),
+                tag: String::default(),
             };
             // Mint its real tag under the key (simulate what a signer would do).
             let tag = hex_lower(
@@ -1218,14 +1218,14 @@ mod tests {
             parent: Some("r0".into()),
             ancestors: vec![],
             rights: Rights::default(),
-            tag: String::new(),
+            tag: String::default(),
         };
         let grandchild = Token {
             rev_id: "c2".into(),
             parent: Some("c1".into()),
             ancestors: vec![],
             rights: Rights::default(),
-            tag: String::new(),
+            tag: String::default(),
         };
 
         let mut rl = RevocationList::default();
@@ -1250,7 +1250,7 @@ mod tests {
             parent: None,
             ancestors: vec![],
             rights: Rights::default(),
-            tag: String::new(),
+            tag: String::default(),
         };
         assert!(loaded_legacy.is_revoked(&tok));
 
@@ -1267,14 +1267,14 @@ mod tests {
             parent: None,
             ancestors: vec![],
             rights: Rights::default(),
-            tag: String::new(),
+            tag: String::default(),
         };
         let sibling = Token {
             rev_id: "org/team-a-other/sess-1".into(),
             parent: None,
             ancestors: vec![],
             rights: Rights::default(),
-            tag: String::new(),
+            tag: String::default(),
         };
         assert!(
             rl.is_revoked(&leaf),
@@ -1304,7 +1304,7 @@ fn allows_tampered_rights_fail_closed() {
             budget_bytes: 1024,
             expires_at: 0,
         },
-        tag: String::new(),
+        tag: String::default(),
     };
     tok.tag = tok.sign_for_tests(&key); // sign it
     assert!(tok.allows(&key, Some("/workspace/file"), None, None, None));
@@ -1326,7 +1326,7 @@ fn allows_empty_rights_grant_nothing() {
         parent: None,
         ancestors: vec![],
         rights: Rights::default(), // all empty
-        tag: String::new(),
+        tag: String::default(),
     };
     tok.tag = tok.sign_for_tests(&key);
     // Empty fs_prefixes grants nothing on fs axis
@@ -1351,7 +1351,7 @@ fn allows_expired_token_fail_closed() {
             budget_bytes: 1024,
             expires_at: 1, // expired long ago
         },
-        tag: String::new(),
+        tag: String::default(),
     };
     tok.tag = tok.sign_for_tests(&key);
     assert!(
@@ -1377,7 +1377,7 @@ fn attenuate_cannot_widen_methods() {
             budget_bytes: 1024,
             expires_at: 0,
         },
-        tag: String::new(),
+        tag: String::default(),
     };
     parent.sign_for_tests(&key);
 
@@ -1422,7 +1422,7 @@ fn tag_tampering_fail_closed() {
             budget_bytes: 1024,
             expires_at: 0,
         },
-        tag: String::new(),
+        tag: String::default(),
     };
     tok.tag = tok.sign_for_tests(&key);
     assert!(tok.allows(&key, Some("/workspace/file"), None, None, None));
