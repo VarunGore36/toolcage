@@ -17,7 +17,7 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         tier: toolcage_backend::Tier::Tier0,
         backend: None,
         allow_unisolated: true,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
         cap_key: None,
     }
 }
