@@ -24,7 +24,7 @@ fn supervisor_session_id_variants() {
             backend: None,
             allow_unisolated: true,
             cap_key: None,
-            token_rev_id: String::new(),
+            token_rev_id: String::default(),
         };
         let o = sup.exec(&["/bin/true".to_string()]);
         // Session creation should succeed even if exec fails due to no backend
@@ -51,7 +51,7 @@ fn supervisor_session_id_empty_allowed() {
         backend: None,
         allow_unisolated: true,
         cap_key: None,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
     };
     let o = sup.exec(&["/bin/true".to_string()]);
     assert!(

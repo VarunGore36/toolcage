@@ -10,7 +10,7 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         tier: toolcage_backend::Tier::Tier0,
         backend: None,
         allow_unisolated: true,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
         cap_key: None,
     }
 }
@@ -83,7 +83,7 @@ fn audit_trail_records_exec_with_argv() {
         backend: None,
         allow_unisolated: true,
         cap_key: None,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
     };
     let o = sup
         .exec(&[
@@ -115,7 +115,7 @@ fn audit_trail_records_denied_exec() {
         backend: None,
         allow_unisolated: false,
         cap_key: None,
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
     };
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
     assert!(
