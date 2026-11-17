@@ -250,7 +250,7 @@ mod tests {
         }
         // Control characters, spaces and non-ASCII are refused.
         for id in [
-            String::new(),
+            String::default(),
             "a\nb".to_string(),
             "a\r\nb".to_string(),
             "a\0b".to_string(),
