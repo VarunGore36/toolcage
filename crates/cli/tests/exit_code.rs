@@ -104,7 +104,6 @@ fn fetch_unknown_host_denied() {
     let _ = std::fs::remove_file(&audit);
     let status = cli_run(&[
         "fetch",
-        "--unsafe-no-isolation",
         "--policy",
         policy.to_str().unwrap(),
         "--audit",
