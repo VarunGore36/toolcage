@@ -28,8 +28,8 @@ fn append_throughput_eps() {
             result: "ok".into(),
             bytes: 0,
             claimed_by: "host".into(),
-            prev_hash: String::new(),
-            hash: String::new(),
+            prev_hash: String::default(),
+            hash: String::default(),
         })
         .unwrap();
     }
@@ -77,8 +77,8 @@ fn group_commit_throughput_eps() {
                 result: "ok".into(),
                 bytes: 0,
                 claimed_by: "host".into(),
-                prev_hash: String::new(),
-                hash: String::new(),
+                prev_hash: String::default(),
+                hash: String::default(),
             });
         }
         w.append_batch(batch).unwrap();

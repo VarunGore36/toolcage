@@ -511,7 +511,7 @@ fs:
             mounts: vec![policy::Mount {
                 path: "/workspace".into(),
                 mode: "readonly".into(),
-                source: String::new(),
+                source: String::default(),
             }],
         },
         net: Default::default(),
