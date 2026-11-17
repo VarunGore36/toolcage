@@ -409,7 +409,7 @@ mod tests {
             backend: None,
             allow_unisolated: true,
             cap_key,
-            token_rev_id: String::new(),
+            token_rev_id: String::default(),
         }
     }
 
@@ -551,7 +551,7 @@ net:
             backend: None,
             allow_unisolated: true,
             cap_key: None,
-            token_rev_id: String::new(),
+            token_rev_id: String::default(),
         };
         let b = toolcage_broker::Broker::new();
         let mut budgets = toolcage_proxy::Budgets::default();
@@ -687,7 +687,7 @@ net:
             backend: None,
             allow_unisolated: true,
             cap_key: None,
-            token_rev_id: String::new(),
+            token_rev_id: String::default(),
         };
         let b = toolcage_broker::Broker::new();
         let mut budgets = toolcage_proxy::Budgets::default();
@@ -719,7 +719,7 @@ net:
             backend: None,
             allow_unisolated: false,
             cap_key: None,
-            token_rev_id: String::new(),
+            token_rev_id: String::default(),
         };
         let b = toolcage_broker::Broker::new();
         let mut budgets = toolcage_proxy::Budgets::default();
@@ -754,7 +754,7 @@ net:
             backend: None,
             allow_unisolated: true,
             cap_key: None,
-            token_rev_id: String::new(),
+            token_rev_id: String::default(),
         };
         let b = toolcage_broker::Broker::new();
         let mut budgets = toolcage_proxy::Budgets::default();
