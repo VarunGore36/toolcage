@@ -760,7 +760,7 @@ mod tests {
         let mut b = Broker::new();
         b.insert(Credential {
             name: "gh".into(),
-            value: String::new(),
+            value: String::default(),
             use_with: "github".into(),
             methods: vec![],
             paths: vec![],
