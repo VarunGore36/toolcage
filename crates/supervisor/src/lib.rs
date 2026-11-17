@@ -252,8 +252,8 @@ impl Supervisor {
             result: "intent".into(),
             bytes: 0,
             claimed_by: "host".into(),
-            prev_hash: String::new(),
-            hash: String::new(),
+            prev_hash: String::default(),
+            hash: String::default(),
         })?;
         if !d.allow {
             return Ok(ExecOutcome {
@@ -289,8 +289,8 @@ impl Supervisor {
                         result: format!("backend-error: {e:#}"),
                         bytes: 0,
                         claimed_by: "host".into(),
-                        prev_hash: String::new(),
-                        hash: String::new(),
+                        prev_hash: String::default(),
+                        hash: String::default(),
                     })?;
                     return Err(e);
                 }
@@ -308,8 +308,8 @@ impl Supervisor {
                 result: format!("exit={:?} truncated={}", cr.exit_code, cr.truncated),
                 bytes: (cr.stdout.len() + cr.stderr.len()) as u64,
                 claimed_by: "host".into(),
-                prev_hash: String::new(),
-                hash: String::new(),
+                prev_hash: String::default(),
+                hash: String::default(),
             })?;
             return Ok(ExecOutcome {
                 allowed: true,
@@ -350,8 +350,8 @@ impl Supervisor {
                 result: why,
                 bytes: 0,
                 claimed_by: "host".into(),
-                prev_hash: String::new(),
-                hash: String::new(),
+                prev_hash: String::default(),
+                hash: String::default(),
             })?;
             return Ok(ExecOutcome {
                 allowed: false,
@@ -480,8 +480,8 @@ impl Supervisor {
             ),
             bytes: (stdout.len() + stderr.len()) as u64,
             claimed_by: "host".into(),
-            prev_hash: String::new(),
-            hash: String::new(),
+            prev_hash: String::default(),
+            hash: String::default(),
         })?;
         // Ensure caller stream flush ordering is deterministic.
         let _ = std::io::stdout().flush();
@@ -590,14 +590,14 @@ impl Supervisor {
                 result: "token-denied".into(),
                 bytes: 0,
                 claimed_by: "host".into(),
-                prev_hash: String::new(),
-                hash: String::new(),
+                prev_hash: String::default(),
+                hash: String::default(),
             })?;
             return Ok(FetchOutcome {
                 allowed: false,
                 need_approval: false,
                 rule_ids: vec![rule.into()],
-                body: String::new(),
+                body: String::default(),
             });
         }
         // Approval gate: pause for out-of-band decision, timeout = deny.
@@ -628,14 +628,14 @@ impl Supervisor {
                 result: "paused-for-approval".into(),
                 bytes: 0,
                 claimed_by: "host".into(),
-                prev_hash: String::new(),
-                hash: String::new(),
+                prev_hash: String::default(),
+                hash: String::default(),
             })?;
             return Ok(FetchOutcome {
                 allowed: false,
                 need_approval: true,
                 rule_ids: vec!["approval:required".into()],
-                body: String::new(),
+                body: String::default(),
             });
         }
         w.append(Event {
@@ -651,15 +651,15 @@ impl Supervisor {
             result: "proxy-intent".into(),
             bytes: 0,
             claimed_by: "host".into(),
-            prev_hash: String::new(),
-            hash: String::new(),
+            prev_hash: String::default(),
+            hash: String::default(),
         })?;
         if !pd.allow {
             return Ok(FetchOutcome {
                 allowed: false,
                 need_approval: false,
                 rule_ids: pd.rule_ids,
-                body: String::new(),
+                body: String::default(),
             });
         }
         // Broker attaches credential upstream (host-side only). Guest sees placeholder.
@@ -710,14 +710,14 @@ impl Supervisor {
                     result: "over-egress-budget(precharge)".into(),
                     bytes: req_est,
                     claimed_by: "host".into(),
-                    prev_hash: String::new(),
-                    hash: String::new(),
+                    prev_hash: String::default(),
+                    hash: String::default(),
                 })?;
                 return Ok(FetchOutcome {
                     allowed: false,
                     need_approval: false,
                     rule_ids: vec!["budget:exceeded".into()],
-                    body: String::new(),
+                    body: String::default(),
                 });
             }
         }
@@ -745,14 +745,14 @@ impl Supervisor {
                     result: format!("over-egress-budget(response): {e}"),
                     bytes: budgets.used_bytes(&dest),
                     claimed_by: "host".into(),
-                    prev_hash: String::new(),
-                    hash: String::new(),
+                    prev_hash: String::default(),
+                    hash: String::default(),
                 })?;
                 return Ok(FetchOutcome {
                     allowed: false,
                     need_approval: false,
                     rule_ids: vec!["budget:exceeded".into()],
-                    body: String::new(),
+                    body: String::default(),
                 });
             }
             Err(e) => {
@@ -769,14 +769,14 @@ impl Supervisor {
                     result: format!("proxy-error: {e}"),
                     bytes: 0,
                     claimed_by: "host".into(),
-                    prev_hash: String::new(),
-                    hash: String::new(),
+                    prev_hash: String::default(),
+                    hash: String::default(),
                 })?;
                 return Ok(FetchOutcome {
                     allowed: false,
                     need_approval: false,
                     rule_ids: vec!["proxy-error".into()],
-                    body: String::new(),
+                    body: String::default(),
                 });
             }
         };
@@ -804,14 +804,14 @@ impl Supervisor {
                 // sees — the audit must match the budget state.
                 bytes: resp.body.len() as u64,
                 claimed_by: "host".into(),
-                prev_hash: String::new(),
-                hash: String::new(),
+                prev_hash: String::default(),
+                hash: String::default(),
             })?;
             return Ok(FetchOutcome {
                 allowed: false,
                 need_approval: false,
                 rule_ids: vec!["budget:exceeded".into()],
-                body: String::new(),
+                body: String::default(),
             });
         }
         w.append(Event {
@@ -835,8 +835,8 @@ impl Supervisor {
             // sees — the audit must match the budget state.
             bytes: resp.body.len() as u64,
             claimed_by: "host".into(),
-            prev_hash: String::new(),
-            hash: String::new(),
+            prev_hash: String::default(),
+            hash: String::default(),
         })?;
         Ok(FetchOutcome {
             allowed: true,
@@ -882,12 +882,12 @@ pub fn panic_freeze(audit_path: &std::path::Path, reason: &str) -> anyhow::Resul
         request_hash: "panic".into(),
         decision: "deny-all".into(),
         rule_ids: vec!["panic:freeze".into()],
-        token_rev_id: String::new(),
+        token_rev_id: String::default(),
         result: format!("frozen: {reason}"),
         bytes: 0,
         claimed_by: "host".into(),
-        prev_hash: String::new(),
-        hash: String::new(),
+        prev_hash: String::default(),
+        hash: String::default(),
     })?;
     Ok(e.hash)
 }
