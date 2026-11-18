@@ -1058,7 +1058,7 @@ fn main() -> anyhow::Result<()> {
                 rl.save(&out)?;
                 println!("revoked {} ids -> {}", rev.len(), out.display());
             }
-            TokenOp::List { dir, key_hex } => {}
+            TokenOp::List { dir: _, key_hex: _ } => {}
             TokenOp::Verify {
                 token,
                 key_hex,
@@ -1184,7 +1184,7 @@ fn main() -> anyhow::Result<()> {
                 revocations,
                 revocation_file,
                 learn,
-                background,
+                background: _,
             } => {
                 let text = std::fs::read_to_string(&policy)
                     .with_context(|| format!("read policy from {}", policy.display()))?;
@@ -1523,7 +1523,7 @@ fn main() -> anyhow::Result<()> {
                 McpServerOp::Register {
                     name,
                     command,
-                    policy,
+                    policy: _,
                 } => {
                     // TODO: Implement server registry
                     println!(
@@ -1541,7 +1541,7 @@ fn main() -> anyhow::Result<()> {
                 McpServerOp::Check { command, policy } => {
                     let text = std::fs::read_to_string(&policy)
                         .with_context(|| format!("read policy from {}", policy.display()))?;
-                    let pol = toolcage_policy::load_yaml(&text)?;
+                    let _pol = toolcage_policy::load_yaml(&text)?;
                     let argv: Vec<String> = command
                         .to_string_lossy()
                         .split_whitespace()
