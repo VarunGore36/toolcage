@@ -181,6 +181,11 @@ enum Audit {
         #[arg(long)]
         decision: Option<String>,
     },
+    /// Show statistics about an audit log.
+    Stats {
+        #[arg(long)]
+        log: PathBuf,
+    },
 }
 
 type AuditOp = Audit;
@@ -1607,6 +1612,60 @@ fn main() -> anyhow::Result<()> {
                             out.display()
                         );
                     }
+                }
+            }
+            Audit::Stats { log } => {
+                use std::io::BufRead;
+                let f = std::fs::File::open(&log)
+                    .with_context(|| format!("read audit log {}", log.display()))?;
+                let mut total = 0usize;
+                let mut by_decision = std::collections::HashMap::new();
+                let mut by_action = std::collections::HashMap::new();
+                let mut by_session = std::collections::HashMap::new();
+                let mut total_bytes = 0u64;
+                let mut first_ts = None;
+                let mut last_ts = None;
+                for line in std::io::BufReader::new(f).lines() {
+                    let line = line?;
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let e: toolcage_audit::Event = match serde_json::from_str(&line) {
+                        Ok(e) => e,
+                        Err(_) => continue,
+                    };
+                    total += 1;
+                    *by_decision.entry(e.decision.clone()).or_insert(0) += 1;
+                    *by_action.entry(e.action.clone()).or_insert(0) += 1;
+                    *by_session.entry(e.session.clone()).or_insert(0) += 1;
+                    total_bytes += e.bytes;
+                    if first_ts.is_none() || e.ts_wall < *first_ts.as_ref().unwrap() {
+                        first_ts = Some(e.ts_wall.clone());
+                    }
+                    if last_ts.is_none() || e.ts_wall > *last_ts.as_ref().unwrap() {
+                        last_ts = Some(e.ts_wall.clone());
+                    }
+                }
+                println!("Audit log statistics for {}", log.display());
+                println!("  Total events: {}", total);
+                println!("  Total bytes recorded: {}", total_bytes);
+                println!("  Time range: {} to {}", first_ts.unwrap_or_default(), last_ts.unwrap_or_default());
+                println!();
+                println!("By decision:");
+                for (k, v) in &by_decision {
+                    println!("  {}: {}", k, v);
+                }
+                println!();
+                println!("By action:");
+                for (k, v) in &by_action {
+                    println!("  {}: {}", k, v);
+                }
+                println!();
+                println!("By session (top 10):");
+                let mut sessions: Vec<_> = by_session.iter().collect();
+                sessions.sort_by_key(|(_, v)| std::cmp::Reverse(*v));
+                for (k, v) in sessions.iter().take(10) {
+                    println!("  {}: {}", k, v);
                 }
             }
         },
