@@ -290,6 +290,9 @@ enum McpOp {
         /// auto-applied (an injected agent must not grow its own allowlist).
         #[arg(long, default_value_t = false)]
         learn: bool,
+        /// Run as a background daemon.
+        #[arg(long, default_value_t = false)]
+        background: bool,
     },
     /// Manage MCP server registry.
     Servers {
@@ -1141,6 +1144,7 @@ fn main() -> anyhow::Result<()> {
                 revocations,
                 revocation_file,
                 learn,
+                background,
             } => {
                 let text = std::fs::read_to_string(&policy)
                     .with_context(|| format!("read policy from {}", policy.display()))?;
