@@ -652,6 +652,15 @@ enum TokenOp {
         #[arg(long)]
         key_hex: PathBuf,
     },
+    /// Verify a capability token is valid (check signature, expiry, revocation).
+    Verify {
+        #[arg(long)]
+        token: PathBuf,
+        #[arg(long)]
+        key_hex: PathBuf,
+        #[arg(long)]
+        revocation_file: Option<PathBuf>,
+    },
 }
 
 /// True when a route() error is a POLICY denial (the only thing learn mode
@@ -1049,23 +1058,54 @@ fn main() -> anyhow::Result<()> {
                 rl.save(&out)?;
                 println!("revoked {} ids -> {}", rev.len(), out.display());
             }
-            TokenOp::List { dir, key_hex } => {
+            TokenOp::List { dir, key_hex } => {}
+            TokenOp::Verify {
+                token,
+                key_hex,
+                revocation_file,
+            } => {
                 let key = toolcage_capability::Key::from_hex(&std::fs::read_to_string(&key_hex)?)?;
-                let entries = std::fs::read_dir(&dir)
-                    .with_context(|| format!("read directory {}", dir.display()))?;
-                println!("Tokens in {}:", dir.display());
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                        let text = std::fs::read_to_string(&path)?;
-                        let tok: toolcage_capability::Token = match serde_json::from_str(&text) {
-                            Ok(t) => t,
-                            Err(_) => continue,
-                        };
-                        let valid = tok.verify_tag(&key);
-                        println!("  {} (rev: {}, valid: {})", path.file_name().unwrap().to_string_lossy(), tok.rev_id, if valid { "yes" } else { "no" });
-                    }
+                let tok: toolcage_capability::Token =
+                    serde_json::from_str(&std::fs::read_to_string(&token)?)?;
+
+                // Verify the token
+                let valid = tok.verify_tag(&key);
+                let revoked = if let Some(rev_file) = revocation_file {
+                    let rl = toolcage_capability::RevocationList::load(&rev_file)?;
+                    rl.is_revoked(&tok)
+                } else {
+                    false
+                };
+                let expired =
+                    tok.rights.expires_at != 0 && !tok.allows(&key, None, None, None, None);
+
+                if !valid {
+                    println!("Token: INVALID (bad signature)");
+                    std::process::exit(2);
                 }
+                if revoked {
+                    println!("Token: REVOKED");
+                    std::process::exit(2);
+                }
+                if expired {
+                    println!("Token: EXPIRED");
+                    std::process::exit(2);
+                }
+                println!("Token: VALID");
+                println!("  rev_id: {}", tok.rev_id);
+                println!(
+                    "  parent: {}",
+                    tok.parent.as_deref().unwrap_or("none (root)")
+                );
+                println!(
+                    "  expires: {}",
+                    if tok.rights.expires_at == 0 {
+                        "never".to_string()
+                    } else {
+                        tok.rights.expires_at.to_string()
+                    }
+                );
+                println!("  budget: {} bytes", tok.rights.budget_bytes);
             }
             TokenOp::Inspect { token, key_hex } => {
                 let key = toolcage_capability::Key::from_hex(&std::fs::read_to_string(&key_hex)?)?;
@@ -1480,9 +1520,17 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             McpOp::Servers { op } => match op {
-                McpServerOp::Register { name, command, policy } => {
+                McpServerOp::Register {
+                    name,
+                    command,
+                    policy,
+                } => {
                     // TODO: Implement server registry
-                    println!("Registering MCP server '{}' with command '{}'", name, command.display());
+                    println!(
+                        "Registering MCP server '{}' with command '{}'",
+                        name,
+                        command.display()
+                    );
                     // TODO: Save to config file
                     println!("Server registered (not yet persisted)");
                 }
@@ -1494,7 +1542,11 @@ fn main() -> anyhow::Result<()> {
                     let text = std::fs::read_to_string(&policy)
                         .with_context(|| format!("read policy from {}", policy.display()))?;
                     let pol = toolcage_policy::load_yaml(&text)?;
-                    let argv: Vec<String> = command.to_string_lossy().split_whitespace().map(|s| s.to_string()).collect();
+                    let argv: Vec<String> = command
+                        .to_string_lossy()
+                        .split_whitespace()
+                        .map(|s| s.to_string())
+                        .collect();
                     match toolcage_mcp::check_server_cmd(&argv) {
                         Ok(()) => println!("MCP server '{}' is valid", command.display()),
                         Err(_) => {
@@ -1778,7 +1830,11 @@ fn main() -> anyhow::Result<()> {
                 println!("Audit log statistics for {}", log.display());
                 println!("  Total events: {}", total);
                 println!("  Total bytes recorded: {}", total_bytes);
-                println!("  Time range: {} to {}", first_ts.unwrap_or_default(), last_ts.unwrap_or_default());
+                println!(
+                    "  Time range: {} to {}",
+                    first_ts.unwrap_or_default(),
+                    last_ts.unwrap_or_default()
+                );
                 println!();
                 println!("By decision:");
                 for (k, v) in &by_decision {

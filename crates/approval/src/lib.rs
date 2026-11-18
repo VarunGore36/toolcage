@@ -519,27 +519,27 @@ mod sweep_tests {
         assert_eq!(q.resolve(&id), Some(false));
     }
 
-#[test]
-fn queue_save_load_roundtrip() {
-    let dir = std::env::temp_dir().join(format!("tc-approval-save-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("queue.json");
+    #[test]
+    fn queue_save_load_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("tc-approval-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("queue.json");
 
-    let mut q = Queue::default();
-    let a = q.request("http.request", Some("github"), Some("POST"));
-    let b = q.request("proc.exec", None, None);
-    q.decide(&a, Verdict::Approve);
-    q.decide(&b, Verdict::Deny);
+        let mut q = Queue::default();
+        let a = q.request("http.request", Some("github"), Some("POST"));
+        let b = q.request("proc.exec", None, None);
+        q.decide(&a, Verdict::Approve);
+        q.decide(&b, Verdict::Deny);
 
-    q.save(&path).unwrap();
+        q.save(&path).unwrap();
 
-    let loaded = Queue::load(&path).unwrap();
-    assert_eq!(loaded.counter, 2);
-    assert!(loaded.pending.is_empty());
-    assert_eq!(loaded.decided.len(), 2);
-    assert_eq!(loaded.resolve(&a), Some(true));
-    assert_eq!(loaded.resolve(&b), Some(false));
+        let loaded = Queue::load(&path).unwrap();
+        assert_eq!(loaded.counter, 2);
+        assert!(loaded.pending.is_empty());
+        assert_eq!(loaded.decided.len(), 2);
+        assert_eq!(loaded.resolve(&a), Some(true));
+        assert_eq!(loaded.resolve(&b), Some(false));
 
-    let _ = std::fs::remove_dir_all(&dir);
-}
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
