@@ -222,6 +222,13 @@ enum PolicyOp {
         #[arg(long)]
         policy: PathBuf,
     },
+    /// Show the parsed policy as JSON.
+    Show {
+        #[arg(long)]
+        policy: PathBuf,
+        #[arg(long, default_value = "json")]
+        format: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -875,6 +882,15 @@ fn main() -> anyhow::Result<()> {
                     .with_context(|| format!("read policy from {}", policy.display()))?;
                 let _ = toolcage_policy::load_yaml(&text)?;
                 println!("policy {} is valid", policy.display());
+            }
+            PolicyOp::Show { policy, format } => {
+                let text = std::fs::read_to_string(&policy)
+                    .with_context(|| format!("read policy from {}", policy.display()))?;
+                let pol: toolcage_policy::Policy = toolcage_policy::load_yaml(&text)?;
+                match format.as_str() {
+                    "json" => println!("{}", serde_json::to_string_pretty(&pol)?),
+                    _ => println!("policy {} is valid", policy.display()),
+                }
             }
         },
         Cmd::Token { op } => match op {
