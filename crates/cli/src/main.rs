@@ -130,6 +130,11 @@ enum Cmd {
         #[command(subcommand)]
         op: AuditOp,
     },
+    /// Manage approval requests.
+    Approval {
+        #[command(subcommand)]
+        op: ApprovalOp,
+    },
 }
 
 #[derive(Subcommand)]
@@ -189,6 +194,22 @@ enum Audit {
 }
 
 type AuditOp = Audit;
+
+#[derive(Subcommand)]
+enum ApprovalOp {
+    /// List pending approval requests.
+    List,
+    /// Approve a pending request by ID.
+    Approve {
+        #[arg(long)]
+        id: String,
+    },
+    /// Deny a pending request by ID.
+    Deny {
+        #[arg(long)]
+        id: String,
+    },
+}
 
 #[derive(Subcommand)]
 enum ImageOp {
@@ -1479,6 +1500,17 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
             },
+        },
+        Cmd::Approval { op } => match op {
+            ApprovalOp::List => {
+                println!("No pending approval requests (not yet implemented)");
+            }
+            ApprovalOp::Approve { id } => {
+                println!("Approving request {} (not yet implemented)", id);
+            }
+            ApprovalOp::Deny { id } => {
+                println!("Denying request {} (not yet implemented)", id);
+            }
         },
         Cmd::Demo { dir } => {
             demo::run_demo(&dir)?;
