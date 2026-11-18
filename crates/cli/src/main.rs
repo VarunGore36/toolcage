@@ -270,6 +270,11 @@ enum McpOp {
         #[arg(long, default_value_t = false)]
         learn: bool,
     },
+    /// Manage MCP server registry.
+    Servers {
+        #[command(subcommand)]
+        op: McpServerOp,
+    },
     /// Single call (for tests): --name run_command --args-json '{...}'.
     Call {
         #[arg(long)]
@@ -314,6 +319,21 @@ enum McpOp {
         #[arg(long, default_value_t = false)]
         approve: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum McpServerOp {
+    /// Register an MCP server binary.
+    Register {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        command: PathBuf,
+        #[arg(long)]
+        policy: PathBuf,
+    },
+    /// List registered MCP servers.
+    List,
 }
 
 /// Wire the isolation backend for a session. Fail-closed by default: there is
@@ -1427,6 +1447,18 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
             }
+            McpOp::Servers { op } => match op {
+                McpServerOp::Register { name, command, policy } => {
+                    // TODO: Implement server registry
+                    println!("Registering MCP server '{}' with command '{}'", name, command.display());
+                    // TODO: Save to config file
+                    println!("Server registered (not yet persisted)");
+                }
+                McpServerOp::List => {
+                    // TODO: Implement server listing
+                    println!("No servers registered yet (not yet persisted)");
+                }
+            },
         },
         Cmd::Demo { dir } => {
             demo::run_demo(&dir)?;
