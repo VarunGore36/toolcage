@@ -28,6 +28,9 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
+#[cfg(feature = "merkle")]
+pub mod merkle;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub seq: u64,
