@@ -594,6 +594,13 @@ enum TokenOp {
         #[arg(long)]
         key_hex: PathBuf,
     },
+    /// List capability tokens in a directory.
+    List {
+        #[arg(long)]
+        dir: PathBuf,
+        #[arg(long)]
+        key_hex: PathBuf,
+    },
 }
 
 /// True when a route() error is a POLICY denial (the only thing learn mode
@@ -990,6 +997,24 @@ fn main() -> anyhow::Result<()> {
                 }
                 rl.save(&out)?;
                 println!("revoked {} ids -> {}", rev.len(), out.display());
+            }
+            TokenOp::List { dir, key_hex } => {
+                let key = toolcage_capability::Key::from_hex(&std::fs::read_to_string(&key_hex)?)?;
+                let entries = std::fs::read_dir(&dir)
+                    .with_context(|| format!("read directory {}", dir.display()))?;
+                println!("Tokens in {}:", dir.display());
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                        let text = std::fs::read_to_string(&path)?;
+                        let tok: toolcage_capability::Token = match serde_json::from_str(&text) {
+                            Ok(t) => t,
+                            Err(_) => continue,
+                        };
+                        let valid = tok.verify_tag(&key);
+                        println!("  {} (rev: {}, valid: {})", path.file_name().unwrap().to_string_lossy(), tok.rev_id, if valid { "yes" } else { "no" });
+                    }
+                }
             }
             TokenOp::Inspect { token, key_hex } => {
                 let key = toolcage_capability::Key::from_hex(&std::fs::read_to_string(&key_hex)?)?;
