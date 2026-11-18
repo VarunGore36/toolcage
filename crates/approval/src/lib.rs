@@ -55,7 +55,8 @@ pub struct Pending {
     pub created_at: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Verdict {
     Approve,
     Deny,
@@ -166,6 +167,58 @@ impl Queue {
             }
         }
         expired
+    }
+
+    /// Save queue to a JSON file atomically with 0600 permissions.
+    pub fn save(&self, path: &std::path::Path) -> anyhow::Result<()> {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        #[derive(serde::Serialize)]
+        struct SavedQueue {
+            pending: HashMap<String, Pending>,
+            decided: HashMap<String, Verdict>,
+            counter: u64,
+        }
+        let saved = SavedQueue {
+            pending: self.pending.clone(),
+            decided: self.decided.clone(),
+            counter: self.counter,
+        };
+        let data = serde_json::to_vec_pretty(&saved)?;
+        let mut tmp = std::path::PathBuf::from(path);
+        tmp.set_extension("tmp");
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        f.write_all(&data)?;
+        f.flush()?;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    }
+
+    /// Load queue from a JSON file. Returns a new queue if file doesn't exist.
+    pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let data = std::fs::read(path)?;
+        #[derive(serde::Deserialize)]
+        struct SavedQueue {
+            pending: HashMap<String, Pending>,
+            decided: HashMap<String, Verdict>,
+            counter: u64,
+        }
+        let saved: SavedQueue = serde_json::from_slice(&data)?;
+        Ok(Self {
+            pending: saved.pending,
+            decided: saved.decided,
+            counter: saved.counter,
+        })
     }
 }
 
@@ -465,4 +518,28 @@ mod sweep_tests {
         q.sweep_expired(1_000_000, 60);
         assert_eq!(q.resolve(&id), Some(false));
     }
+
+#[test]
+fn queue_save_load_roundtrip() {
+    let dir = std::env::temp_dir().join(format!("tc-approval-save-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("queue.json");
+
+    let mut q = Queue::default();
+    let a = q.request("http.request", Some("github"), Some("POST"));
+    let b = q.request("proc.exec", None, None);
+    q.decide(&a, Verdict::Approve);
+    q.decide(&b, Verdict::Deny);
+
+    q.save(&path).unwrap();
+
+    let loaded = Queue::load(&path).unwrap();
+    assert_eq!(loaded.counter, 2);
+    assert!(loaded.pending.is_empty());
+    assert_eq!(loaded.decided.len(), 2);
+    assert_eq!(loaded.resolve(&a), Some(true));
+    assert_eq!(loaded.resolve(&b), Some(false));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
 }
