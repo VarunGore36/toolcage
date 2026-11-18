@@ -30,6 +30,9 @@ enum Cmd {
         /// Off by default: without a wired backend the call is denied, not downgraded.
         #[arg(long, default_value_t = false)]
         unsafe_no_isolation: bool,
+        /// Dry run: validate policy and dry-run without executing.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
         #[arg(trailing_var_arg = true, required = true)]
         argv: Vec<String>,
     },
@@ -86,6 +89,11 @@ enum Cmd {
         #[arg(long)]
         revocation_file: Option<PathBuf>,
     },
+    /// Validate a policy YAML file.
+    Policy {
+        #[command(subcommand)]
+        op: PolicyOp,
+    },
     /// Mint root token / attenuate child (never widens).
     Token {
         #[command(subcommand)]
@@ -101,7 +109,11 @@ enum Cmd {
         #[command(subcommand)]
         op: McpOp,
     },
-    Doctor,
+    Doctor {
+        /// Output as JSON.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// Self-contained 60-second tour: allowed run, denied shell, tampered log.
     Demo {
         /// Scratch directory for the demo's policy, log, and keys.
@@ -154,6 +166,21 @@ enum Audit {
         #[arg(long)]
         decision: Option<String>,
     },
+    /// Export audit log to different formats (JSON, CSV, JSONL).
+    Export {
+        #[arg(long)]
+        log: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value = "jsonl")]
+        format: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        action: Option<String>,
+        #[arg(long)]
+        decision: Option<String>,
+    },
 }
 
 type AuditOp = Audit;
@@ -180,6 +207,15 @@ enum ImageOp {
         /// Pinned public key file (32-byte hex), as printed by `image sign`.
         #[arg(long)]
         pubkey: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum PolicyOp {
+    /// Validate a policy YAML file and report any issues.
+    Validate {
+        #[arg(long)]
+        policy: PathBuf,
     },
 }
 
@@ -539,6 +575,13 @@ enum TokenOp {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Inspect a capability token and display its contents.
+    Inspect {
+        #[arg(long)]
+        token: PathBuf,
+        #[arg(long)]
+        key_hex: PathBuf,
+    },
 }
 
 /// True when a route() error is a POLICY denial (the only thing learn mode
@@ -605,6 +648,7 @@ fn main() -> anyhow::Result<()> {
             tier,
             workspace,
             unsafe_no_isolation,
+            dry_run,
             argv,
         } => {
             let text = std::fs::read_to_string(&policy)
@@ -616,6 +660,38 @@ fn main() -> anyhow::Result<()> {
             // namespace regardless of cwd changes.
             let workspace = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
             reject_control_files_in_workspace(&workspace, &[Some(&policy), Some(&audit)]);
+
+            if dry_run {
+                // Dry run: validate policy and command without executing
+                // Create supervisor without backend for dry-run
+                let sup = toolcage_supervisor::Supervisor {
+                    policy: pol,
+                    audit_path: audit.clone(),
+                    session: format!("dry-run-{}", std::process::id()),
+                    tier: t,
+                    backend: None,
+                    allow_unisolated: false,
+                    cap_key: None,
+                    token_rev_id: String::default(),
+                };
+                let req = toolcage_policy::Request {
+                    action: "proc.exec".into(),
+                    host: None,
+                    method: None,
+                    path: None,
+                    fs_path: None,
+                    argv: Some(argv.clone()),
+                };
+                let d = sup.check(&req);
+                if !d.allow {
+                    explain::report_denial(&d.rule_ids);
+                    std::process::exit(2);
+                }
+                println!("dry-run: command would be allowed");
+                println!("policy decision: {:?}", d.rule_ids);
+                std::process::exit(0);
+            }
+
             let spec = toolcage_backend::SessionSpec {
                 id: format!("run-{}", std::process::id()),
                 tier: t,
@@ -635,6 +711,7 @@ fn main() -> anyhow::Result<()> {
                 cap_key: None,
                 token_rev_id: String::default(),
             };
+
             let o = sup.exec(&argv)?;
             // Explicit: the exit() calls below skip Supervisor's Drop.
             sup.teardown();
@@ -787,6 +864,14 @@ fn main() -> anyhow::Result<()> {
             println!("{o:?}");
             println!("{}", o.body);
         }
+        Cmd::Policy { op } => match op {
+            PolicyOp::Validate { policy } => {
+                let text = std::fs::read_to_string(&policy)
+                    .with_context(|| format!("read policy from {}", policy.display()))?;
+                let _ = toolcage_policy::load_yaml(&text)?;
+                println!("policy {} is valid", policy.display());
+            }
+        },
         Cmd::Token { op } => match op {
             TokenOp::Keygen { out_prefix } => {
                 // Read exactly 32 bytes from urandom (fs::read would block forever).
@@ -884,6 +969,35 @@ fn main() -> anyhow::Result<()> {
                 }
                 rl.save(&out)?;
                 println!("revoked {} ids -> {}", rev.len(), out.display());
+            }
+            TokenOp::Inspect { token, key_hex } => {
+                let key = toolcage_capability::Key::from_hex(&std::fs::read_to_string(&key_hex)?)?;
+                let tok: toolcage_capability::Token =
+                    serde_json::from_str(&std::fs::read_to_string(&token)?)?;
+
+                // Verify the token
+                let valid = tok.verify_tag(&key);
+                let expired =
+                    tok.rights.expires_at != 0 && !tok.allows(&key, None, None, None, None);
+
+                println!("Token: {}", tok.rev_id);
+                println!("Parent: {}", tok.parent.as_deref().unwrap_or("none (root)"));
+                println!("Valid: {}", if valid { "yes" } else { "no" });
+                println!("Expired: {}", if expired { "yes" } else { "no" });
+                println!(
+                    "Expires at: {}",
+                    if tok.rights.expires_at == 0 {
+                        "never".to_string()
+                    } else {
+                        tok.rights.expires_at.to_string()
+                    }
+                );
+                println!("Budget: {} bytes", tok.rights.budget_bytes);
+                println!("FS prefixes: {:?}", tok.rights.fs_prefixes);
+                println!("Network hosts: {:?}", tok.rights.net_hosts);
+                println!("Methods: {:?}", tok.rights.methods);
+                println!("Credential use: {:?}", tok.rights.cred_use);
+                println!("Ancestors: {:?}", tok.ancestors);
             }
         },
         Cmd::Image { op } => match op {
@@ -1271,28 +1385,38 @@ fn main() -> anyhow::Result<()> {
         Cmd::Demo { dir } => {
             demo::run_demo(&dir)?;
         }
-        Cmd::Doctor => {
+        Cmd::Doctor { json } => {
             let p = toolcage_backend_ns::NsBackend::probe();
-            println!(
-                "namespaces={} cgroup2={} landlock_abi={} seccomp={}",
-                p.namespaces, p.cgroup2, p.landlock_abi, p.seccomp
-            );
-            println!("kvm={}", std::path::Path::new("/dev/kvm").exists());
             let gv = toolcage_backend_gv::GvBackend::probe();
-            println!("runsc={} version={:?}", gv.runsc_present, gv.runsc_version);
-            let st = std::process::Command::new("bash")
-                // Anchor to the compile-time repo root, never the cwd: an
-                // agent can plant scripts/doctor.sh in its workspace and wait
-                // for the operator to run `toolcage doctor` there. When the
-                // script is absent (installed binary), the native probes
-                // above already carried the report — say so and move on.
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../scripts/doctor.sh"
-                ))
-                .status();
-            if st.is_err() {
-                println!("(shell-half doctor.sh not found at the build tree; native probes above are the report)");
+            let kvm = std::path::Path::new("/dev/kvm").exists();
+
+            if json {
+                let output = serde_json::json!({
+                    "namespaces": p.namespaces,
+                    "cgroup2": p.cgroup2,
+                    "landlock_abi": p.landlock_abi,
+                    "seccomp": p.seccomp,
+                    "kvm": kvm,
+                    "runsc_present": gv.runsc_present,
+                    "runsc_version": gv.runsc_version,
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            } else {
+                println!(
+                    "namespaces={} cgroup2={} landlock_abi={} seccomp={}",
+                    p.namespaces, p.cgroup2, p.landlock_abi, p.seccomp
+                );
+                println!("kvm={}", kvm);
+                println!("runsc={} version={:?}", gv.runsc_present, gv.runsc_version);
+                let st = std::process::Command::new("bash")
+                    .arg(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../../scripts/doctor.sh"
+                    ))
+                    .status();
+                if st.is_err() {
+                    println!("(shell-half doctor.sh not found at the build tree; native probes above are the report)");
+                }
             }
         }
         Cmd::Panic { audit, reason } => {
@@ -1402,6 +1526,87 @@ fn main() -> anyhow::Result<()> {
                 }
                 if rows.is_empty() {
                     println!("(no events)");
+                }
+            }
+            Audit::Export {
+                log,
+                out,
+                format,
+                session,
+                action,
+                decision,
+            } => {
+                use std::io::BufRead;
+                let f = std::fs::File::open(&log)
+                    .with_context(|| format!("read audit log {}", log.display()))?;
+                let mut rows: Vec<toolcage_audit::Event> = Vec::new();
+                for line in std::io::BufReader::new(f).lines() {
+                    let line = line?;
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let e: toolcage_audit::Event = match serde_json::from_str(&line) {
+                        Ok(e) => e,
+                        Err(_) => continue,
+                    };
+                    if let Some(s) = &session {
+                        if e.session != *s {
+                            continue;
+                        }
+                    }
+                    if let Some(a) = &action {
+                        if e.action != *a {
+                            continue;
+                        }
+                    }
+                    if let Some(d) = &decision {
+                        if e.decision != *d {
+                            continue;
+                        }
+                    }
+                    rows.push(e);
+                }
+                rows.reverse();
+                match format.as_str() {
+                    "json" => {
+                        let json = serde_json::to_string_pretty(&rows)?;
+                        std::fs::write(&out, json)?;
+                        println!("exported {} events to {} (JSON)", rows.len(), out.display());
+                    }
+                    "csv" => {
+                        use std::io::Write;
+                        let mut w = std::fs::File::create(&out)?;
+                        writeln!(w, "seq,ts_wall,session,decision,actor,action,result,rule_ids,request_hash,bytes")?;
+                        for e in &rows {
+                            writeln!(
+                                w,
+                                "{},{},{},{},{},{},{},{},{},{}",
+                                e.seq,
+                                e.ts_wall,
+                                e.session,
+                                e.decision,
+                                e.actor,
+                                e.action,
+                                e.result,
+                                e.rule_ids.join(";"),
+                                e.request_hash,
+                                e.bytes
+                            )?;
+                        }
+                        println!("exported {} events to {} (CSV)", rows.len(), out.display());
+                    }
+                    _ => {
+                        use std::io::Write;
+                        let mut w = std::fs::File::create(&out)?;
+                        for e in &rows {
+                            writeln!(w, "{}", serde_json::to_string(e)?)?;
+                        }
+                        println!(
+                            "exported {} events to {} (JSONL)",
+                            rows.len(),
+                            out.display()
+                        );
+                    }
                 }
             }
         },
