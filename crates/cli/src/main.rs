@@ -334,6 +334,13 @@ enum McpServerOp {
     },
     /// List registered MCP servers.
     List,
+    /// Check an MCP server binary against policy.
+    Check {
+        #[arg(long)]
+        command: PathBuf,
+        #[arg(long)]
+        policy: PathBuf,
+    },
 }
 
 /// Wire the isolation backend for a session. Fail-closed by default: there is
@@ -1457,6 +1464,19 @@ fn main() -> anyhow::Result<()> {
                 McpServerOp::List => {
                     // TODO: Implement server listing
                     println!("No servers registered yet (not yet persisted)");
+                }
+                McpServerOp::Check { command, policy } => {
+                    let text = std::fs::read_to_string(&policy)
+                        .with_context(|| format!("read policy from {}", policy.display()))?;
+                    let pol = toolcage_policy::load_yaml(&text)?;
+                    let argv: Vec<String> = command.to_string_lossy().split_whitespace().map(|s| s.to_string()).collect();
+                    match toolcage_mcp::check_server_cmd(&argv) {
+                        Ok(()) => println!("MCP server '{}' is valid", command.display()),
+                        Err(_) => {
+                            eprintln!("MCP server '{}' is invalid", command.display());
+                            std::process::exit(2);
+                        }
+                    }
                 }
             },
         },
