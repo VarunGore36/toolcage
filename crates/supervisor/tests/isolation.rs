@@ -7,7 +7,7 @@ fn sup_at(
     tier: toolcage_backend::Tier,
     allow_unisolated: bool,
 ) -> toolcage_supervisor::Supervisor {
-    toolcage_supervisor::Supervisor {
+    let sup = toolcage_supervisor::Supervisor {
         policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml"))
             .unwrap(),
         audit_path: audit.to_path_buf(),
@@ -17,7 +17,14 @@ fn sup_at(
         allow_unisolated,
         cap_key: None,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+    };
+    #[cfg(feature = "cedar")]
+    {
+        sup.cedar_engine = None;
     }
+    sup
 }
 
 #[test]
@@ -116,6 +123,8 @@ fn tier0_with_backend_executes() {
         allow_unisolated: true,
         cap_key: None,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     // With allow_unisolated=true and tier0, exec runs (unisolated but audited)
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
@@ -145,6 +154,8 @@ fn audit_trail_has_intent_and_outcome() {
         allow_unisolated: true,
         cap_key: None,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     // Execute a command
     let _ = sup
@@ -179,6 +190,8 @@ fn denied_exec_is_audited() {
         allow_unisolated: false,
         cap_key: None,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     // Without allow_unisolated, exec should be denied
     let o = sup
@@ -215,6 +228,8 @@ fn tier1_backend_unavailable_denies() {
         allow_unisolated: false,
         cap_key: None,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
     assert!(!o.allowed, "tier1 without backend should be denied");
@@ -239,6 +254,8 @@ fn exec_with_bad_tier_name_denied() {
         allow_unisolated: false,
         cap_key: None,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
     assert!(!o.allowed, "tier2 without backend should be denied");
@@ -261,6 +278,8 @@ fn tier0_with_cpu_limit_executes() {
         allow_unisolated: true,
         cap_key: None,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     // cpu_seconds = 1 should allow execution but enforce limit
     sup.policy.limits.cpu_seconds = 1;
@@ -285,6 +304,8 @@ fn tier0_with_memory_limit_executes() {
         allow_unisolated: true,
         cap_key: None,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     // memory_mb = 256 should allow execution
     sup.policy.limits.memory_mb = 256;
@@ -310,6 +331,8 @@ fn tier0_session_id_validation() {
         allow_unisolated: true,
         cap_key: None,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     // Empty session ID should still allow exec (the supervisor doesn't validate session IDs)
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
@@ -333,6 +356,8 @@ fn tier0_very_long_session_id() {
         allow_unisolated: true,
         cap_key: None,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
     assert!(o.allowed, "long session ID should still allow exec");
@@ -355,6 +380,8 @@ fn tier0_unisolated_executes() {
         allow_unisolated: true,
         cap_key: None,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     let o = sup
         .exec(&["/bin/echo".to_string(), "unisolated".to_string()])
@@ -395,6 +422,8 @@ fn supervisor_session_id_variants() {
             allow_unisolated: true,
             cap_key: None,
             token_rev_id: String::default(),
+            #[cfg(feature = "cedar")]
+            cedar_engine: None,
         };
         let o = sup.exec(&["/bin/true".to_string()]).unwrap();
         assert!(o.allowed, "session ID '{session_id}' should be allowed");
@@ -421,6 +450,8 @@ fn supervisor_tier0_with_different_policies() {
             allow_unisolated: true,
             cap_key: None,
             token_rev_id: String::default(),
+            #[cfg(feature = "cedar")]
+            cedar_engine: None,
         };
         sup.policy.limits.cpu_seconds = cpu_seconds;
         let o = sup.exec(&["/bin/true".to_string()]).unwrap();
@@ -450,6 +481,8 @@ fn supervisor_tier0_with_different_memory_limits() {
             allow_unisolated: true,
             cap_key: None,
             token_rev_id: String::default(),
+            #[cfg(feature = "cedar")]
+            cedar_engine: None,
         };
         sup.policy.limits.memory_mb = memory_mb;
         let o = sup.exec(&["/bin/true".to_string()]).unwrap();
@@ -489,6 +522,8 @@ fn supervisor_session_id_variants_final() {
             allow_unisolated: true,
             cap_key: None,
             token_rev_id: String::default(),
+            #[cfg(feature = "cedar")]
+            cedar_engine: None,
         };
         let o = sup.exec(&["/bin/true".to_string()]).unwrap();
         assert!(o.allowed, "session ID '{session_id}' should be allowed");
@@ -512,6 +547,8 @@ fn supervisor_session_id_empty_allowed() {
         allow_unisolated: true,
         cap_key: None,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
     assert!(o.allowed, "empty session ID should be allowed");

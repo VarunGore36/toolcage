@@ -15,6 +15,8 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: None,
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     }
 }
 
@@ -34,6 +36,8 @@ fn audit_write_failure_denies_action() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: None,
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     let b = toolcage_broker::Broker::new();
     // open("not-a-dir/audit.jsonl") fails -> propagate as Err, caller must not act.
@@ -169,6 +173,8 @@ fn over_egress_budget_denies_fail_closed() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: None,
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     let b = toolcage_broker::Broker::new();
     let rl = toolcage_capability::RevocationList::default();

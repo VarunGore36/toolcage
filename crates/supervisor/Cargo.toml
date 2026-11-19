@@ -17,6 +17,10 @@ toolcage-broker = { path = "../broker" }
 toolcage-capability = { path = "../capability" }
 toolcage-backend = { path = "../backend" }
 
+[features]
+default = []
+cedar = ["toolcage-policy/cedar"]
+
 [dev-dependencies]
 toolcage-guest-agent = { path = "../guest-agent" }
 toolcage-backend-ns = { path = "../backend-ns" }

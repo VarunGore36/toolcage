@@ -12,6 +12,8 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         allow_unisolated: true,
         token_rev_id: String::default(),
         cap_key: None,
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     }
 }
 
@@ -84,6 +86,8 @@ fn audit_trail_records_exec_with_argv() {
         allow_unisolated: true,
         cap_key: None,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     let o = sup
         .exec(&[
@@ -116,6 +120,8 @@ fn audit_trail_records_denied_exec() {
         allow_unisolated: false,
         cap_key: None,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
     assert!(

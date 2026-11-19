@@ -9,6 +9,8 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         allow_unisolated: true,
         token_rev_id: String::default(),
         cap_key: None,
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     }
 }
 

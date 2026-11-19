@@ -25,6 +25,8 @@ fn supervisor_session_id_variants() {
             allow_unisolated: true,
             cap_key: None,
             token_rev_id: String::default(),
+            #[cfg(feature = "cedar")]
+            cedar_engine: None,
         };
         let o = sup.exec(&["/bin/true".to_string()]);
         // Session creation should succeed even if exec fails due to no backend
@@ -52,6 +54,8 @@ fn supervisor_session_id_empty_allowed() {
         allow_unisolated: true,
         cap_key: None,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     let o = sup.exec(&["/bin/true".to_string()]);
     assert!(

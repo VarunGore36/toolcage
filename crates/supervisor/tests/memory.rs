@@ -41,6 +41,8 @@ fn supervisor_idle_memory_under_100mb_target() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: None,
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
 
     // Touch policy decision so the constructed supervisor cannot be dead-code eliminated.

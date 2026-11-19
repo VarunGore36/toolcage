@@ -42,6 +42,8 @@ fn wait_error_kills_the_process_group() {
         allow_unisolated: true,
         token_rev_id: String::default(),
         cap_key: None,
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
     };
     let argv = vec![script.display().to_string()];
     let res = s.exec_limits(&argv, 30, 4096);

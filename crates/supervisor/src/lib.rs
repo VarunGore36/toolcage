@@ -35,6 +35,9 @@ use toolcage_audit::{Event, Writer};
 use toolcage_backend::{Backend, Tier};
 use toolcage_policy::{Decision, Policy, Request};
 
+#[cfg(feature = "cedar")]
+use toolcage_policy::CedarEngine;
+
 pub struct Supervisor {
     pub policy: Policy,
     pub audit_path: PathBuf,
@@ -52,6 +55,9 @@ pub struct Supervisor {
     /// Empty = no token presented. (SUP-2: exec events hardcoded "root" —
     /// a lie when the call carried a delegated token or nothing at all.)
     pub token_rev_id: String,
+    /// Optional Cedar policy engine for fine-grained authorization.
+    #[cfg(feature = "cedar")]
+    pub cedar_engine: Option<CedarEngine>,
 }
 
 /// Session teardown on every exit path (I7): early returns and `?` errors
@@ -189,6 +195,19 @@ impl Supervisor {
     }
 
     pub fn check(&self, req: &Request) -> Decision {
+        #[cfg(feature = "cedar")]
+        {
+            if let Some(cedar_engine) = &self.cedar_engine {
+                if let Ok(cedar_decision) = cedar_engine.authorize(req) {
+                    // If Cedar explicitly denies, deny
+                    if !cedar_decision.allow {
+                        return cedar_decision;
+                    }
+                    // If Cedar allows, still check the base policy
+                    // (defense in depth: both must allow)
+                }
+            }
+        }
         toolcage_policy::decide(&self.policy, req)
     }
 
