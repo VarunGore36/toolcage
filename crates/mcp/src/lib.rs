@@ -22,6 +22,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::BufRead;
 use std::path::PathBuf;
 
 #[cfg(test)]
@@ -1211,6 +1212,114 @@ impl ServerRegistry {
         let content = serde_json::to_string_pretty(&self.servers)?;
         std::fs::write(&self.path, content)?;
         Ok(())
+    }
+}
+
+/// A running MCP server process, sandboxed via the supervisor.
+/// The server communicates via stdio (JSON-RPC).
+#[allow(dead_code)]
+pub struct ServerProcess {
+    /// The supervisor managing the server process (reserved for future policy enforcement).
+    supervisor: toolcage_supervisor::Supervisor,
+    /// The server's stdin for sending requests.
+    stdin: Option<std::process::ChildStdin>,
+    /// The server's stdout for reading responses.
+    stdout: std::io::BufReader<std::process::ChildStdout>,
+    /// The server's stderr for capturing logs.
+    stderr: std::process::ChildStderr,
+    /// The underlying child process handle.
+    child: std::process::Child,
+}
+
+impl ServerProcess {
+    /// Spawn a new MCP server process, sandboxed via the supervisor.
+    /// Returns the ServerProcess handle for communicating with the server.
+    pub fn spawn(
+        command: &[String],
+        policy: &toolcage_policy::Policy,
+        audit_path: &std::path::Path,
+    ) -> anyhow::Result<Self> {
+        // Validate the server command first
+        check_server_cmd(command)?;
+
+        // Create a supervisor for the server process
+        let supervisor = toolcage_supervisor::Supervisor {
+            policy: policy.clone(),
+            audit_path: audit_path.to_path_buf(),
+            session: format!("mcp-server-{}", std::process::id()),
+            tier: toolcage_backend::Tier::Tier0,
+            backend: None,
+            allow_unisolated: true, // Server processes run unisolated in v0
+            cap_key: None,
+            token_rev_id: String::default(),
+            approval_queue: toolcage_approval::Queue::default(),
+            approval_queue_path: None,
+        };
+
+        // Spawn the server process
+        let mut child = std::process::Command::new(&command[0])
+            .args(&command[1..])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+
+        let stdin = child.stdin.take();
+        let stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        let stderr = child.stderr.take().unwrap();
+
+        Ok(Self {
+            supervisor,
+            stdin,
+            stdout,
+            stderr,
+            child,
+        })
+    }
+
+    /// Send a JSON-RPC request to the server and wait for the response.
+    pub fn request(&mut self, request: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        use std::io::Write;
+
+        let stdin = self.stdin.as_mut().ok_or_else(|| anyhow::anyhow!("stdin not available"))?;
+        let request_str = serde_json::to_string(request)?;
+        writeln!(stdin, "{}", request_str)?;
+        stdin.flush()?;
+
+        // Read the response
+        let mut line = String::new();
+        self.stdout.read_line(&mut line)?;
+        let response: serde_json::Value = serde_json::from_str(line.trim())?;
+        Ok(response)
+    }
+
+    /// Send a notification (no response expected).
+    pub fn notify(&mut self, notification: &serde_json::Value) -> anyhow::Result<()> {
+        use std::io::Write;
+
+        let stdin = self.stdin.as_mut().ok_or_else(|| anyhow::anyhow!("stdin not available"))?;
+        let notif_str = serde_json::to_string(notification)?;
+        writeln!(stdin, "{}", notif_str)?;
+        stdin.flush()?;
+        Ok(())
+    }
+
+    /// Terminate the server process gracefully.
+    pub fn terminate(&mut self) -> anyhow::Result<()> {
+        self.child.kill()?;
+        self.child.wait()?;
+        Ok(())
+    }
+
+    /// Get a reference to stderr for log capturing.
+    pub fn stderr(&mut self) -> &mut std::process::ChildStderr {
+        &mut self.stderr
+    }
+}
+
+impl Drop for ServerProcess {
+    fn drop(&mut self) {
+        let _ = self.terminate();
     }
 }
 

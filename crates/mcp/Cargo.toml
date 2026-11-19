@@ -15,7 +15,7 @@ toolcage-broker = { path = "../broker" }
 toolcage-capability = { path = "../capability" }
 toolcage-proxy = { path = "../proxy" }
 toolcage-backend = { path = "../backend" }
+toolcage-approval = { path = "../approval" }
 
 [dev-dependencies]
 tempfile = "3"
-toolcage-approval = { path = "../approval" }
