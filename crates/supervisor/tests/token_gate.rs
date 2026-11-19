@@ -10,6 +10,7 @@
 //! gate is denied at the budget pre-charge instead of dialing the network —
 //! the rule id is the oracle for "which gate rejected it".
 
+use toolcage_approval::Queue;
 use toolcage_supervisor::Supervisor;
 
 const POLICY: &str = r#"
@@ -41,6 +42,11 @@ fn sup_at(audit: &std::path::Path, cap_key: Option<toolcage_capability::Key>) ->
         allow_unisolated: false,
         cap_key,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     }
@@ -293,6 +299,11 @@ fn cred_use_axis_is_enforced_on_credential_attachment() {
         token_rev_id: String::default(),
         cap_key: Some(k.clone()),
         #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
+        #[cfg(feature = "cedar")]
         cedar_engine: None,
     };
     let o = fetch_cred(&mut sup, Some(&none_allowed), &rl);
@@ -327,6 +338,11 @@ fn cred_use_axis_is_enforced_on_credential_attachment() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: Some(k.clone()),
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     };

@@ -1,6 +1,7 @@
 //! Cgroup limit readback verification tests — verifies that cgroup limits
 //! set during exec are actually written and can be read back.
 
+use toolcage_approval::Queue;
 fn make_sup_with_limits(
     audit: &std::path::Path,
     cpu_seconds: u64,
@@ -19,6 +20,11 @@ fn make_sup_with_limits(
         allow_unisolated: true,
         token_rev_id: String::default(),
         cap_key: None,
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     }

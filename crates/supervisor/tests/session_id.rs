@@ -1,5 +1,6 @@
 //! Test supervisor session ID handling - various session ID formats should be accepted.
 
+use toolcage_approval::Queue;
 #[test]
 fn supervisor_session_id_variants() {
     let dir = std::env::temp_dir().join(format!("tc-iso-sid-variants-{}", std::process::id()));
@@ -25,6 +26,11 @@ fn supervisor_session_id_variants() {
             allow_unisolated: true,
             cap_key: None,
             token_rev_id: String::default(),
+            #[cfg(feature = "cedar")]
+            #[cfg(feature = "cedar")]
+            cedar_engine: None,
+            approval_queue: Queue::default(),
+            approval_queue_path: None,
             #[cfg(feature = "cedar")]
             cedar_engine: None,
         };
@@ -54,6 +60,11 @@ fn supervisor_session_id_empty_allowed() {
         allow_unisolated: true,
         cap_key: None,
         token_rev_id: String::default(),
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     };

@@ -31,6 +31,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+use toolcage_approval::{Queue, Verdict};
 use toolcage_audit::{Event, Writer};
 use toolcage_backend::{Backend, Tier};
 use toolcage_policy::{Decision, Policy, Request};
@@ -58,6 +59,10 @@ pub struct Supervisor {
     /// Optional Cedar policy engine for fine-grained authorization.
     #[cfg(feature = "cedar")]
     pub cedar_engine: Option<CedarEngine>,
+    /// Approval queue for out-of-band decisions on gated actions.
+    pub approval_queue: Queue,
+    /// Path to the approval queue persistence file.
+    pub approval_queue_path: Option<PathBuf>,
 }
 
 /// Session teardown on every exit path (I7): early returns and `?` errors
@@ -194,6 +199,64 @@ impl Supervisor {
         }
     }
 
+    /// Save the approval queue to disk if a path is configured.
+    pub fn save_approval_queue(&self) -> anyhow::Result<()> {
+        if let Some(path) = &self.approval_queue_path {
+            self.approval_queue.save(path)?;
+        }
+        Ok(())
+    }
+
+    /// Load the approval queue from disk if a path is configured.
+    pub fn load_approval_queue(&mut self) -> anyhow::Result<()> {
+        if let Some(path) = &self.approval_queue_path {
+            self.approval_queue = Queue::load(path)?;
+        }
+        Ok(())
+    }
+
+    /// Sweep expired approval requests (timeout = deny).
+    /// Returns the IDs of requests that were timed out.
+    pub fn sweep_approval_queue(&mut self, timeout_secs: u64) -> Vec<String> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let expired = self.approval_queue.sweep_expired(now, timeout_secs);
+        // Save the queue after sweeping
+        if let Some(path) = &self.approval_queue_path {
+            let _ = self.approval_queue.save(path);
+        }
+        expired
+    }
+
+    /// Approve a pending approval request by ID.
+    pub fn approve_request(&mut self, id: &str) -> bool {
+        let result = self.approval_queue.decide(id, Verdict::Approve);
+        if result {
+            if let Some(path) = &self.approval_queue_path {
+                let _ = self.approval_queue.save(path);
+            }
+        }
+        result
+    }
+
+    /// Deny a pending approval request by ID.
+    pub fn deny_request(&mut self, id: &str) -> bool {
+        let result = self.approval_queue.decide(id, Verdict::Deny);
+        if result {
+            if let Some(path) = &self.approval_queue_path {
+                let _ = self.approval_queue.save(path);
+            }
+        }
+        result
+    }
+
+    /// List all pending approval requests.
+    pub fn list_pending_approvals(&self) -> Vec<&toolcage_approval::Pending> {
+        self.approval_queue.list_pending()
+    }
+
     pub fn check(&self, req: &Request) -> Decision {
         #[cfg(feature = "cedar")]
         {
@@ -282,6 +345,70 @@ impl Supervisor {
                 stdout: vec![],
                 stderr: vec![],
             });
+        }
+        // Approval gate for proc.exec (if policy requires it)
+        let needs_exec_approval = self.policy.needs_approval("proc.exec", None, None);
+        if needs_exec_approval {
+            let approval_id = self.approval_queue.request("proc.exec", None, None);
+
+            if let Some(approved_result) = self.approval_queue.resolve(&approval_id) {
+                if !approved_result {
+                    // Previously denied
+                    w.append(Event {
+                        seq: 0,
+                        ts_wall: now_wall(),
+                        session: self.session.clone(),
+                        actor: "supervisor".into(),
+                        action: "proc.exec".into(),
+                        request_hash: argv_hash.clone(),
+                        decision: "deny".into(),
+                        rule_ids: vec!["approval:denied".into()],
+                        token_rev_id: self.token_rev_id.clone(),
+                        result: "approval-denied".into(),
+                        bytes: 0,
+                        claimed_by: "host".into(),
+                        prev_hash: String::default(),
+                        hash: String::default(),
+                    })?;
+                    return Ok(ExecOutcome {
+                        allowed: false,
+                        rule_ids: vec!["approval:denied".into()],
+                        exit_code: None,
+                        stdout: vec![],
+                        stderr: vec![],
+                    });
+                }
+                // Previously approved - proceed
+            } else {
+                // Still waiting for approval
+                w.append(Event {
+                    seq: 0,
+                    ts_wall: now_wall(),
+                    session: self.session.clone(),
+                    actor: "agent".into(),
+                    action: "proc.exec".into(),
+                    request_hash: argv_hash.clone(),
+                    decision: "need_approval".into(),
+                    rule_ids: vec!["approval:required".into()],
+                    token_rev_id: self.token_rev_id.clone(),
+                    result: "paused-for-approval".into(),
+                    bytes: 0,
+                    claimed_by: "host".into(),
+                    prev_hash: String::default(),
+                    hash: String::default(),
+                })?;
+                // Save the queue
+                if let Some(path) = &self.approval_queue_path {
+                    let _ = self.approval_queue.save(path);
+                }
+                return Ok(ExecOutcome {
+                    allowed: false,
+                    rule_ids: vec!["approval:required".into()],
+                    exit_code: None,
+                    stdout: vec![],
+                    stderr: vec![],
+                });
+            }
         }
         // Isolation is mandatory (I1/I6): every tier runs through the wired
         // backend — Tier 0 = namespaces + Landlock + seccomp, Tier 1 = runsc
@@ -518,7 +645,7 @@ impl Supervisor {
     /// Returns guest-safe (scrubbed) body — secret values never included.
     #[allow(clippy::too_many_arguments)]
     pub fn fetch_via_proxy(
-        &self,
+        &mut self,
         broker: &toolcage_broker::Broker,
         budgets: &mut toolcage_proxy::Budgets,
         proxy: &mut toolcage_proxy::Proxy,
@@ -629,33 +756,83 @@ impl Supervisor {
         // backstop for callers that cannot attribute a request — there,
         // "unknown" pauses rather than proceeds (see the approval/policy
         // gate matrices).
+        // Approval gate: pause for out-of-band decision, timeout = deny.
+        // Matched over every spelling of the destination, so a request for
+        // `github.internal` cannot dodge a gate written as `hosts: [github]`
+        // (and vice versa) — policy already treats the two as one destination.
+        //
+        // The gate is consulted with KNOWN method/host (Some/Some, checked
+        // above); the UNKNOWN-fires polarity of needs_approval is the
+        // backstop for callers that cannot attribute a request — there,
+        // "unknown" pauses rather than proceeds (see the approval/policy
+        // gate matrices).
         let needs_ok = dest_names.iter().any(|n| {
             self.policy
                 .needs_approval("http.request", Some(method), Some(n))
         });
         if pd.allow && needs_ok && !approved {
-            w.append(Event {
-                seq: 0,
-                ts_wall: now_wall(),
-                session: self.session.clone(),
-                actor: "agent".into(),
-                action: format!("http.request {method} {alias_or_host}{path}"),
-                request_hash: "net".into(),
-                decision: "need_approval".into(),
-                rule_ids: vec!["approval:required".into()],
-                token_rev_id: token.map(|t| t.rev_id.clone()).unwrap_or_default(),
-                result: "paused-for-approval".into(),
-                bytes: 0,
-                claimed_by: "host".into(),
-                prev_hash: String::default(),
-                hash: String::default(),
-            })?;
-            return Ok(FetchOutcome {
-                allowed: false,
-                need_approval: true,
-                rule_ids: vec!["approval:required".into()],
-                body: String::default(),
-            });
+            // Create or retrieve approval request
+            let approval_id =
+                self.approval_queue
+                    .request("http.request", Some(alias_or_host), Some(method));
+
+            // Check if already decided
+            if let Some(approved_result) = self.approval_queue.resolve(&approval_id) {
+                if !approved_result {
+                    // Previously denied
+                    w.append(Event {
+                        seq: 0,
+                        ts_wall: now_wall(),
+                        session: self.session.clone(),
+                        actor: "supervisor".into(),
+                        action: format!("http.request {method} {alias_or_host}{path}"),
+                        request_hash: "net".into(),
+                        decision: "deny".into(),
+                        rule_ids: vec!["approval:denied".into()],
+                        token_rev_id: token.map(|t| t.rev_id.clone()).unwrap_or_default(),
+                        result: "approval-denied".into(),
+                        bytes: 0,
+                        claimed_by: "host".into(),
+                        prev_hash: String::default(),
+                        hash: String::default(),
+                    })?;
+                    return Ok(FetchOutcome {
+                        allowed: false,
+                        need_approval: false,
+                        rule_ids: vec!["approval:denied".into()],
+                        body: String::default(),
+                    });
+                }
+                // Previously approved - proceed
+            } else {
+                // Still waiting for approval
+                w.append(Event {
+                    seq: 0,
+                    ts_wall: now_wall(),
+                    session: self.session.clone(),
+                    actor: "agent".into(),
+                    action: format!("http.request {method} {alias_or_host}{path}"),
+                    request_hash: "net".into(),
+                    decision: "need_approval".into(),
+                    rule_ids: vec!["approval:required".into()],
+                    token_rev_id: token.map(|t| t.rev_id.clone()).unwrap_or_default(),
+                    result: "paused-for-approval".into(),
+                    bytes: 0,
+                    claimed_by: "host".into(),
+                    prev_hash: String::default(),
+                    hash: String::default(),
+                })?;
+                // Save the queue
+                if let Some(path) = &self.approval_queue_path {
+                    let _ = self.approval_queue.save(path);
+                }
+                return Ok(FetchOutcome {
+                    allowed: false,
+                    need_approval: true,
+                    rule_ids: vec!["approval:required".into()],
+                    body: String::default(),
+                });
+            }
         }
         w.append(Event {
             seq: 0,

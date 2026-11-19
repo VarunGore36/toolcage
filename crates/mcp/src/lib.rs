@@ -24,6 +24,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+#[cfg(test)]
+#[allow(unused_imports)]
+use toolcage_approval::Queue;
+
 #[derive(Debug, Deserialize)]
 pub struct RpcReq {
     pub jsonrpc: String,
@@ -412,6 +416,8 @@ mod tests {
             allow_unisolated: true,
             cap_key,
             token_rev_id: String::default(),
+            approval_queue: toolcage_approval::Queue::default(),
+            approval_queue_path: None,
         }
     }
 
@@ -554,6 +560,8 @@ net:
             allow_unisolated: true,
             cap_key: None,
             token_rev_id: String::default(),
+            approval_queue: toolcage_approval::Queue::default(),
+            approval_queue_path: None,
         };
         let b = toolcage_broker::Broker::new();
         let mut budgets = toolcage_proxy::Budgets::default();
@@ -690,6 +698,8 @@ net:
             allow_unisolated: true,
             cap_key: None,
             token_rev_id: String::default(),
+            approval_queue: toolcage_approval::Queue::default(),
+            approval_queue_path: None,
         };
         let b = toolcage_broker::Broker::new();
         let mut budgets = toolcage_proxy::Budgets::default();
@@ -722,6 +732,8 @@ net:
             allow_unisolated: false,
             cap_key: None,
             token_rev_id: String::default(),
+            approval_queue: toolcage_approval::Queue::default(),
+            approval_queue_path: None,
         };
         let b = toolcage_broker::Broker::new();
         let mut budgets = toolcage_proxy::Budgets::default();
@@ -757,6 +769,8 @@ net:
             allow_unisolated: true,
             cap_key: None,
             token_rev_id: String::default(),
+            approval_queue: toolcage_approval::Queue::default(),
+            approval_queue_path: None,
         };
         let b = toolcage_broker::Broker::new();
         let mut budgets = toolcage_proxy::Budgets::default();

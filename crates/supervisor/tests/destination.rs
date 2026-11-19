@@ -14,6 +14,7 @@
 //! `Authorization` header exactly when a credential was attached. That is the
 //! oracle for "did the secret travel?".
 
+use toolcage_approval::Queue;
 use toolcage_broker::{Broker, Credential};
 use toolcage_supervisor::Supervisor;
 
@@ -60,6 +61,11 @@ fn sup_at(audit: &std::path::Path) -> Supervisor {
         cap_key: None,
         token_rev_id: String::default(),
         #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
+        #[cfg(feature = "cedar")]
         cedar_engine: None,
     }
 }
@@ -92,7 +98,7 @@ fn credential_follows_destination_not_prefix() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let audit = dir.join("audit.jsonl");
-    let s = sup_at(&audit);
+    let mut s = sup_at(&audit);
     let b = broker();
     let mut budgets = toolcage_proxy::Budgets::default();
     let mut proxy = toolcage_proxy::Proxy::new().unwrap();
@@ -175,7 +181,7 @@ fn approval_gate_matches_destination_aliases() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let audit = dir.join("audit.jsonl");
-    let s = sup_at(&audit);
+    let mut s = sup_at(&audit);
     let b = broker();
     let mut budgets = toolcage_proxy::Budgets::default();
     let mut proxy = toolcage_proxy::Proxy::new().unwrap();

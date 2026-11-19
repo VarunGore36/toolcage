@@ -4,6 +4,7 @@
 //! These tests construct a Policy programmatically with an exec allowlist
 //! and verify the supervisor enforces it.
 
+use toolcage_approval::Queue;
 fn make_sup_with_allowlist(
     audit: &std::path::Path,
     allowlist: Vec<String>,
@@ -20,6 +21,11 @@ fn make_sup_with_allowlist(
         allow_unisolated: true,
         token_rev_id: String::default(),
         cap_key: None,
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     }

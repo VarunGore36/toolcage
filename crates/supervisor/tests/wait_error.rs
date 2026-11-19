@@ -9,6 +9,7 @@
 //! disposition cannot disturb the other supervisor tests.
 
 use std::os::unix::fs::PermissionsExt;
+use toolcage_approval::Queue;
 
 #[test]
 fn wait_error_kills_the_process_group() {
@@ -42,6 +43,11 @@ fn wait_error_kills_the_process_group() {
         allow_unisolated: true,
         token_rev_id: String::default(),
         cap_key: None,
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     };

@@ -2,6 +2,7 @@
 
 use std::fs::File;
 use std::io::Read;
+use toolcage_approval::Queue;
 
 fn current_rss_mb() -> Option<f64> {
     #[cfg(target_os = "linux")]
@@ -41,6 +42,11 @@ fn supervisor_idle_memory_under_100mb_target() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: None,
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     };

@@ -2,6 +2,7 @@
 //! `sleep` killed at 1 s; `yes` truncated at 1 KiB; normal echo unaffected.
 //! These exercise supervisor-level limits only, so they use the explicit
 //! `allow_unisolated` opt-in (the audit outcome is flagged isolation:unisolated).
+use toolcage_approval::Queue;
 fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
     toolcage_supervisor::Supervisor {
         policy: toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml"))
@@ -13,6 +14,11 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         allow_unisolated: true,
         token_rev_id: String::default(),
         cap_key: None,
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     }

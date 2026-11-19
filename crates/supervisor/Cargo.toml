@@ -16,6 +16,7 @@ toolcage-proxy = { path = "../proxy" }
 toolcage-broker = { path = "../broker" }
 toolcage-capability = { path = "../capability" }
 toolcage-backend = { path = "../backend" }
+toolcage-approval = { path = "../approval" }
 
 [features]
 default = []

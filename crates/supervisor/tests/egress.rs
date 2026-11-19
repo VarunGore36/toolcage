@@ -1,6 +1,7 @@
 //! Egress limit enforcement tests — verifies egress budgets are checked
 //! during exec and enforced via precharge/true-up.
 
+use toolcage_approval::Queue;
 fn make_sup_with_egress(
     audit: &std::path::Path,
     egress_bytes: u64,
@@ -19,6 +20,11 @@ fn make_sup_with_egress(
         allow_unisolated: true,
         token_rev_id: String::default(),
         cap_key: None,
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     }

@@ -20,4 +20,5 @@ toolcage-backend-fc = { path = "../backend-fc" }
 toolcage-backend-gv = { path = "../backend-gv" }
 toolcage-capability = { path = "../capability" }
 toolcage-mcp = { path = "../mcp" }
+toolcage-approval = { path = "../approval" }
 libc.workspace = true

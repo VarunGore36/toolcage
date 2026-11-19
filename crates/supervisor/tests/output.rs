@@ -8,6 +8,7 @@
 //! keeping at most `cap` bytes (memory stays bounded).
 
 use std::os::unix::fs::PermissionsExt;
+use toolcage_approval::Queue;
 
 fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
     toolcage_supervisor::Supervisor {
@@ -20,6 +21,11 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         allow_unisolated: true,
         token_rev_id: String::default(),
         cap_key: None,
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     }

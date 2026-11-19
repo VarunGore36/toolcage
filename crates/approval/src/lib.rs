@@ -145,6 +145,11 @@ impl Queue {
         self.decided.get(id).map(|v| *v == Verdict::Approve)
     }
 
+    /// Get all pending approval requests.
+    pub fn list_pending(&self) -> Vec<&Pending> {
+        self.pending.values().collect()
+    }
+
     /// Enforce "timeout = deny": every pending request older than
     /// `timeout_secs` is moved to decided-Deny, and the swept ids are
     /// returned so the caller can audit each timeout as its own event.

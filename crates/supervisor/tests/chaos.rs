@@ -1,6 +1,7 @@
 //! Chaos v0 (fail-closed): dead proxy/broker/audit/disk/clock must STOP actions.
 //! Runs nightly + pre-release. No silent fallback.
 
+use toolcage_approval::Queue;
 fn sample_policy() -> toolcage_policy::Policy {
     toolcage_policy::load_yaml(include_str!("../../../schemas/policy-v0.yaml")).unwrap()
 }
@@ -16,6 +17,11 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         token_rev_id: String::default(),
         cap_key: None,
         #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
+        #[cfg(feature = "cedar")]
         cedar_engine: None,
     }
 }
@@ -27,7 +33,7 @@ fn audit_write_failure_denies_action() {
     let _ = std::fs::remove_file(&dir);
     std::fs::write(&dir, "not-a-dir").unwrap();
     let bad = dir.join("audit.jsonl");
-    let s = toolcage_supervisor::Supervisor {
+    let mut s = toolcage_supervisor::Supervisor {
         policy: sample_policy(),
         audit_path: bad,
         session: "c".into(),
@@ -36,6 +42,11 @@ fn audit_write_failure_denies_action() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: None,
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     };
@@ -164,7 +175,7 @@ fn over_egress_budget_denies_fail_closed() {
     std::fs::create_dir_all(&dir).unwrap();
     let audit = dir.join("a.jsonl");
     let _ = std::fs::remove_file(&audit);
-    let sup = toolcage_supervisor::Supervisor {
+    let mut sup = toolcage_supervisor::Supervisor {
         policy: pol,
         audit_path: audit,
         session: "c".into(),
@@ -173,6 +184,11 @@ fn over_egress_budget_denies_fail_closed() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: None,
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     };

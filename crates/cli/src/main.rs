@@ -752,6 +752,8 @@ fn main() -> anyhow::Result<()> {
                     allow_unisolated: false,
                     cap_key: None,
                     token_rev_id: String::default(),
+                    approval_queue: toolcage_approval::Queue::default(),
+                    approval_queue_path: None,
                 };
                 let req = toolcage_policy::Request {
                     action: "proc.exec".into(),
@@ -789,6 +791,8 @@ fn main() -> anyhow::Result<()> {
                 allow_unisolated: unsafe_no_isolation,
                 cap_key: None,
                 token_rev_id: String::default(),
+                approval_queue: toolcage_approval::Queue::default(),
+                approval_queue_path: None,
             };
 
             let o = sup.exec(&argv)?;
@@ -875,7 +879,7 @@ fn main() -> anyhow::Result<()> {
             // Persistent egress budget file, tied to the audit log so repeated
             // `fetch` calls accumulate damage across invocations (restart-safe).
             let budget_file = budget_file(&audit);
-            let sup = toolcage_supervisor::Supervisor {
+            let mut sup = toolcage_supervisor::Supervisor {
                 policy: pol,
                 audit_path: audit,
                 session: "cli".into(),
@@ -884,6 +888,8 @@ fn main() -> anyhow::Result<()> {
                 allow_unisolated: false,
                 cap_key,
                 token_rev_id: String::default(),
+                approval_queue: toolcage_approval::Queue::default(),
+                approval_queue_path: None,
             };
             let mut broker = toolcage_broker::Broker::new();
             if !secret_value.is_empty() {
@@ -1230,6 +1236,8 @@ fn main() -> anyhow::Result<()> {
                     allow_unisolated: unsafe_no_isolation,
                     cap_key,
                     token_rev_id: String::default(),
+                    approval_queue: toolcage_approval::Queue::default(),
+                    approval_queue_path: None,
                 };
                 let broker = toolcage_broker::Broker::new();
                 let mut proxy = toolcage_proxy::Proxy::new()?;
@@ -1471,6 +1479,8 @@ fn main() -> anyhow::Result<()> {
                     allow_unisolated: unsafe_no_isolation,
                     cap_key,
                     token_rev_id: String::default(),
+                    approval_queue: toolcage_approval::Queue::default(),
+                    approval_queue_path: None,
                 };
                 let broker = toolcage_broker::Broker::new();
                 let mut proxy = toolcage_proxy::Proxy::new()?;
