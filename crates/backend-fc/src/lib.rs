@@ -2155,6 +2155,134 @@ mod image_tests {
     }
 }
 
+/// Snapshot management utilities for retention and cleanup.
+pub mod snapshot {
+    use anyhow::Result;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Configuration for snapshot retention policy.
+    #[derive(Debug, Clone)]
+    pub struct RetentionPolicy {
+        /// Maximum number of snapshots to keep.
+        pub max_snapshots: usize,
+        /// Maximum age of snapshots in seconds.
+        pub max_age_secs: u64,
+        /// Minimum free disk space to maintain (bytes).
+        pub min_free_bytes: u64,
+    }
+
+    impl Default for RetentionPolicy {
+        fn default() -> Self {
+            Self {
+                max_snapshots: 10,
+                max_age_secs: 30 * 24 * 60 * 60, // 30 days
+                min_free_bytes: 1024 * 1024 * 1024, // 1 GB
+            }
+        }
+    }
+
+    /// Metadata for a tracked snapshot.
+    #[derive(Debug, Clone)]
+    pub struct SnapshotInfo {
+        pub path: PathBuf,
+        pub created_at: SystemTime,
+        pub size_bytes: u64,
+        pub hash: String,
+    }
+
+    /// List all snapshot files in a directory.
+    pub fn list_snapshots(dir: &Path) -> Result<Vec<SnapshotInfo>> {
+        use sha2::{Digest, Sha256};
+        let mut snapshots = Vec::new();
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("snap") {
+                let metadata = fs::metadata(&path)?;
+                let created_at = metadata.created().unwrap_or(UNIX_EPOCH);
+                let size_bytes = metadata.len();
+                // Compute hash
+                let data = fs::read(&path)?;
+                let hash = hex::encode(Sha256::digest(&data));
+                snapshots.push(SnapshotInfo {
+                    path,
+                    created_at,
+                    size_bytes,
+                    hash,
+                });
+            }
+        }
+        // Sort by creation time (newest first)
+        snapshots.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(snapshots)
+    }
+
+    /// Apply retention policy: delete old/extra snapshots.
+    pub fn apply_retention(dir: &Path, policy: &RetentionPolicy) -> Result<usize> {
+        let mut snapshots = list_snapshots(dir)?;
+        let mut deleted = 0;
+
+        // Check disk space
+        let mut free_space = get_free_space(dir)?;
+
+        // Delete by age
+        let now = SystemTime::now();
+        let mut i = 0;
+        while i < snapshots.len() {
+            let snap = &snapshots[i];
+            let age = now.duration_since(snap.created_at).unwrap_or_default();
+            if age.as_secs() > policy.max_age_secs {
+                fs::remove_file(&snap.path)?;
+                free_space += snap.size_bytes;
+                deleted += 1;
+                snapshots.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+
+        // Delete by count (keep only max_snapshots newest)
+        while snapshots.len() > policy.max_snapshots {
+            let snap = snapshots.pop().unwrap();
+            fs::remove_file(&snap.path)?;
+            free_space += snap.size_bytes;
+            deleted += 1;
+        }
+
+        // Delete by disk space if needed
+        while free_space < policy.min_free_bytes && !snapshots.is_empty() {
+            let snap = snapshots.pop().unwrap();
+            fs::remove_file(&snap.path)?;
+            free_space += snap.size_bytes;
+            deleted += 1;
+        }
+
+        Ok(deleted)
+    }
+
+    /// Get free disk space for a path.
+    fn get_free_space(path: &Path) -> Result<u64> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+            let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+            let res = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
+            if res != 0 {
+                return Err(anyhow::anyhow!("statvfs failed"));
+            }
+            let free = stat.f_bsize as u64 * stat.f_bavail as u64;
+            Ok(free)
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(u64::MAX)
+        }
+    }
+}
+
 #[cfg(test)]
 mod cid_allocator_tests {
     use super::*;

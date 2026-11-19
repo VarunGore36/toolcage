@@ -11,6 +11,8 @@ anyhow = { workspace = true }
 toolcage-backend = { path = "../backend" }
 sha2 = { workspace = true }
 ed25519-dalek = { workspace = true }
+libc = { workspace = true }
+hex = "0.4"
 
 [dev-dependencies]
 rand = "0.10"
