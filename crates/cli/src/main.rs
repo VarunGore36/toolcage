@@ -144,6 +144,9 @@ enum Audit {
         log: PathBuf,
         #[arg(long)]
         pubkey: Option<PathBuf>,
+        /// Verify Merkle inclusion proof for a specific event index.
+        #[arg(long)]
+        index: Option<usize>,
     },
     /// Sign checkpoint over current head (key file = 64 hex chars, 32 bytes).
     Checkpoint {
@@ -1642,16 +1645,40 @@ fn main() -> anyhow::Result<()> {
             println!("frozen head {head}; taint file written; clear it out-of-band");
         }
         Cmd::Audit { op } => match op {
-            Audit::Verify { log, pubkey } => {
-                if let Some(pkf) = pubkey {
-                    // REVIEW: pinned-pubkey mode — chain + every sibling
-                    // checkpoint must verify, or this fails (no silent skip).
-                    let pk = parse_hex32(&std::fs::read_to_string(&pkf)?)?;
-                    let (n, head) = toolcage_audit::verify_with_pubkey(&log, Some(&pk))?;
-                    println!("ok: {n} events, head {head} (checkpoints verified)");
+            Audit::Verify { log, pubkey, index } => {
+                if let Some(idx) = index {
+                    // Verify Merkle inclusion proof for specific event index
+                    let (_n, head) = if let Some(pkf) = pubkey {
+                        let pk = parse_hex32(&std::fs::read_to_string(&pkf)?)?;
+                        toolcage_audit::verify_with_pubkey(&log, Some(&pk))?
+                    } else {
+                        toolcage_audit::verify(&log)?
+                    };
+                    // Load the Merkle tree and verify inclusion proof
+                    let proof = toolcage_audit::get_inclusion_proof(&log, idx)?;
+                    let root_hash = toolcage_audit::MerkleHash(head.clone());
+                    if proof.verify(&root_hash) {
+                        println!("ok: inclusion proof verified for event {idx}");
+                        println!("  leaf_index: {}", proof.leaf_index);
+                        println!("  leaf_hash: {}", proof.leaf_hash);
+                        println!("  root_hash: {head}");
+                        println!("  siblings: {}", proof.siblings.len());
+                    } else {
+                        eprintln!("FAIL: inclusion proof verification failed for event {idx}");
+                        std::process::exit(2);
+                    }
                 } else {
-                    let (n, head) = toolcage_audit::verify(&log)?;
-                    println!("ok: {n} events, head {head}");
+                    // Original verify behavior
+                    if let Some(pkf) = pubkey {
+                        // REVIEW: pinned-pubkey mode — chain + every sibling
+                        // checkpoint must verify, or this fails (no silent skip).
+                        let pk = parse_hex32(&std::fs::read_to_string(&pkf)?)?;
+                        let (n, head) = toolcage_audit::verify_with_pubkey(&log, Some(&pk))?;
+                        println!("ok: {n} events, head {head} (checkpoints verified)");
+                    } else {
+                        let (n, head) = toolcage_audit::verify(&log)?;
+                        println!("ok: {n} events, head {head}");
+                    }
                 }
             }
             Audit::Checkpoint { log, key_hex } => {

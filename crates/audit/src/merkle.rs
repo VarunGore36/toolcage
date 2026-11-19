@@ -10,11 +10,10 @@
 //! proofs consist of the sibling hashes along the path from the leaf to the
 //! root.
 
-use crate::{hash_event, hash_for, Event};
 use anyhow::Result;
 use hex;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 use std::fmt;
 
 /// A Merkle tree node hash (SHA-256).
@@ -160,7 +159,7 @@ impl MerkleTree {
 
         let mut index = index;
         for level in &self.levels[..self.levels.len() - 1] {
-            let sibling_index = if index % 2 == 0 {
+            let sibling_index = if index.is_multiple_of(2) {
                 // Left child, sibling is right
                 if index + 1 < level.len() {
                     Some(index + 1)
@@ -238,7 +237,7 @@ impl InclusionProof {
             if has_sibling {
                 // There was a sibling at this level, hash with it
                 let sibling = &self.siblings[sibling_idx];
-                let combined = if index % 2 == 0 {
+                let combined = if index.is_multiple_of(2) {
                     format!("{}{}", current.0, sibling.0)
                 } else {
                     format!("{}{}", sibling.0, current.0)

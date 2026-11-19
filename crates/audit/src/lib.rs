@@ -31,6 +31,9 @@ use std::path::Path;
 #[cfg(feature = "merkle")]
 pub mod merkle;
 
+#[cfg(feature = "merkle")]
+pub use merkle::{InclusionProof, MerkleHash, MerkleTree};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub seq: u64,
@@ -516,6 +519,41 @@ pub fn verify_bytes(sig: &[u8], msg: &[u8], pubkey: &[u8]) -> anyhow::Result<()>
     let sig = Signature::from_slice(sig)?;
     vk.verify_strict(msg, &sig)?;
     Ok(())
+}
+
+/// Get the Merkle inclusion proof for a specific event index in the audit log.
+#[cfg(feature = "merkle")]
+pub fn get_inclusion_proof(path: &Path, index: usize) -> anyhow::Result<merkle::InclusionProof> {
+    use crate::merkle::MerkleTree;
+
+    // Build the Merkle tree from the audit log
+    let mut tree = MerkleTree::new();
+    let f = File::open(path)?;
+    let mut reader = BufReader::with_capacity(64 * 1024, f);
+    let mut line = String::with_capacity(512);
+    let mut count = 0u64;
+
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let e: Event = serde_json::from_str(trimmed)?;
+        // Use the event's hash as the leaf
+        tree.append(&e.hash);
+        count += 1;
+    }
+
+    if index >= count as usize {
+        anyhow::bail!("index {} out of bounds (log has {} events)", index, count);
+    }
+
+    tree.inclusion_proof(index)
+        .ok_or_else(|| anyhow::anyhow!("failed to generate inclusion proof for index {}", index))
 }
 
 /// Verify one checkpoint against a pinned pubkey (32 bytes).

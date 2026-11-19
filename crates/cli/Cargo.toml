@@ -10,7 +10,7 @@ clap = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
 toolcage-policy = { path = "../policy" }
-toolcage-audit = { path = "../audit" }
+toolcage-audit = { path = "../audit", features = ["merkle"] }
 toolcage-supervisor = { path = "../supervisor" }
 toolcage-proxy = { path = "../proxy" }
 toolcage-broker = { path = "../broker" }
