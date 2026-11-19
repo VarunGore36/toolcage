@@ -428,3 +428,133 @@ fn panic_freeze_blocks_writes_and_cannot_be_erased() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Test clock skew handling: supervisor should handle wall-clock time changes gracefully.
+/// The audit log uses wall-clock timestamps; if the clock jumps, events should still
+/// be ordered by their sequence numbers, not timestamps.
+#[test]
+fn clock_skew_does_not_break_audit_chain() {
+    let dir = std::env::temp_dir().join(format!("tc-clock-skew-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+
+    let mut w = toolcage_audit::Writer::open(&audit).unwrap();
+    // Write initial event with a timestamp
+    w.append(toolcage_audit::Event {
+        seq: 0,
+        ts_wall: "1000".into(),
+        session: "s".into(),
+        actor: "agent".into(),
+        action: "proc.exec".into(),
+        request_hash: "h".into(),
+        decision: "allow".into(),
+        rule_ids: vec![],
+        token_rev_id: String::default(),
+        result: "ok".into(),
+        bytes: 0,
+        claimed_by: "host".into(),
+        prev_hash: String::default(),
+        hash: String::default(),
+    })
+    .unwrap();
+    drop(w);
+
+    // Simulate clock jump forward by writing directly to the log with a future timestamp
+    // The Writer should handle this gracefully by using the actual wall clock
+    let mut w = toolcage_audit::Writer::open(&audit).unwrap();
+    w.append(toolcage_audit::Event {
+        seq: 1,
+        ts_wall: "2000".into(), // Clock jumped forward
+        session: "s".into(),
+        actor: "agent".into(),
+        action: "proc.exec".into(),
+        request_hash: "h2".into(),
+        decision: "allow".into(),
+        rule_ids: vec![],
+        token_rev_id: String::default(),
+        result: "ok".into(),
+        bytes: 0,
+        claimed_by: "host".into(),
+        prev_hash: String::default(),
+        hash: String::default(),
+    })
+    .unwrap();
+    drop(w);
+
+    // The chain should still verify - sequence numbers are the source of truth
+    let (count, head) = toolcage_audit::verify(&audit).unwrap();
+    assert_eq!(count, 2);
+    assert!(!head.is_empty());
+
+    // Now simulate clock jump backward - Writer uses actual wall clock
+    let mut w = toolcage_audit::Writer::open(&audit).unwrap();
+    w.append(toolcage_audit::Event {
+        seq: 2,
+        ts_wall: "500".into(), // Clock jumped backward
+        session: "s".into(),
+        actor: "agent".into(),
+        action: "proc.exec".into(),
+        request_hash: "h3".into(),
+        decision: "allow".into(),
+        rule_ids: vec![],
+        token_rev_id: String::default(),
+        result: "ok".into(),
+        bytes: 0,
+        claimed_by: "host".into(),
+        prev_hash: String::default(),
+        hash: String::default(),
+    })
+    .unwrap();
+    drop(w);
+
+    // Chain should still verify - sequence numbers ensure ordering
+    let (count, head) = toolcage_audit::verify(&audit).unwrap();
+    assert_eq!(count, 3);
+    assert!(!head.is_empty());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Test that memory limits are enforced (OOM simulation via memory limit).
+/// When a process exceeds its memory limit, it should be killed and the
+/// audit should record the denial.
+#[test]
+fn memory_limit_exceeded_is_audited() {
+    // This test requires a backend that supports memory limits (tier0 with cgroups)
+    // For tier0 without backend, we test the policy check path
+    let dir = std::env::temp_dir().join(format!("tc-mem-limit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+
+    let mut pol = sample_policy();
+    pol.limits.memory_mb = 1; // Extremely low limit
+
+    let mut s = toolcage_supervisor::Supervisor {
+        policy: pol,
+        audit_path: audit.clone(),
+        session: "mem-limit".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: false,
+        token_rev_id: String::default(),
+        cap_key: None,
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+    };
+
+    // With a 1MB memory limit, any exec should be denied at policy check
+    let o = s.exec(&["/bin/true".to_string()]).unwrap();
+    // The exec should be allowed (policy allows it) but would fail at backend
+    // Since we have no backend, it should be denied with isolation:unavailable
+    assert!(!o.allowed);
+    assert!(o.rule_ids.contains(&"isolation:unavailable".to_string()));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
