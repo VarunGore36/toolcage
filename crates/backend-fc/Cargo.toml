@@ -13,5 +13,5 @@ sha2 = { workspace = true }
 ed25519-dalek = { workspace = true }
 
 [dev-dependencies]
-rand = "0.8"
+rand = "0.10"
 toolcage-guest-agent = { path = "../guest-agent" }
