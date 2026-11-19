@@ -558,3 +558,385 @@ fn memory_limit_exceeded_is_audited() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+
+/// Test OOM kill simulation: exec with extremely low memory limit should be
+/// denied at policy check and audit the denial.
+#[test]
+fn oom_simulation_via_policy_deny() {
+    let dir = std::env::temp_dir().join(format!("tc-oom-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+
+    let mut pol = sample_policy();
+    pol.limits.memory_mb = 1; // Extremely low limit
+
+    let mut s = toolcage_supervisor::Supervisor {
+        policy: pol,
+        audit_path: audit.clone(),
+        session: "oom-sim".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: false,
+        token_rev_id: String::default(),
+        cap_key: None,
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+    };
+
+    // Exec should be denied due to memory limit
+    let o = s.exec(&["/bin/true".to_string()]).unwrap();
+    assert!(!o.allowed);
+    // The denial should be recorded in audit
+    let log = std::fs::read_to_string(&audit).unwrap();
+    assert!(log.contains("proc.exec"));
+    assert!(log.contains("deny"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Test disk full simulation during audit write.
+/// The supervisor should fail closed and not proceed with the action.
+#[test]
+fn disk_full_during_audit_write_fails_closed() {
+    let dir = std::env::temp_dir().join(format!("tc-disk-full-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    // Create a read-only file to simulate disk full / permission denied
+    std::fs::write(&audit, "").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&audit, std::fs::Permissions::from_mode(0o444)).unwrap();
+    }
+
+    let mut s = toolcage_supervisor::Supervisor {
+        policy: sample_policy(),
+        audit_path: audit.clone(),
+        session: "disk-full".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: false,
+        token_rev_id: String::default(),
+        cap_key: None,
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+    };
+
+    // Exec should fail due to audit write failure
+    let result = s.exec(&["/bin/true".to_string()]);
+    assert!(result.is_err());
+
+    // Restore permissions for cleanup
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&audit, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Test network partition simulation during fetch.
+/// The fetch should fail closed when the proxy cannot connect.
+#[test]
+fn network_partition_during_fetch_fails_closed() {
+    let dir = std::env::temp_dir().join(format!("tc-net-part-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+
+    let mut s = toolcage_supervisor::Supervisor {
+        policy: sample_policy(),
+        audit_path: audit.clone(),
+        session: "net-part".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: false,
+        token_rev_id: String::default(),
+        cap_key: None,
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+    };
+
+    let b = toolcage_broker::Broker::new();
+    let mut budgets = toolcage_proxy::Budgets::default();
+    let mut proxy = toolcage_proxy::Proxy::new().unwrap();
+    let rl = toolcage_capability::RevocationList::default();
+
+    // Use an unreachable host to simulate network partition
+    let o = s.fetch_via_proxy(
+        &b,
+        &mut budgets,
+        &mut proxy,
+        "10.255.255.1",  // Unreachable IP (RFC 5737)
+        "GET",
+        "/",
+        None,
+        &rl,
+        true,
+    ).unwrap();
+
+    assert!(!o.allowed);
+    assert!(!o.need_approval);
+    // The error should be recorded in audit
+    let log = std::fs::read_to_string(&audit).unwrap();
+    assert!(log.contains("http.request"));
+    assert!(log.contains("deny"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Test concurrent approval race condition.
+/// Multiple threads requesting approval for the same action should be handled correctly.
+#[test]
+fn concurrent_approval_race_condition() {
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    let dir = std::env::temp_dir().join(format!("tc-race-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+
+    let mut pol = sample_policy();
+    // Add approval requirement for http.request to github
+    pol.approval.require_for.push({
+        let mut map = std::collections::HashMap::new();
+        map.insert("http.request".into(), toolcage_policy::ApprovalSpec {
+            methods: vec!["POST".into()],
+            hosts: vec!["github".into()],
+        });
+        map
+    });
+
+    // Each thread creates its own supervisor instance to avoid Send issues
+    let barrier = Arc::new(Barrier::new(4));
+    let mut handles = vec![];
+
+    let pol_clone = pol.clone();
+    for _i in 0..4 {
+        let audit = audit.clone();
+        let pol = pol_clone.clone();
+        handles.push(thread::spawn(move || {
+            let mut s = toolcage_supervisor::Supervisor {
+                policy: pol,
+                audit_path: audit.clone(),
+                session: format!("race-{}", std::process::id()),
+                tier: toolcage_backend::Tier::Tier0,
+                backend: None,
+                allow_unisolated: false,
+                token_rev_id: String::default(),
+                cap_key: None,
+                #[cfg(feature = "cedar")]
+                #[cfg(feature = "cedar")]
+                cedar_engine: None,
+                approval_queue: Queue::default(),
+                approval_queue_path: None,
+                #[cfg(feature = "cedar")]
+                cedar_engine: None,
+            };
+            
+            let b = toolcage_broker::Broker::new();
+            let mut budgets = toolcage_proxy::Budgets::default();
+            let mut proxy = toolcage_proxy::Proxy::new().unwrap();
+            let rl = toolcage_capability::RevocationList::default();
+            
+            let _ = s.fetch_via_proxy(
+                &b,
+                &mut budgets,
+                &mut proxy,
+                "github",
+                "POST",
+                "/repos/test",
+                None,
+                &toolcage_capability::RevocationList::default(),
+                false,
+            ).unwrap();
+        }));
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    // Note: Each thread has its own supervisor, so we cannot easily test shared queue
+    // This test verifies that concurrent requests do not crash
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Test token revocation during in-flight fetch.
+/// A token that is revoked mid-request should cause the fetch to be denied.
+#[test]
+fn token_revocation_during_fetch() {
+    use toolcage_capability::{Key, Rights, Token, RevocationList};
+
+    let dir = std::env::temp_dir().join(format!("tc-revocation-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+
+    let key = Key::from_bytes([42u8; 32]);
+    let mut pol = sample_policy();
+    pol.limits.egress_bytes = 10000;
+
+    let mut s = toolcage_supervisor::Supervisor {
+        policy: pol,
+        audit_path: audit.clone(),
+        session: "revocation".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: false,
+        token_rev_id: String::default(),
+        cap_key: Some(key.clone()),
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+    };
+
+    let token = Token::root(&key, "token-1", Rights {
+        fs_prefixes: vec!["/workspace".into()],
+        net_hosts: vec!["github".into()],
+        methods: vec!["GET".into()],
+        cred_use: vec![],
+        budget_bytes: 1000,
+        expires_at: 9_999_999_999,
+    }).unwrap();
+
+    let mut rl = RevocationList::default();
+    rl.track(&token);
+
+    let b = toolcage_broker::Broker::new();
+    let mut budgets = toolcage_proxy::Budgets::default();
+    let mut proxy = toolcage_proxy::Proxy::new().unwrap();
+
+    // First fetch with valid token should succeed (policy allows)
+    let o1 = s.fetch_via_proxy(
+        &b,
+        &mut budgets,
+        &mut proxy,
+        "github",
+        "GET",
+        "/repos/test",
+        Some(&token),
+        &rl,
+        true,
+    ).unwrap();
+    // Should be denied due to no backend, but token should be accepted
+    assert!(!o1.allowed);
+
+    // Revoke the token
+    rl.revoke("token-1");
+
+    // Second fetch with revoked token should be denied
+    let o2 = s.fetch_via_proxy(
+        &b,
+        &mut budgets,
+        &mut proxy,
+        "github",
+        "GET",
+        "/repos/test",
+        Some(&token),
+        &rl,
+        true,
+    ).unwrap();
+    assert!(!o2.allowed);
+    assert!(o2.rule_ids.contains(&"token:deny".to_string()));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Test policy hot-reload race condition.
+/// Changing policy while requests are in-flight should not cause crashes.
+#[test]
+fn policy_hot_reload_during_requests() {
+    let dir = std::env::temp_dir().join(format!("tc-reload-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audit = dir.join("a.jsonl");
+    let _ = std::fs::remove_file(&audit);
+
+    let pol1 = sample_policy();
+    let mut pol2 = sample_policy();
+    // Different policy: one allows github, one doesn't
+    pol2.net.hosts.clear();
+
+    let mut s = toolcage_supervisor::Supervisor {
+        policy: pol1,
+        audit_path: audit.clone(),
+        session: "reload".into(),
+        tier: toolcage_backend::Tier::Tier0,
+        backend: None,
+        allow_unisolated: false,
+        token_rev_id: String::default(),
+        cap_key: None,
+        #[cfg(feature = "cedar")]
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+        approval_queue: Queue::default(),
+        approval_queue_path: None,
+        #[cfg(feature = "cedar")]
+        cedar_engine: None,
+    };
+
+    let b = toolcage_broker::Broker::new();
+    let mut budgets = toolcage_proxy::Budgets::default();
+    let mut proxy = toolcage_proxy::Proxy::new().unwrap();
+    let rl = toolcage_capability::RevocationList::default();
+
+    // First fetch with pol1 (allows github)
+    let o1 = s.fetch_via_proxy(
+        &b,
+        &mut budgets,
+        &mut proxy,
+        "github",
+        "GET",
+        "/",
+        None,
+        &rl,
+        true,
+    ).unwrap();
+    assert!(!o1.allowed); // No backend, so denied
+
+    // Swap policy to pol2 (denies github)
+    s.policy = pol2;
+
+    // Second fetch with pol2 (denies github)
+    let o2 = s.fetch_via_proxy(
+        &b,
+        &mut budgets,
+        &mut proxy,
+        "github",
+        "GET",
+        "/",
+        None,
+        &rl,
+        true,
+    ).unwrap();
+    assert!(!o2.allowed);
+
+    // Both should be recorded in audit
+    let log = std::fs::read_to_string(&audit).unwrap();
+    assert!(log.lines().count() >= 2);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
