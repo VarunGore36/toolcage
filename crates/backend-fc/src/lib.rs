@@ -1474,10 +1474,9 @@ mod tests {
     #[test]
     fn golden_image_signature_verify() {
         use ed25519_dalek::Signer;
-        use rand::Rng;
 
         // Generate a test keypair from random seed bytes.
-        let seed: [u8; 32] = rand::thread_rng().gen();
+        let seed: [u8; 32] = rand::random();
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
         let pubkey_hex = hex_encode(signing_key.verifying_key().as_bytes());
 
