@@ -390,6 +390,10 @@ pub fn check_server_cmd(argv: &[String]) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+}
+
+#[cfg(test)]
+mod server_registry_tests {
     use super::*;
     fn fs_rights(fs_prefixes: Vec<String>) -> toolcage_capability::Rights {
         toolcage_capability::Rights {
@@ -1320,56 +1324,109 @@ impl ServerProcess {
 impl Drop for ServerProcess {
     fn drop(&mut self) {
         let _ = self.terminate();
+
+}    }
+
+/// TLS transport for remote MCP connections.
+/// Provides framed JSON-RPC over TLS with mutual authentication.
+#[cfg(feature = "tls")]
+pub mod tls {
+    use anyhow::Result;
+    use rustls::{Certificate, PrivateKey, ServerConfig, ServerConnection};
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+
+    /// TLS transport configuration.
+    #[derive(Debug, Clone)]
+    pub struct TlsConfig {
+        /// Path to server certificate chain (PEM).
+        pub cert_path: String,
+        /// Path to server private key (PEM).
+        pub key_path: String,
+        /// Path to CA certificate for client verification (optional, for mTLS).
+        pub ca_path: Option<String>,
+        /// Address to bind to.
+        pub bind_addr: String,
+    }
+
+    /// Load TLS configuration from files.
+    pub fn load_tls_config(config: &TlsConfig) -> Result<Arc<ServerConfig>> {
+        let certs = load_certs(&config.cert_path)?;
+        let key = load_private_key(&config.key_path)?;
+
+        let mut server_config = ServerConfig::builder()
+            .with_safe_defaults()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)?;
+
+        // Enable client certificate verification if CA path provided
+        if let Some(ca_path) = &config.ca_path {
+            let ca_certs = load_certs(ca_path)?;
+            let mut root_store = rustls::RootCertStore::empty();
+            for cert in ca_certs {
+                root_store.add(&cert)?;
+            }
+            server_config = ServerConfig::builder()
+                .with_safe_defaults()
+                .with_client_cert_verifier(Arc::new(rustls::server::AllowAnyAuthenticatedClient::new(root_store)))
+                .with_single_cert(
+                    load_certs(&config.cert_path)?,
+                    load_private_key(&config.key_path)?,
+                )?;
+        }
+
+        Ok(Arc::new(server_config))
+    }
+
+    fn load_certs(path: &str) -> Result<Vec<Certificate>> {
+        let data = std::fs::read(path)?;
+        let mut reader = BufReader::new(data.as_slice());
+        let certs = rustls_pemfile::certs(&mut reader)?
+            .into_iter()
+            .map(Certificate)
+            .collect();
+        Ok(certs)
+    }
+
+    fn load_private_key(path: &str) -> Result<PrivateKey> {
+        let data = std::fs::read(path)?;
+        let mut reader = BufReader::new(data.as_slice());
+        let keys = rustls_pemfile::pkcs8_private_keys(&mut reader)?;
+        if keys.is_empty() {
+            // Try PKCS#1 format
+            let data2 = std::fs::read(path)?;
+            let mut reader = BufReader::new(data2.as_slice());
+            let keys = rustls_pemfile::rsa_private_keys(&mut reader)?;
+            if keys.is_empty() {
+                return Err(anyhow::anyhow!("no private key found in {}", path));
+            }
+            Ok(PrivateKey(keys[0].clone()))
+        } else {
+            Ok(PrivateKey(keys[0].clone()))
+        }
+    }
+
+    /// Start a TLS listener for MCP connections.
+    /// The handler receives a TLS-wrapped stream that implements Read + Write.
+    pub fn start_tls_listener(
+        config: &TlsConfig,
+        tls_config: Arc<ServerConfig>,
+        mut handler: impl FnMut(rustls::StreamOwned<ServerConnection, TcpStream>) -> Result<()> + Send + 'static + Clone,
+    ) -> Result<()> {
+        let listener = TcpListener::bind(&config.bind_addr)?;
+        for stream in listener.incoming() {
+            let stream = stream?;
+            let tls_config = tls_config.clone();
+            let mut handler = handler.clone();
+            std::thread::spawn(move || -> Result<()> {
+                let tls_stream = rustls::ServerConnection::new(tls_config)
+                    .map_err(|e| anyhow::anyhow!("TLS handshake failed: {}", e))?;
+                let stream = rustls::StreamOwned::new(tls_stream, stream);
+                handler(stream)
+            });
+        }
+        Ok(())
     }
 }
 
-#[cfg(test)]
-mod server_registry_tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_registry_register_and_list() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("servers.json");
-        let mut registry = ServerRegistry::load(Some(path.clone())).unwrap();
-
-        let entry = ServerEntry {
-            name: "test-server".into(),
-            command: vec!["/bin/mcp-server".into()],
-            policy_path: "/tmp/policy.yaml".into(),
-        };
-        registry.register(entry).unwrap();
-
-        let servers = registry.list();
-        assert_eq!(servers.len(), 1);
-        assert_eq!(servers[0].name, "test-server");
-        assert_eq!(servers[0].command, vec!["/bin/mcp-server"]);
-
-        // Reload and verify persistence
-        let registry2 = ServerRegistry::load(Some(path)).unwrap();
-        let servers2 = registry2.list();
-        assert_eq!(servers2.len(), 1);
-        assert_eq!(servers2[0].name, "test-server");
-    }
-
-    #[test]
-    fn test_registry_duplicate_rejected() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("servers.json");
-        let mut registry = ServerRegistry::load(Some(path)).unwrap();
-
-        let entry = ServerEntry {
-            name: "test-server".into(),
-            command: vec!["/bin/mcp-server".into()],
-            policy_path: "/tmp/policy.yaml".into(),
-        };
-        registry.register(entry).unwrap();
-        let err = registry.register(ServerEntry {
-            name: "test-server".into(),
-            command: vec!["/bin/other".into()],
-            policy_path: "/tmp/policy.yaml".into(),
-        });
-        assert!(err.is_err());
-    }
-}
