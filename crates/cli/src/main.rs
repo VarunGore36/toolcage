@@ -1523,20 +1523,42 @@ fn main() -> anyhow::Result<()> {
                 McpServerOp::Register {
                     name,
                     command,
-                    policy: _,
+                    policy,
                 } => {
-                    // TODO: Implement server registry
-                    println!(
-                        "Registering MCP server '{}' with command '{}'",
-                        name,
-                        command.display()
-                    );
-                    // TODO: Save to config file
-                    println!("Server registered (not yet persisted)");
+                    // Validate the server command against the policy
+                    let text = std::fs::read_to_string(&policy)
+                        .with_context(|| format!("read policy from {}", policy.display()))?;
+                    let _pol = toolcage_policy::load_yaml(&text)?;
+                    let argv: Vec<String> = command
+                        .to_string_lossy()
+                        .split_whitespace()
+                        .map(|s| s.to_string())
+                        .collect();
+                    toolcage_mcp::check_server_cmd(&argv)
+                        .with_context(|| "server command validation failed".to_string())?;
+
+                    // Register the server
+                    let mut registry = toolcage_mcp::ServerRegistry::load(None)?;
+                    let entry = toolcage_mcp::ServerEntry {
+                        name: name.clone(),
+                        command: argv,
+                        policy_path: policy,
+                    };
+                    registry.register(entry)?;
+                    println!("MCP server '{}' registered successfully", name);
                 }
                 McpServerOp::List => {
-                    // TODO: Implement server listing
-                    println!("No servers registered yet (not yet persisted)");
+                    let registry = toolcage_mcp::ServerRegistry::load(None)?;
+                    let servers = registry.list();
+                    if servers.is_empty() {
+                        println!("No MCP servers registered");
+                    } else {
+                        println!("Registered MCP servers:");
+                        for s in servers {
+                            println!("  {} -> {}", s.name, s.command.join(" "));
+                            println!("    Policy: {}", s.policy_path.display());
+                        }
+                    }
                 }
                 McpServerOp::Check { command, policy } => {
                     let text = std::fs::read_to_string(&policy)

@@ -19,8 +19,10 @@
 //!   an injected agent grow its own allowlist. Proposals need operator review.
 //! - RpcReq parsing: malformed lines get error responses, never panic (fuzz
 //!   the JSON-RPC layer next: truncated frames, huge ids, duplicate ids).
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
 pub struct RpcReq {
@@ -1122,4 +1124,129 @@ fn rpc_response_error_omits_result() {
         s.contains("-32603"),
         "error response must include INTERNAL_ERROR code: {s}"
     );
+}
+
+/// MCP server registry entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerEntry {
+    /// Unique server name.
+    pub name: String,
+    /// Command to run the server (argv array).
+    pub command: Vec<String>,
+    /// Policy file used to validate the server command.
+    pub policy_path: PathBuf,
+}
+
+/// MCP server registry for persisting registered servers to disk.
+pub struct ServerRegistry {
+    path: PathBuf,
+    servers: BTreeMap<String, ServerEntry>,
+}
+
+impl ServerRegistry {
+    /// Default registry path: ~/.config/toolcage/mcp-servers.json
+    pub fn default_path() -> PathBuf {
+        dirs::config_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("toolcage")
+            .join("mcp-servers.json")
+    }
+
+    /// Load the registry from disk, or create a new empty one.
+    pub fn load(path: Option<PathBuf>) -> Result<Self> {
+        let path = path.unwrap_or_else(Self::default_path);
+        let servers = if path.exists() {
+            let content = std::fs::read_to_string(&path)?;
+            serde_json::from_str(&content).unwrap_or_default()
+        } else {
+            BTreeMap::new()
+        };
+        Ok(Self { path, servers })
+    }
+
+    /// Register a new server.
+    pub fn register(&mut self, entry: ServerEntry) -> Result<()> {
+        if self.servers.contains_key(&entry.name) {
+            anyhow::bail!("server '{}' already registered", entry.name);
+        }
+        self.servers.insert(entry.name.clone(), entry);
+        self.save()
+    }
+
+    /// Unregister a server by name.
+    pub fn unregister(&mut self, name: &str) -> Result<()> {
+        self.servers.remove(name);
+        self.save()
+    }
+
+    /// Get a server by name.
+    pub fn get(&self, name: &str) -> Option<&ServerEntry> {
+        self.servers.get(name)
+    }
+
+    /// List all registered servers.
+    pub fn list(&self) -> Vec<&ServerEntry> {
+        self.servers.values().collect()
+    }
+
+    /// Save the registry to disk.
+    fn save(&self) -> Result<()> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = serde_json::to_string_pretty(&self.servers)?;
+        std::fs::write(&self.path, content)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod server_registry_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_registry_register_and_list() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("servers.json");
+        let mut registry = ServerRegistry::load(Some(path.clone())).unwrap();
+
+        let entry = ServerEntry {
+            name: "test-server".into(),
+            command: vec!["/bin/mcp-server".into()],
+            policy_path: "/tmp/policy.yaml".into(),
+        };
+        registry.register(entry).unwrap();
+
+        let servers = registry.list();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "test-server");
+        assert_eq!(servers[0].command, vec!["/bin/mcp-server"]);
+
+        // Reload and verify persistence
+        let registry2 = ServerRegistry::load(Some(path)).unwrap();
+        let servers2 = registry2.list();
+        assert_eq!(servers2.len(), 1);
+        assert_eq!(servers2[0].name, "test-server");
+    }
+
+    #[test]
+    fn test_registry_duplicate_rejected() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("servers.json");
+        let mut registry = ServerRegistry::load(Some(path)).unwrap();
+
+        let entry = ServerEntry {
+            name: "test-server".into(),
+            command: vec!["/bin/mcp-server".into()],
+            policy_path: "/tmp/policy.yaml".into(),
+        };
+        registry.register(entry).unwrap();
+        let err = registry.register(ServerEntry {
+            name: "test-server".into(),
+            command: vec!["/bin/other".into()],
+            policy_path: "/tmp/policy.yaml".into(),
+        });
+        assert!(err.is_err());
+    }
 }

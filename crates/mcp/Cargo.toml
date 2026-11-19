@@ -8,9 +8,13 @@ license.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
+dirs = "5"
 toolcage-policy = { path = "../policy" }
 toolcage-supervisor = { path = "../supervisor" }
 toolcage-broker = { path = "../broker" }
 toolcage-capability = { path = "../capability" }
 toolcage-proxy = { path = "../proxy" }
 toolcage-backend = { path = "../backend" }
+
+[dev-dependencies]
+tempfile = "3"
