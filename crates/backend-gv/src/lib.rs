@@ -439,11 +439,98 @@ impl Backend for GvBackend {
     }
 }
 
+/// OCI bundle validation: verify the generated config.json against the OCI runtime spec.
+pub mod oci {
+    use anyhow::{anyhow, Result};
+    use serde_json::Value;
+
+    /// Validate an OCI runtime spec config.json against the required fields.
+    /// Returns Ok(()) if valid, or an error describing what's missing/invalid.
+    pub fn validate_config(config: &Value) -> Result<()> {
+        // Required top-level fields per OCI Runtime Spec v1.0+
+        check_field(config, "ociVersion")?;
+        check_field(config, "id")?;
+        check_field(config, "root")?;
+        check_field(config, "mounts")?;
+        check_field(config, "process")?;
+
+        // Validate root
+        let root = config.get("root").unwrap();
+        check_field(root, "path")?;
+
+        // Validate mounts array
+        let mounts = config.get("mounts").unwrap().as_array()
+            .ok_or_else(|| anyhow!("mounts must be an array"))?;
+        for (_i, mount) in mounts.iter().enumerate() {
+            check_field(mount, "destination")?;
+            check_field(mount, "type")?;
+            if mount.get("type").unwrap().as_str() == Some("bind") {
+                check_field(mount, "source")?;
+            }
+        }
+
+        // Validate process
+        let process = config.get("process").unwrap();
+        check_field(process, "user")?;
+        check_field(process, "args")?;
+        let args = process.get("args").unwrap().as_array()
+            .ok_or_else(|| anyhow!("process.args must be an array"))?;
+        if args.is_empty() {
+            return Err(anyhow!("process.args must not be empty"));
+        }
+        check_field(process, "cwd")?;
+
+        // Validate linux namespace config if present
+        if let Some(linux) = config.get("linux") {
+            if let Some(namespaces) = linux.get("namespaces") {
+                let ns_array = namespaces.as_array()
+                    .ok_or_else(|| anyhow!("linux.namespaces must be an array"))?;
+                for ns in ns_array {
+                    check_field(ns, "type")?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn check_field(obj: &Value, field: &str) -> Result<()> {
+        if obj.get(field).is_none() {
+            return Err(anyhow!("missing required field: {}", field));
+        }
+        Ok(())
+    }
+
+    /// Validate that the runsc version is compatible (>= 2024.01).
+    /// Returns Ok(version_string) if compatible, or an error if too old.
+    pub fn check_runsc_version(version_output: &str) -> Result<String> {
+        let version = version_output.trim();
+        if version.is_empty() {
+            return Err(anyhow!("empty runsc version"));
+        }
+        // Parse version like "runsc version 2024.01.0" or "2024.01.0"
+        let version_str = version.trim_start_matches("runsc version ").trim();
+        // Simple check: version should start with year.month
+        if !version_str.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+            return Err(anyhow!("unexpected version format: {}", version_str));
+        }
+        // Extract year
+        let year = version_str.split('.').next().unwrap_or("");
+        if let Ok(y) = year.parse::<i32>() {
+            if y < 2024 {
+                return Err(anyhow!("runsc version {} is too old (minimum 2024.01)", version_str));
+            }
+        }
+        Ok(version_str.to_string())
+    }
+}
+
 /// Doctor probe: what the host can provide for Tier 1 (gVisor/runsc).
 #[derive(Debug, Default)]
 pub struct GvProbe {
     pub runsc_present: bool,
     pub runsc_version: Option<String>,
+    pub oci_compatible: bool,
 }
 
 impl GvBackend {
@@ -465,9 +552,16 @@ impl GvBackend {
         } else {
             None
         };
+        // Check OCI compatibility
+        let oci_compatible = if let Some(ref v) = version {
+            oci::check_runsc_version(v).is_ok()
+        } else {
+            false
+        };
         GvProbe {
             runsc_present: present,
             runsc_version: version,
+            oci_compatible,
         }
     }
 }
