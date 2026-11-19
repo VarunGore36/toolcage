@@ -23,6 +23,12 @@
 //!   (pause + audit). An empty methods/hosts list means "all of that action".
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "cedar")]
+pub mod cedar;
+
+#[cfg(feature = "cedar")]
+pub use cedar::{load_cedar_policies, policy_to_cedar, CedarConfig, CedarEngine};
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Policy {
     pub tool: String,
