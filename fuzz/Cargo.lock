@@ -795,6 +795,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "toolcage-approval"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "toolcage-audit"
 version = "0.1.0"
 dependencies = [
@@ -857,6 +866,7 @@ dependencies = [
  "dirs",
  "serde",
  "serde_json",
+ "toolcage-approval",
  "toolcage-backend",
  "toolcage-broker",
  "toolcage-capability",
@@ -895,6 +905,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "toolcage-approval",
  "toolcage-audit",
  "toolcage-backend",
  "toolcage-broker",
