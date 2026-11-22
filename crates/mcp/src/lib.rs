@@ -389,8 +389,7 @@ pub fn check_server_cmd(argv: &[String]) -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-}
+mod tests {}
 
 #[cfg(test)]
 mod server_registry_tests {
@@ -1285,7 +1284,10 @@ impl ServerProcess {
     pub fn request(&mut self, request: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
         use std::io::Write;
 
-        let stdin = self.stdin.as_mut().ok_or_else(|| anyhow::anyhow!("stdin not available"))?;
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("stdin not available"))?;
         let request_str = serde_json::to_string(request)?;
         writeln!(stdin, "{}", request_str)?;
         stdin.flush()?;
@@ -1301,7 +1303,10 @@ impl ServerProcess {
     pub fn notify(&mut self, notification: &serde_json::Value) -> anyhow::Result<()> {
         use std::io::Write;
 
-        let stdin = self.stdin.as_mut().ok_or_else(|| anyhow::anyhow!("stdin not available"))?;
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("stdin not available"))?;
         let notif_str = serde_json::to_string(notification)?;
         writeln!(stdin, "{}", notif_str)?;
         stdin.flush()?;
@@ -1324,8 +1329,8 @@ impl ServerProcess {
 impl Drop for ServerProcess {
     fn drop(&mut self) {
         let _ = self.terminate();
-
-}    }
+    }
+}
 
 /// TLS transport for remote MCP connections.
 /// Provides framed JSON-RPC over TLS with mutual authentication.
@@ -1369,7 +1374,9 @@ pub mod tls {
             }
             server_config = ServerConfig::builder()
                 .with_safe_defaults()
-                .with_client_cert_verifier(Arc::new(rustls::server::AllowAnyAuthenticatedClient::new(root_store)))
+                .with_client_cert_verifier(Arc::new(
+                    rustls::server::AllowAnyAuthenticatedClient::new(root_store),
+                ))
                 .with_single_cert(
                     load_certs(&config.cert_path)?,
                     load_private_key(&config.key_path)?,
@@ -1412,7 +1419,10 @@ pub mod tls {
     pub fn start_tls_listener(
         config: &TlsConfig,
         tls_config: Arc<ServerConfig>,
-        mut handler: impl FnMut(rustls::StreamOwned<ServerConnection, TcpStream>) -> Result<()> + Send + 'static + Clone,
+        mut handler: impl FnMut(rustls::StreamOwned<ServerConnection, TcpStream>) -> Result<()>
+            + Send
+            + 'static
+            + Clone,
     ) -> Result<()> {
         let listener = TcpListener::bind(&config.bind_addr)?;
         for stream in listener.incoming() {
@@ -1429,4 +1439,3 @@ pub mod tls {
         Ok(())
     }
 }
-

@@ -559,7 +559,6 @@ fn memory_limit_exceeded_is_audited() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-
 /// Test OOM kill simulation: exec with extremely low memory limit should be
 /// denied at policy check and audit the denial.
 #[test]
@@ -680,17 +679,19 @@ fn network_partition_during_fetch_fails_closed() {
     let rl = toolcage_capability::RevocationList::default();
 
     // Use an unreachable host to simulate network partition
-    let o = s.fetch_via_proxy(
-        &b,
-        &mut budgets,
-        &mut proxy,
-        "10.255.255.1",  // Unreachable IP (RFC 5737)
-        "GET",
-        "/",
-        None,
-        &rl,
-        true,
-    ).unwrap();
+    let o = s
+        .fetch_via_proxy(
+            &b,
+            &mut budgets,
+            &mut proxy,
+            "10.255.255.1", // Unreachable IP (RFC 5737)
+            "GET",
+            "/",
+            None,
+            &rl,
+            true,
+        )
+        .unwrap();
 
     assert!(!o.allowed);
     assert!(!o.need_approval);
@@ -718,15 +719,18 @@ fn concurrent_approval_race_condition() {
     // Add approval requirement for http.request to github
     pol.approval.require_for.push({
         let mut map = std::collections::HashMap::new();
-        map.insert("http.request".into(), toolcage_policy::ApprovalSpec {
-            methods: vec!["POST".into()],
-            hosts: vec!["github".into()],
-        });
+        map.insert(
+            "http.request".into(),
+            toolcage_policy::ApprovalSpec {
+                methods: vec!["POST".into()],
+                hosts: vec!["github".into()],
+            },
+        );
         map
     });
 
     // Each thread creates its own supervisor instance to avoid Send issues
-    let barrier = Arc::new(Barrier::new(4));
+    let _barrier = Arc::new(Barrier::new(4));
     let mut handles = vec![];
 
     let pol_clone = pol.clone();
@@ -751,23 +755,25 @@ fn concurrent_approval_race_condition() {
                 #[cfg(feature = "cedar")]
                 cedar_engine: None,
             };
-            
+
             let b = toolcage_broker::Broker::new();
             let mut budgets = toolcage_proxy::Budgets::default();
             let mut proxy = toolcage_proxy::Proxy::new().unwrap();
-            let rl = toolcage_capability::RevocationList::default();
-            
-            let _ = s.fetch_via_proxy(
-                &b,
-                &mut budgets,
-                &mut proxy,
-                "github",
-                "POST",
-                "/repos/test",
-                None,
-                &toolcage_capability::RevocationList::default(),
-                false,
-            ).unwrap();
+            let _rl = toolcage_capability::RevocationList::default();
+
+            let _ = s
+                .fetch_via_proxy(
+                    &b,
+                    &mut budgets,
+                    &mut proxy,
+                    "github",
+                    "POST",
+                    "/repos/test",
+                    None,
+                    &toolcage_capability::RevocationList::default(),
+                    false,
+                )
+                .unwrap();
         }));
     }
 
@@ -784,7 +790,7 @@ fn concurrent_approval_race_condition() {
 /// A token that is revoked mid-request should cause the fetch to be denied.
 #[test]
 fn token_revocation_during_fetch() {
-    use toolcage_capability::{Key, Rights, Token, RevocationList};
+    use toolcage_capability::{Key, RevocationList, Rights, Token};
 
     let dir = std::env::temp_dir().join(format!("tc-revocation-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -813,14 +819,19 @@ fn token_revocation_during_fetch() {
         cedar_engine: None,
     };
 
-    let token = Token::root(&key, "token-1", Rights {
-        fs_prefixes: vec!["/workspace".into()],
-        net_hosts: vec!["github".into()],
-        methods: vec!["GET".into()],
-        cred_use: vec![],
-        budget_bytes: 1000,
-        expires_at: 9_999_999_999,
-    }).unwrap();
+    let token = Token::root(
+        &key,
+        "token-1",
+        Rights {
+            fs_prefixes: vec!["/workspace".into()],
+            net_hosts: vec!["github".into()],
+            methods: vec!["GET".into()],
+            cred_use: vec![],
+            budget_bytes: 1000,
+            expires_at: 9_999_999_999,
+        },
+    )
+    .unwrap();
 
     let mut rl = RevocationList::default();
     rl.track(&token);
@@ -830,17 +841,19 @@ fn token_revocation_during_fetch() {
     let mut proxy = toolcage_proxy::Proxy::new().unwrap();
 
     // First fetch with valid token should succeed (policy allows)
-    let o1 = s.fetch_via_proxy(
-        &b,
-        &mut budgets,
-        &mut proxy,
-        "github",
-        "GET",
-        "/repos/test",
-        Some(&token),
-        &rl,
-        true,
-    ).unwrap();
+    let o1 = s
+        .fetch_via_proxy(
+            &b,
+            &mut budgets,
+            &mut proxy,
+            "github",
+            "GET",
+            "/repos/test",
+            Some(&token),
+            &rl,
+            true,
+        )
+        .unwrap();
     // Should be denied due to no backend, but token should be accepted
     assert!(!o1.allowed);
 
@@ -848,17 +861,19 @@ fn token_revocation_during_fetch() {
     rl.revoke("token-1");
 
     // Second fetch with revoked token should be denied
-    let o2 = s.fetch_via_proxy(
-        &b,
-        &mut budgets,
-        &mut proxy,
-        "github",
-        "GET",
-        "/repos/test",
-        Some(&token),
-        &rl,
-        true,
-    ).unwrap();
+    let o2 = s
+        .fetch_via_proxy(
+            &b,
+            &mut budgets,
+            &mut proxy,
+            "github",
+            "GET",
+            "/repos/test",
+            Some(&token),
+            &rl,
+            true,
+        )
+        .unwrap();
     assert!(!o2.allowed);
     assert!(o2.rule_ids.contains(&"token:deny".to_string()));
 
@@ -903,34 +918,38 @@ fn policy_hot_reload_during_requests() {
     let rl = toolcage_capability::RevocationList::default();
 
     // First fetch with pol1 (allows github)
-    let o1 = s.fetch_via_proxy(
-        &b,
-        &mut budgets,
-        &mut proxy,
-        "github",
-        "GET",
-        "/",
-        None,
-        &rl,
-        true,
-    ).unwrap();
+    let o1 = s
+        .fetch_via_proxy(
+            &b,
+            &mut budgets,
+            &mut proxy,
+            "github",
+            "GET",
+            "/",
+            None,
+            &rl,
+            true,
+        )
+        .unwrap();
     assert!(!o1.allowed); // No backend, so denied
 
     // Swap policy to pol2 (denies github)
     s.policy = pol2;
 
     // Second fetch with pol2 (denies github)
-    let o2 = s.fetch_via_proxy(
-        &b,
-        &mut budgets,
-        &mut proxy,
-        "github",
-        "GET",
-        "/",
-        None,
-        &rl,
-        true,
-    ).unwrap();
+    let o2 = s
+        .fetch_via_proxy(
+            &b,
+            &mut budgets,
+            &mut proxy,
+            "github",
+            "GET",
+            "/",
+            None,
+            &rl,
+            true,
+        )
+        .unwrap();
     assert!(!o2.allowed);
 
     // Both should be recorded in audit
@@ -939,4 +958,3 @@ fn policy_hot_reload_during_requests() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
-

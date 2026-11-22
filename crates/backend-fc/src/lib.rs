@@ -2177,7 +2177,7 @@ pub mod snapshot {
         fn default() -> Self {
             Self {
                 max_snapshots: 10,
-                max_age_secs: 30 * 24 * 60 * 60, // 30 days
+                max_age_secs: 30 * 24 * 60 * 60,    // 30 days
                 min_free_bytes: 1024 * 1024 * 1024, // 1 GB
             }
         }
@@ -2215,7 +2215,7 @@ pub mod snapshot {
             }
         }
         // Sort by creation time (newest first)
-        snapshots.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        snapshots.sort_by_key(|a| std::cmp::Reverse(a.created_at));
         Ok(snapshots)
     }
 

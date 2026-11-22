@@ -459,9 +459,12 @@ pub mod oci {
         check_field(root, "path")?;
 
         // Validate mounts array
-        let mounts = config.get("mounts").unwrap().as_array()
+        let mounts = config
+            .get("mounts")
+            .unwrap()
+            .as_array()
             .ok_or_else(|| anyhow!("mounts must be an array"))?;
-        for (_i, mount) in mounts.iter().enumerate() {
+        for mount in mounts.iter() {
             check_field(mount, "destination")?;
             check_field(mount, "type")?;
             if mount.get("type").unwrap().as_str() == Some("bind") {
@@ -473,7 +476,10 @@ pub mod oci {
         let process = config.get("process").unwrap();
         check_field(process, "user")?;
         check_field(process, "args")?;
-        let args = process.get("args").unwrap().as_array()
+        let args = process
+            .get("args")
+            .unwrap()
+            .as_array()
             .ok_or_else(|| anyhow!("process.args must be an array"))?;
         if args.is_empty() {
             return Err(anyhow!("process.args must not be empty"));
@@ -483,7 +489,8 @@ pub mod oci {
         // Validate linux namespace config if present
         if let Some(linux) = config.get("linux") {
             if let Some(namespaces) = linux.get("namespaces") {
-                let ns_array = namespaces.as_array()
+                let ns_array = namespaces
+                    .as_array()
                     .ok_or_else(|| anyhow!("linux.namespaces must be an array"))?;
                 for ns in ns_array {
                     check_field(ns, "type")?;
@@ -511,14 +518,22 @@ pub mod oci {
         // Parse version like "runsc version 2024.01.0" or "2024.01.0"
         let version_str = version.trim_start_matches("runsc version ").trim();
         // Simple check: version should start with year.month
-        if !version_str.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        if !version_str
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+        {
             return Err(anyhow!("unexpected version format: {}", version_str));
         }
         // Extract year
         let year = version_str.split('.').next().unwrap_or("");
         if let Ok(y) = year.parse::<i32>() {
             if y < 2024 {
-                return Err(anyhow!("runsc version {} is too old (minimum 2024.01)", version_str));
+                return Err(anyhow!(
+                    "runsc version {} is too old (minimum 2024.01)",
+                    version_str
+                ));
             }
         }
         Ok(version_str.to_string())
