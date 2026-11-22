@@ -1,5 +1,6 @@
 use anyhow::Context;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, CommandFactory};
+use clap_complete::Shell;
 use sha2::Digest as _;
 use std::path::PathBuf;
 
@@ -134,6 +135,11 @@ enum Cmd {
     Approval {
         #[command(subcommand)]
         op: ApprovalOp,
+    },
+    /// Generate shell completion scripts.
+    Completion {
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
     },
 }
 
@@ -1979,6 +1985,14 @@ fn main() -> anyhow::Result<()> {
                     println!("  {}: {}", k, v);
                 }
             }
+        },
+        Cmd::Completion { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut Cli::command(),
+                "toolcage",
+                &mut std::io::stdout(),
+            );
         },
     }
     Ok(())
