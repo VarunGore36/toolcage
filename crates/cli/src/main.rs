@@ -201,16 +201,26 @@ type AuditOp = Audit;
 #[derive(Subcommand)]
 enum ApprovalOp {
     /// List pending approval requests.
-    List,
+    List {
+        /// Path to the approval queue file (defaults to <audit-dir>/approval-queue.json).
+        #[arg(long)]
+        queue_path: Option<PathBuf>,
+    },
     /// Approve a pending request by ID.
     Approve {
         #[arg(long)]
         id: String,
+        /// Path to the approval queue file (defaults to <audit-dir>/approval-queue.json).
+        #[arg(long)]
+        queue_path: Option<PathBuf>,
     },
     /// Deny a pending request by ID.
     Deny {
         #[arg(long)]
         id: String,
+        /// Path to the approval queue file (defaults to <audit-dir>/approval-queue.json).
+        #[arg(long)]
+        queue_path: Option<PathBuf>,
     },
 }
 
@@ -1593,14 +1603,49 @@ fn main() -> anyhow::Result<()> {
             },
         },
         Cmd::Approval { op } => match op {
-            ApprovalOp::List => {
-                println!("No pending approval requests (not yet implemented)");
+            ApprovalOp::List { queue_path } => {
+                let queue_path = queue_path
+                    .unwrap_or_else(|| std::env::temp_dir().join("toolcage-approval-queue.json"));
+                let queue = toolcage_approval::Queue::load(&queue_path)
+                    .unwrap_or_else(|_| toolcage_approval::Queue::default());
+                let pending = queue.list_pending();
+                if pending.is_empty() {
+                    println!("No pending approval requests");
+                } else {
+                    println!("Pending approval requests:");
+                    for p in pending {
+                        println!(
+                            "  {}: action={} host={:?} method={:?} created_at={}",
+                            p.id, p.action, p.host, p.method, p.created_at
+                        );
+                    }
+                }
             }
-            ApprovalOp::Approve { id } => {
-                println!("Approving request {} (not yet implemented)", id);
+            ApprovalOp::Approve { id, queue_path } => {
+                let queue_path = queue_path
+                    .unwrap_or_else(|| std::env::temp_dir().join("toolcage-approval-queue.json"));
+                let mut queue = toolcage_approval::Queue::load(&queue_path)
+                    .unwrap_or_else(|_| toolcage_approval::Queue::default());
+                if queue.decide(&id, toolcage_approval::Verdict::Approve) {
+                    queue.save(&queue_path).unwrap();
+                    println!("Approved request {}", id);
+                } else {
+                    eprintln!("Request {} not found or already decided", id);
+                    std::process::exit(2);
+                }
             }
-            ApprovalOp::Deny { id } => {
-                println!("Denying request {} (not yet implemented)", id);
+            ApprovalOp::Deny { id, queue_path } => {
+                let queue_path = queue_path
+                    .unwrap_or_else(|| std::env::temp_dir().join("toolcage-approval-queue.json"));
+                let mut queue = toolcage_approval::Queue::load(&queue_path)
+                    .unwrap_or_else(|_| toolcage_approval::Queue::default());
+                if queue.decide(&id, toolcage_approval::Verdict::Deny) {
+                    queue.save(&queue_path).unwrap();
+                    println!("Denied request {}", id);
+                } else {
+                    eprintln!("Request {} not found or already decided", id);
+                    std::process::exit(2);
+                }
             }
         },
         Cmd::Demo { dir } => {
