@@ -1077,7 +1077,29 @@ fn main() -> anyhow::Result<()> {
                 rl.save(&out)?;
                 println!("revoked {} ids -> {}", rev.len(), out.display());
             }
-            TokenOp::List { dir: _, key_hex: _ } => {}
+            TokenOp::List { dir, key_hex } => {
+                let key = toolcage_capability::Key::from_hex(&std::fs::read_to_string(&key_hex)?)?;
+                let mut found = false;
+                for entry in std::fs::read_dir(&dir)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                        if let Ok(text) = std::fs::read_to_string(&path) {
+                            if let Ok(tok) =
+                                serde_json::from_str::<toolcage_capability::Token>(&text)
+                            {
+                                if tok.verify_tag(&key) {
+                                    println!("{}: rev_id={} valid=yes", path.display(), tok.rev_id);
+                                    found = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if !found {
+                    println!("No valid tokens found in {}", dir.display());
+                }
+            }
             TokenOp::Verify {
                 token,
                 key_hex,
