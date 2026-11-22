@@ -1,11 +1,6 @@
-//! Cedar policy support for toolcage.
-//!
-//! This module provides integration with the Cedar policy engine for
-//! fine-grained authorization decisions.
-
 use crate::{Decision, Request};
 use anyhow::{anyhow, Result};
-use cedar_policy::{Entities, Policy as CedarPolicy, PolicySet, Request as CedarRequest};
+use cedar_policy::{Authorizer, Context, Entities, PolicySet};
 use serde::{Deserialize, Serialize};
 
 /// Cedar policy configuration.
@@ -20,8 +15,8 @@ pub struct CedarConfig {
 }
 
 /// Cedar policy engine for evaluating authorization requests.
-#[allow(dead_code)]
 pub struct CedarEngine {
+    authorizer: Authorizer,
     policy_set: PolicySet,
     entities: Entities,
 }
@@ -35,11 +30,8 @@ impl CedarEngine {
         for policy_file in &config.policy_files {
             let policy_text = std::fs::read_to_string(policy_file)
                 .map_err(|e| anyhow!("failed to read policy file {}: {}", policy_file, e))?;
-            let policy = CedarPolicy::from_json(
-                None,
-                serde_json::from_str::<serde_json::Value>(&policy_text)?,
-            )
-            .map_err(|e| anyhow!("failed to parse policy file {}: {}", policy_file, e))?;
+            let policy = cedar_policy::Policy::parse(None, &policy_text)
+                .map_err(|e| anyhow!("failed to parse policy file {}: {}", policy_file, e))?;
             policy_set
                 .add(policy)
                 .map_err(|e| anyhow!("failed to add policy: {}", e))?;
@@ -55,16 +47,10 @@ impl CedarEngine {
             Entities::empty()
         };
 
-        // Load schema if provided
-        if let Some(schema_file) = &config.schema_file {
-            let schema_text = std::fs::read_to_string(schema_file)
-                .map_err(|e| anyhow!("failed to read schema file {}: {}", schema_file, e))?;
-            let _schema = cedar_policy::Schema::from_json_str(&schema_text)
-                .map_err(|e| anyhow!("failed to parse schema: {}", e))?;
-            // Note: PolicySet::new_with_schema would be used here in practice
-        }
+        let authorizer = Authorizer::new();
 
         Ok(Self {
+            authorizer,
             policy_set,
             entities,
         })
@@ -73,14 +59,14 @@ impl CedarEngine {
     /// Evaluate an authorization request using Cedar policies.
     pub fn authorize(&self, request: &Request) -> Result<Decision> {
         // Convert our Request to a Cedar Request
-        let _cedar_request = self.convert_request(request)?;
+        let cedar_request = self.convert_request(request)?;
 
-        // Evaluate the request
-        // TODO: Use proper Cedar authorization API
-        // For now, return allow as placeholder
-        let response_decision = cedar_policy::Decision::Allow;
+        // Evaluate the request using Cedar's Authorizer
+        let response =
+            self.authorizer
+                .is_authorized(&cedar_request, &self.policy_set, &self.entities);
 
-        match response_decision {
+        match response.decision() {
             cedar_policy::Decision::Allow => Ok(Decision {
                 allow: true,
                 rule_ids: vec!["cedar:allow".into()],
@@ -95,35 +81,39 @@ impl CedarEngine {
     }
 
     /// Convert our internal Request to a Cedar Request.
-    fn convert_request(&self, request: &crate::Request) -> Result<CedarRequest> {
-        // This is a simplified conversion. In practice, you'd need to map
-        // your internal request types to Cedar's request format.
-        // For now, we'll create a basic request.
-        use cedar_policy::Request as CedarRequest;
-
+    fn convert_request(&self, request: &Request) -> Result<cedar_policy::Request> {
+        // Map our internal request action to a Cedar action entity
         let action = format!("toolcage::{}", request.action);
         let action_uid = action
             .parse::<cedar_policy::EntityUid>()
             .map_err(|e| anyhow!("invalid action: {}", e))?;
 
-        // Create a basic request with principal and resource
-        // This is simplified - in practice you'd map all request fields
-        let principal = "toolcage::Session::anonymous"
-            .parse::<cedar_policy::EntityUid>()
-            .map_err(|e| anyhow!("invalid principal: {}", e))?;
+        // Map resource based on request type
+        let resource_str = if let Some(fs_path) = &request.fs_path {
+            format!("toolcage::Path::{}", fs_path)
+        } else if let Some(host) = &request.host {
+            format!("toolcage::Host::{}", host)
+        } else if let Some(path) = &request.path {
+            format!("toolcage::Path::{}", path)
+        } else if let Some(argv) = &request.argv {
+            if argv.is_empty() {
+                return Err(anyhow!("empty argv"));
+            }
+            format!("toolcage::Binary::{}", argv[0])
+        } else {
+            return Err(anyhow!("no resource specified in request"));
+        };
 
-        let resource = "toolcage::Resource::default"
+        let resource = resource_str
             .parse::<cedar_policy::EntityUid>()
             .map_err(|e| anyhow!("invalid resource: {}", e))?;
 
-        CedarRequest::new(
-            principal,
-            action_uid,
-            resource,
-            cedar_policy::Context::empty(),
-            None,
-        )
-        .map_err(|e| anyhow!("failed to create Cedar request: {}", e))
+        let principal = "toolcage::Session::default"
+            .parse::<cedar_policy::EntityUid>()
+            .map_err(|e| anyhow!("invalid principal: {}", e))?;
+
+        cedar_policy::Request::new(principal, action_uid, resource, Context::empty(), None)
+            .map_err(|e| anyhow!("failed to create Cedar request: {}", e))
     }
 }
 
@@ -136,11 +126,8 @@ pub fn load_cedar_policies<P: AsRef<std::path::Path>>(dir: P) -> Result<Vec<Stri
         if path.extension().and_then(|s| s.to_str()) == Some("cedar") {
             let content = std::fs::read_to_string(&path)?;
             // Validate it's valid Cedar
-            let _ = cedar_policy::Policy::from_json(
-                None,
-                serde_json::from_str::<serde_json::Value>(&content)?,
-            )
-            .map_err(|e| anyhow!("invalid Cedar policy in {:?}: {}", path, e))?;
+            let _ = cedar_policy::Policy::parse(None, &content)
+                .map_err(|e| anyhow!("invalid Cedar policy in {:?}: {}", path, e))?;
             policies.push(content);
         }
     }
@@ -181,12 +168,8 @@ pub fn policy_to_cedar(policy: &crate::Policy) -> Result<Vec<String>> {
 
         let host_name = host_rule.host.as_deref().unwrap_or("");
         let policy = format!(
-            r#"permit(
-    principal,
-    action == toolcage::Action::"{}",
-    resource == toolcage::Host::"{}"
-) when {{ {} }};"#,
-            "http_request", // or whatever action
+            "permit(\n    principal,\n    action == toolcage::Action::\"{}\",\n    resource == toolcage::Host::\"{}\"\n) when {{ {} }};",
+            "http_request",
             host_name,
             condition
         );
@@ -200,11 +183,7 @@ pub fn policy_to_cedar(policy: &crate::Policy) -> Result<Vec<String>> {
         let action = if mode == "rw" { "fs_write" } else { "fs_read" };
 
         let policy = format!(
-            r#"permit(
-    principal,
-    action == toolcage::Action::"{}",
-    resource == toolcage::Path::"{}"
-);"#,
+            "permit(\n    principal,\n    action == toolcage::Action::\"{}\",\n    resource == toolcage::Path::\"{}\"\n);",
             action, path
         );
         cedar_policies.push(policy);
@@ -213,11 +192,7 @@ pub fn policy_to_cedar(policy: &crate::Policy) -> Result<Vec<String>> {
     // Convert exec allowlist
     for binary in &policy.exec.allowlist {
         let policy = format!(
-            r#"permit(
-    principal,
-    action == toolcage::Action::"proc_exec",
-    resource == toolcage::Binary::"{}"
-);"#,
+            "permit(\n    principal,\n    action == toolcage::Action::\"proc_exec\",\n    resource == toolcage::Binary::\"{}\"\n);",
             binary
         );
         cedar_policies.push(policy);
