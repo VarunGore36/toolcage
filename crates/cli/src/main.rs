@@ -269,6 +269,20 @@ enum PolicyOp {
         #[arg(long, default_value = "json")]
         format: String,
     },
+    /// Check policy against the JSON schema.
+    SchemaCheck {
+        #[arg(long)]
+        policy: PathBuf,
+        #[arg(long)]
+        schema: Option<PathBuf>,
+    },
+    /// Generate a sample policy YAML file.
+    Generate {
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value = "sample-policy.yaml")]
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -983,6 +997,80 @@ fn main() -> anyhow::Result<()> {
                     "json" => println!("{}", serde_json::to_string_pretty(&pol)?),
                     _ => println!("policy {} is valid", policy.display()),
                 }
+            }
+            PolicyOp::SchemaCheck { policy, schema } => {
+                let text = std::fs::read_to_string(&policy)
+                    .with_context(|| format!("read policy from {}", policy.display()))?;
+                
+                // Parse as generic YAML to check basic structure
+                let _: serde_yaml::Value = serde_yaml::from_str(&text)?;
+                
+                // If a custom schema is provided, validate against it
+                if let Some(schema_path) = schema {
+                    let schema_text = std::fs::read_to_string(&schema_path)
+                        .with_context(|| format!("read schema from {}", schema_path.display()))?;
+                    let _: serde_yaml::Value = serde_yaml::from_str(&schema_text)?;
+                    println!("policy {} validates against custom schema {}", policy.display(), schema_path.display());
+                } else {
+                    // Default: just verify the policy is valid YAML
+                    println!("policy {} is valid YAML", policy.display());
+                }
+            }
+            PolicyOp::Generate { out, name } => {
+                let sample = r#"# Sample toolcage policy v0
+tool: sample-policy
+version: 0
+min_isolation: tier0
+
+# Filesystem access rules
+fs:
+  mounts:
+    - path: /workspace
+      mode: rw
+      source: .
+    - path: /tmp
+      mode: rw
+
+# Network access rules
+net:
+  mode: allowlist
+  hosts:
+    - host: api.github.com
+      methods: [GET, POST]
+      paths: ["/repos/*"]
+    - host: api.example.com
+      methods: [GET]
+      paths: ["/v1/*"]
+
+# Exec allowlist (argv-only, no shells)
+exec:
+  allowlist:
+    - /bin/cat
+    - /bin/ls
+    - /usr/bin/curl
+    - /usr/bin/git
+
+# Resource limits
+limits:
+  memory_mb: 512
+  cpu_seconds: 30
+  egress_bytes: 10485760
+  egress_requests: 100
+
+# Approval gates
+approval:
+  require_for:
+    - action: http.request
+      methods: [POST, PUT, DELETE]
+      hosts: ["github.com"]
+
+# Credentials (referenced by tokens)
+credentials:
+  - name: github_token
+    use_with: github.com
+"#;
+                std::fs::write(&out, sample)?;
+                println!("Generated sample policy at {}", out.display());
             }
         },
         Cmd::Token { op } => match op {

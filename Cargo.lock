@@ -2076,6 +2076,7 @@ dependencies = [
  "clap_complete",
  "libc",
  "serde_json",
+ "serde_yaml",
  "sha2",
  "toolcage-approval",
  "toolcage-audit",

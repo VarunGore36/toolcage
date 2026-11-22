@@ -10,6 +10,7 @@ clap = { workspace = true }
 clap_complete = "4"
 anyhow = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 toolcage-policy = { path = "../policy" }
 toolcage-audit = { path = "../audit", features = ["merkle"] }
 toolcage-supervisor = { path = "../supervisor" }
