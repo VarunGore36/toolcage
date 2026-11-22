@@ -67,7 +67,13 @@ pub struct FcConfig {
 
 impl FcConfig {
     pub fn for_session(id: &str, mem_mb: u64) -> Self {
-        let cid = 3 + (id.bytes().fold(0u32, |a, b| a.wrapping_add(b as u32)) % 10000);
+        // Use a better hash function for CID distribution (FNV-1a variant)
+        let mut hash = 0x811c9dc5u32;
+        for byte in id.bytes() {
+            hash ^= byte as u32;
+            hash = hash.wrapping_mul(0x01000193);
+        }
+        let cid = 3 + (hash % 10000);
         Self {
             socket: format!("/run/toolcage/{id}.sock"),
             kernel: "/var/lib/toolcage/vmlinux".into(),
@@ -2323,9 +2329,9 @@ mod cid_allocator_tests {
     #[test]
     fn colliding_sessions_get_distinct_cids() {
         let mut b = FcBackend::new();
-        // Two ids with the same byte sum: "ab" (97+98=195) and "ba" (98+97=195).
+        // Two ids that collide with FNV-1a hash: "ab" and "session-1021" both hash to 1946 mod 10000.
         let a = FcConfig::for_session("ab", 128);
-        let c = FcConfig::for_session("ba", 128);
+        let c = FcConfig::for_session("session-1021", 128);
         assert_eq!(
             a.vsock_cid, c.vsock_cid,
             "test premise: derived CIDs collide"
