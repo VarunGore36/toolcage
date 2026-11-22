@@ -48,6 +48,8 @@ fn sup_at(audit: &std::path::Path, cap_key: Option<toolcage_capability::Key>) ->
         approval_queue_path: None,
         policy_path: None,
         hot_reload: false,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     }
 }
 
@@ -303,6 +305,8 @@ fn cred_use_axis_is_enforced_on_credential_attachment() {
         hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     };
     let o = fetch_cred(&mut sup, Some(&none_allowed), &rl);
     assert_eq!(
@@ -342,6 +346,8 @@ fn cred_use_axis_is_enforced_on_credential_attachment() {
         hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     };
     let o = fetch_cred(&mut sup, Some(&ok_tok), &rl);
     assert_eq!(

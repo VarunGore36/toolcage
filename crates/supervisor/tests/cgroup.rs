@@ -16,6 +16,8 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         approval_queue_path: None,
         policy_path: None,
         hot_reload: false,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     }
 }
 

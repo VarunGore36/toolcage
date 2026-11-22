@@ -48,6 +48,8 @@ fn supervisor_idle_memory_under_100mb_target() {
         approval_queue_path: None,
         policy_path: None,
         hot_reload: false,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     };
 
     // Touch policy decision so the constructed supervisor cannot be dead-code eliminated.

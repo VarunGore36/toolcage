@@ -19,6 +19,8 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         approval_queue_path: None,
         policy_path: None,
         hot_reload: false,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     }
 }
 
@@ -97,6 +99,8 @@ fn audit_trail_records_exec_with_argv() {
         approval_queue_path: None,
         policy_path: None,
         hot_reload: false,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     };
     let o = sup
         .exec(&[
@@ -135,6 +139,8 @@ fn audit_trail_records_denied_exec() {
         approval_queue_path: None,
         policy_path: None,
         hot_reload: false,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     };
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
     assert!(

@@ -22,6 +22,8 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     }
 }
 
@@ -47,6 +49,8 @@ fn audit_write_failure_denies_action() {
         hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     };
     let b = toolcage_broker::Broker::new();
     // open("not-a-dir/audit.jsonl") fails -> propagate as Err, caller must not act.
@@ -188,6 +192,8 @@ fn over_egress_budget_denies_fail_closed() {
         hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     };
     let b = toolcage_broker::Broker::new();
     let rl = toolcage_capability::RevocationList::default();
@@ -543,6 +549,8 @@ fn memory_limit_exceeded_is_audited() {
         hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     };
 
     // With a 1MB memory limit, any exec should be denied at policy check
@@ -582,6 +590,8 @@ fn oom_simulation_via_policy_deny() {
         hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     };
 
     // Exec should be denied due to memory limit
@@ -625,6 +635,8 @@ fn disk_full_during_audit_write_fails_closed() {
         hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     };
 
     // Exec should fail due to audit write failure
@@ -664,6 +676,8 @@ fn network_partition_during_fetch_fails_closed() {
         hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     };
 
     let b = toolcage_broker::Broker::new();
@@ -746,6 +760,8 @@ fn concurrent_approval_race_condition() {
                 hot_reload: false,
                 #[cfg(feature = "cedar")]
                 cedar_engine: None,
+                #[cfg(feature = "hot-reload")]
+                policy_watcher: None,
             };
 
             let b = toolcage_broker::Broker::new();
@@ -808,6 +824,8 @@ fn token_revocation_during_fetch() {
         hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     };
 
     let token = Token::root(
@@ -900,6 +918,8 @@ fn policy_hot_reload_during_requests() {
         hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     };
 
     let b = toolcage_broker::Broker::new();

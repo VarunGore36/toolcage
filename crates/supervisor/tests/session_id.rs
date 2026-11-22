@@ -33,6 +33,8 @@ fn supervisor_session_id_variants() {
             approval_queue_path: None,
             policy_path: None,
             hot_reload: false,
+            #[cfg(feature = "hot-reload")]
+            policy_watcher: None,
         };
         let o = sup.exec(&["/bin/true".to_string()]);
         // Session creation should succeed even if exec fails due to no backend
@@ -66,6 +68,8 @@ fn supervisor_session_id_empty_allowed() {
         approval_queue_path: None,
         policy_path: None,
         hot_reload: false,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     };
     let o = sup.exec(&["/bin/true".to_string()]);
     assert!(

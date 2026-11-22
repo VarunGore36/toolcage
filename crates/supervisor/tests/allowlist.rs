@@ -27,6 +27,8 @@ fn make_sup_with_allowlist(
         hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
+        #[cfg(feature = "hot-reload")]
+        policy_watcher: None,
     }
 }
 

@@ -68,6 +68,32 @@ pub struct Supervisor {
     pub policy_path: Option<PathBuf>,
     /// Whether to enable hot-reload of the policy file.
     pub hot_reload: bool,
+    /// Background policy file watcher for hot-reload.
+    #[cfg(feature = "hot-reload")]
+    pub policy_watcher: Option<PolicyWatcher>,
+}
+
+impl Default for Supervisor {
+    fn default() -> Self {
+        Self {
+            policy: Policy::default(),
+            audit_path: PathBuf::new(),
+            session: String::new(),
+            tier: Tier::Tier0,
+            backend: None,
+            allow_unisolated: false,
+            cap_key: None,
+            token_rev_id: String::default(),
+            #[cfg(feature = "cedar")]
+            cedar_engine: None,
+            approval_queue: Queue::default(),
+            approval_queue_path: None,
+            policy_path: None,
+            hot_reload: false,
+            #[cfg(feature = "hot-reload")]
+            policy_watcher: None,
+        }
+    }
 }
 
 /// Session teardown on every exit path (I7): early returns and `?` errors
@@ -195,6 +221,52 @@ fn kill_process_group(child: &mut std::process::Child) {
 }
 
 impl Supervisor {
+    /// Create a new Supervisor instance, optionally starting the policy watcher.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        policy: Policy,
+        audit_path: PathBuf,
+        session: String,
+        tier: Tier,
+        backend: Option<Box<dyn Backend>>,
+        allow_unisolated: bool,
+        cap_key: Option<toolcage_capability::Key>,
+        token_rev_id: String,
+        #[cfg(feature = "cedar")] cedar_engine: Option<CedarEngine>,
+        approval_queue: Queue,
+        approval_queue_path: Option<PathBuf>,
+        policy_path: Option<PathBuf>,
+        hot_reload: bool,
+    ) -> anyhow::Result<Self> {
+        let sup = Self {
+            policy,
+            audit_path,
+            session,
+            tier,
+            backend,
+            allow_unisolated,
+            cap_key,
+            token_rev_id,
+            #[cfg(feature = "cedar")]
+            cedar_engine,
+            approval_queue,
+            approval_queue_path,
+            policy_path: policy_path.clone(),
+            hot_reload,
+            #[cfg(feature = "hot-reload")]
+            policy_watcher: None,
+        };
+
+        // Start policy watcher if hot reload is enabled and policy path is provided
+        #[cfg(feature = "hot-reload")]
+        if hot_reload && policy_path.is_some() {
+            let watcher = sup.start_policy_watcher()?;
+            sup.policy_watcher = Some(watcher);
+        }
+
+        Ok(sup)
+    }
+
     /// Destroy the backend session (I7). Idempotent: the backend is taken, so
     /// a second call (or the Drop below) is a no-op. Call it explicitly before
     /// `std::process::exit`, which skips destructors.
@@ -358,6 +430,18 @@ impl Supervisor {
         timeout_secs: u64,
         cap: usize,
     ) -> anyhow::Result<ExecOutcome> {
+        // Check for policy reload if hot-reload is enabled
+        #[cfg(feature = "hot-reload")]
+        if self.policy_watcher.is_some() {
+            let reloaded = {
+                let mut watcher = self.policy_watcher.take().unwrap();
+                let result = watcher.check_and_reload(self);
+                self.policy_watcher = Some(watcher);
+                result
+            };
+            let _ = reloaded;
+        }
+
         anyhow::ensure!(!argv.is_empty(), "empty argv");
         let req = Request {
             action: "proc.exec".into(),
@@ -706,6 +790,18 @@ impl Supervisor {
         revocation: &toolcage_capability::RevocationList,
         approved: bool,
     ) -> anyhow::Result<FetchOutcome> {
+        // Check for policy reload if hot-reload is enabled
+        #[cfg(feature = "hot-reload")]
+        if self.policy_watcher.is_some() {
+            let reloaded = {
+                let mut watcher = self.policy_watcher.take().unwrap();
+                let result = watcher.check_and_reload(self);
+                self.policy_watcher = Some(watcher);
+                result
+            };
+            let _ = reloaded;
+        }
+
         let pd = toolcage_proxy::decide(&self.policy, alias_or_host, method, path);
         // Destination identity (not spelling) for everything below: policy
         // already resolved the guest's alias to the operator's name, and the
