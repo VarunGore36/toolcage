@@ -21,12 +21,11 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         token_rev_id: String::default(),
         cap_key: None,
         #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
         cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
+        policy_path: None,
+        hot_reload: false,
     }
 }
 

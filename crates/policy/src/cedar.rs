@@ -3,12 +3,10 @@
 //! This module provides integration with the Cedar policy engine for
 //! fine-grained authorization decisions.
 
-use crate::{Decision, Policy, Request};
+use crate::{Decision, Request};
 use anyhow::{anyhow, Result};
 use cedar_policy::{Entities, Policy as CedarPolicy, PolicySet, Request as CedarRequest};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::Path;
 
 /// Cedar policy configuration.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -22,6 +20,7 @@ pub struct CedarConfig {
 }
 
 /// Cedar policy engine for evaluating authorization requests.
+#[allow(dead_code)]
 pub struct CedarEngine {
     policy_set: PolicySet,
     entities: Entities,
@@ -60,7 +59,7 @@ impl CedarEngine {
         if let Some(schema_file) = &config.schema_file {
             let schema_text = std::fs::read_to_string(schema_file)
                 .map_err(|e| anyhow!("failed to read schema file {}: {}", schema_file, e))?;
-            let schema = cedar_policy::Schema::from_json_str(&schema_text)
+            let _schema = cedar_policy::Schema::from_json_str(&schema_text)
                 .map_err(|e| anyhow!("failed to parse schema: {}", e))?;
             // Note: PolicySet::new_with_schema would be used here in practice
         }
@@ -100,7 +99,7 @@ impl CedarEngine {
         // This is a simplified conversion. In practice, you'd need to map
         // your internal request types to Cedar's request format.
         // For now, we'll create a basic request.
-        use cedar_policy::{EntityUid, Request as CedarRequest};
+        use cedar_policy::Request as CedarRequest;
 
         let action = format!("toolcage::{}", request.action);
         let action_uid = action
@@ -152,7 +151,7 @@ pub fn load_cedar_policies<P: AsRef<std::path::Path>>(dir: P) -> Result<Vec<Stri
 pub fn policy_to_cedar(policy: &crate::Policy) -> Result<Vec<String>> {
     let mut cedar_policies = Vec::new();
 
-    /// Convert network rules
+    // Convert network rules
     for host_rule in &policy.net.hosts {
         let mut conditions = Vec::new();
         if !host_rule.methods.is_empty() {

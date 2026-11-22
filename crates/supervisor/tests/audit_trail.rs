@@ -14,12 +14,11 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         token_rev_id: String::default(),
         cap_key: None,
         #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
         cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
+        policy_path: None,
+        hot_reload: false,
     }
 }
 
@@ -93,12 +92,11 @@ fn audit_trail_records_exec_with_argv() {
         cap_key: None,
         token_rev_id: String::default(),
         #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
         cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
+        policy_path: None,
+        hot_reload: false,
     };
     let o = sup
         .exec(&[
@@ -132,12 +130,11 @@ fn audit_trail_records_denied_exec() {
         cap_key: None,
         token_rev_id: String::default(),
         #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
         cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
+        policy_path: None,
+        hot_reload: false,
     };
     let o = sup.exec(&["/bin/true".to_string()]).unwrap();
     assert!(

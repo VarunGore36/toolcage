@@ -422,6 +422,8 @@ mod server_registry_tests {
             token_rev_id: String::default(),
             approval_queue: toolcage_approval::Queue::default(),
             approval_queue_path: None,
+            policy_path: None,
+            hot_reload: false,
         }
     }
 
@@ -566,6 +568,8 @@ net:
             token_rev_id: String::default(),
             approval_queue: toolcage_approval::Queue::default(),
             approval_queue_path: None,
+            policy_path: None,
+            hot_reload: false,
         };
         let b = toolcage_broker::Broker::new();
         let mut budgets = toolcage_proxy::Budgets::default();
@@ -704,6 +708,8 @@ net:
             token_rev_id: String::default(),
             approval_queue: toolcage_approval::Queue::default(),
             approval_queue_path: None,
+            policy_path: None,
+            hot_reload: false,
         };
         let b = toolcage_broker::Broker::new();
         let mut budgets = toolcage_proxy::Budgets::default();
@@ -738,6 +744,8 @@ net:
             token_rev_id: String::default(),
             approval_queue: toolcage_approval::Queue::default(),
             approval_queue_path: None,
+            policy_path: None,
+            hot_reload: false,
         };
         let b = toolcage_broker::Broker::new();
         let mut budgets = toolcage_proxy::Budgets::default();
@@ -775,6 +783,8 @@ net:
             token_rev_id: String::default(),
             approval_queue: toolcage_approval::Queue::default(),
             approval_queue_path: None,
+            policy_path: None,
+            hot_reload: false,
         };
         let b = toolcage_broker::Broker::new();
         let mut budgets = toolcage_proxy::Budgets::default();
@@ -1257,6 +1267,8 @@ impl ServerProcess {
             token_rev_id: String::default(),
             approval_queue: toolcage_approval::Queue::default(),
             approval_queue_path: None,
+            policy_path: None,
+            hot_reload: false,
         };
 
         // Spawn the server process

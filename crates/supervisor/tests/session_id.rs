@@ -31,8 +31,8 @@ fn supervisor_session_id_variants() {
             cedar_engine: None,
             approval_queue: Queue::default(),
             approval_queue_path: None,
-            #[cfg(feature = "cedar")]
-            cedar_engine: None,
+            policy_path: None,
+            hot_reload: false,
         };
         let o = sup.exec(&["/bin/true".to_string()]);
         // Session creation should succeed even if exec fails due to no backend
@@ -61,12 +61,11 @@ fn supervisor_session_id_empty_allowed() {
         cap_key: None,
         token_rev_id: String::default(),
         #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
         cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
+        policy_path: None,
+        hot_reload: false,
     };
     let o = sup.exec(&["/bin/true".to_string()]);
     assert!(

@@ -43,12 +43,11 @@ fn sup_at(audit: &std::path::Path, cap_key: Option<toolcage_capability::Key>) ->
         cap_key,
         token_rev_id: String::default(),
         #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
         cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
+        policy_path: None,
+        hot_reload: false,
     }
 }
 
@@ -298,11 +297,10 @@ fn cred_use_axis_is_enforced_on_credential_attachment() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: Some(k.clone()),
-        #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
+        policy_path: None,
+        hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     };
@@ -338,11 +336,10 @@ fn cred_use_axis_is_enforced_on_credential_attachment() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: Some(k.clone()),
-        #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
+        policy_path: None,
+        hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     };

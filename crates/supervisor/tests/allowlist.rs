@@ -21,11 +21,10 @@ fn make_sup_with_allowlist(
         allow_unisolated: true,
         token_rev_id: String::default(),
         cap_key: None,
-        #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
+        policy_path: None,
+        hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     }

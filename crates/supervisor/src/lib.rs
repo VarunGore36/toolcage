@@ -26,6 +26,7 @@
 //!   returns need_approval (CLI exit 3), never proceeds. Timeout = deny.
 //! - panic_freeze: appends deny-all + writes .tainted sibling. Caller must stop
 //!   sessions and close proxy first; taint clears only out-of-band.
+use anyhow::Context;
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::PathBuf;
@@ -63,6 +64,10 @@ pub struct Supervisor {
     pub approval_queue: Queue,
     /// Path to the approval queue persistence file.
     pub approval_queue_path: Option<PathBuf>,
+    /// Optional path to the policy file for hot-reload support.
+    pub policy_path: Option<PathBuf>,
+    /// Whether to enable hot-reload of the policy file.
+    pub hot_reload: bool,
 }
 
 /// Session teardown on every exit path (I7): early returns and `?` errors
@@ -255,6 +260,51 @@ impl Supervisor {
     /// List all pending approval requests.
     pub fn list_pending_approvals(&self) -> Vec<&toolcage_approval::Pending> {
         self.approval_queue.list_pending()
+    }
+
+    /// Reload the policy from disk if a policy path is configured.
+    /// Returns true if the policy was reloaded, false otherwise.
+    pub fn reload_policy(&mut self) -> anyhow::Result<bool> {
+        if let Some(path) = &self.policy_path {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("read policy from {}", path.display()))?;
+            let new_policy = toolcage_policy::load_yaml(&text)
+                .context(format!("parse policy from {}", path.display()))?;
+            self.policy = new_policy;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Start a background task that watches the policy file for changes and reloads it.
+    /// Returns a handle that can be used to stop the watcher.
+    #[cfg(feature = "hot-reload")]
+    pub fn start_policy_watcher(&self) -> anyhow::Result<PolicyWatcher> {
+        use notify::{EventKind, RecommendedWatcher, Watcher};
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+
+        let path = self
+            .policy_path
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("no policy path configured"))?;
+
+        let (tx, rx) = channel();
+        let mut watcher = RecommendedWatcher::new(
+            move |res: Result<notify::Event, notify::Error>| {
+                if let Ok(event) = res {
+                    if matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
+                        let _ = tx.send(());
+                    }
+                }
+            },
+            notify::Config::default().with_poll_interval(Duration::from_secs(1)),
+        )?;
+
+        watcher.watch(&path, notify::RecursiveMode::NonRecursive)?;
+
+        Ok(PolicyWatcher { watcher, rx })
     }
 
     pub fn check(&self, req: &Request) -> Decision {
@@ -1086,6 +1136,27 @@ pub fn panic_freeze(audit_path: &std::path::Path, reason: &str) -> anyhow::Resul
         hash: String::default(),
     })?;
     Ok(e.hash)
+}
+
+/// Policy file watcher for hot-reload support.
+#[cfg(feature = "hot-reload")]
+pub struct PolicyWatcher {
+    #[allow(dead_code)]
+    watcher: notify::RecommendedWatcher,
+    rx: std::sync::mpsc::Receiver<()>,
+}
+
+#[cfg(feature = "hot-reload")]
+impl PolicyWatcher {
+    /// Check if a policy reload is needed and perform it.
+    /// Returns true if the policy was reloaded.
+    pub fn check_and_reload(&mut self, supervisor: &mut Supervisor) -> anyhow::Result<bool> {
+        if self.rx.try_recv().is_ok() {
+            supervisor.reload_policy()
+        } else {
+            Ok(false)
+        }
+    }
 }
 
 #[cfg(test)]

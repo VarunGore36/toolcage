@@ -16,11 +16,10 @@ fn sup_at(audit: &std::path::Path) -> toolcage_supervisor::Supervisor {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: None,
-        #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
+        policy_path: None,
+        hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     }
@@ -42,11 +41,10 @@ fn audit_write_failure_denies_action() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: None,
-        #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
+        policy_path: None,
+        hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     };
@@ -184,11 +182,10 @@ fn over_egress_budget_denies_fail_closed() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: None,
-        #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
+        policy_path: None,
+        hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     };
@@ -540,11 +537,10 @@ fn memory_limit_exceeded_is_audited() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: None,
-        #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
+        policy_path: None,
+        hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     };
@@ -580,11 +576,10 @@ fn oom_simulation_via_policy_deny() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: None,
-        #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
+        policy_path: None,
+        hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     };
@@ -624,11 +619,10 @@ fn disk_full_during_audit_write_fails_closed() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: None,
-        #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
+        policy_path: None,
+        hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     };
@@ -664,11 +658,10 @@ fn network_partition_during_fetch_fails_closed() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: None,
-        #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
+        policy_path: None,
+        hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     };
@@ -747,11 +740,10 @@ fn concurrent_approval_race_condition() {
                 allow_unisolated: false,
                 token_rev_id: String::default(),
                 cap_key: None,
-                #[cfg(feature = "cedar")]
-                #[cfg(feature = "cedar")]
-                cedar_engine: None,
                 approval_queue: Queue::default(),
                 approval_queue_path: None,
+                policy_path: None,
+                hot_reload: false,
                 #[cfg(feature = "cedar")]
                 cedar_engine: None,
             };
@@ -810,11 +802,10 @@ fn token_revocation_during_fetch() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: Some(key.clone()),
-        #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
+        policy_path: None,
+        hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     };
@@ -903,11 +894,10 @@ fn policy_hot_reload_during_requests() {
         allow_unisolated: false,
         token_rev_id: String::default(),
         cap_key: None,
-        #[cfg(feature = "cedar")]
-        #[cfg(feature = "cedar")]
-        cedar_engine: None,
         approval_queue: Queue::default(),
         approval_queue_path: None,
+        policy_path: None,
+        hot_reload: false,
         #[cfg(feature = "cedar")]
         cedar_engine: None,
     };

@@ -1,5 +1,6 @@
 use anyhow::Context;
-use clap::{Parser, Subcommand, CommandFactory};
+use clap::{CommandFactory, Parser, Subcommand};
+#[allow(unused_imports)]
 use clap_complete::Shell;
 use sha2::Digest as _;
 use std::path::PathBuf;
@@ -787,6 +788,8 @@ fn main() -> anyhow::Result<()> {
                     token_rev_id: String::default(),
                     approval_queue: toolcage_approval::Queue::default(),
                     approval_queue_path: None,
+                    policy_path: None,
+                    hot_reload: false,
                 };
                 let req = toolcage_policy::Request {
                     action: "proc.exec".into(),
@@ -826,6 +829,8 @@ fn main() -> anyhow::Result<()> {
                 token_rev_id: String::default(),
                 approval_queue: toolcage_approval::Queue::default(),
                 approval_queue_path: None,
+                policy_path: None,
+                hot_reload: false,
             };
 
             let o = sup.exec(&argv)?;
@@ -923,6 +928,8 @@ fn main() -> anyhow::Result<()> {
                 token_rev_id: String::default(),
                 approval_queue: toolcage_approval::Queue::default(),
                 approval_queue_path: None,
+                policy_path: None,
+                hot_reload: false,
             };
             let mut broker = toolcage_broker::Broker::new();
             if !secret_value.is_empty() {
@@ -1001,22 +1008,26 @@ fn main() -> anyhow::Result<()> {
             PolicyOp::SchemaCheck { policy, schema } => {
                 let text = std::fs::read_to_string(&policy)
                     .with_context(|| format!("read policy from {}", policy.display()))?;
-                
+
                 // Parse as generic YAML to check basic structure
                 let _: serde_yaml::Value = serde_yaml::from_str(&text)?;
-                
+
                 // If a custom schema is provided, validate against it
                 if let Some(schema_path) = schema {
                     let schema_text = std::fs::read_to_string(&schema_path)
                         .with_context(|| format!("read schema from {}", schema_path.display()))?;
                     let _: serde_yaml::Value = serde_yaml::from_str(&schema_text)?;
-                    println!("policy {} validates against custom schema {}", policy.display(), schema_path.display());
+                    println!(
+                        "policy {} validates against custom schema {}",
+                        policy.display(),
+                        schema_path.display()
+                    );
                 } else {
                     // Default: just verify the policy is valid YAML
                     println!("policy {} is valid YAML", policy.display());
                 }
             }
-            PolicyOp::Generate { out, name } => {
+            PolicyOp::Generate { out, name: _ } => {
                 let sample = r#"# Sample toolcage policy v0
 tool: sample-policy
 version: 0
@@ -1367,6 +1378,8 @@ credentials:
                     token_rev_id: String::default(),
                     approval_queue: toolcage_approval::Queue::default(),
                     approval_queue_path: None,
+                    policy_path: None,
+                    hot_reload: false,
                 };
                 let broker = toolcage_broker::Broker::new();
                 let mut proxy = toolcage_proxy::Proxy::new()?;
@@ -1610,6 +1623,8 @@ credentials:
                     token_rev_id: String::default(),
                     approval_queue: toolcage_approval::Queue::default(),
                     approval_queue_path: None,
+                    policy_path: None,
+                    hot_reload: false,
                 };
                 let broker = toolcage_broker::Broker::new();
                 let mut proxy = toolcage_proxy::Proxy::new()?;
@@ -2081,7 +2096,7 @@ credentials:
                 "toolcage",
                 &mut std::io::stdout(),
             );
-        },
+        }
     }
     Ok(())
 }

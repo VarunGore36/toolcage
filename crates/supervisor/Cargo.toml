@@ -17,10 +17,12 @@ toolcage-broker = { path = "../broker" }
 toolcage-capability = { path = "../capability" }
 toolcage-backend = { path = "../backend" }
 toolcage-approval = { path = "../approval" }
+notify = { version = "6", optional = true }
 
 [features]
 default = []
 cedar = ["toolcage-policy/cedar"]
+hot-reload = ["notify"]
 
 [dev-dependencies]
 toolcage-guest-agent = { path = "../guest-agent" }

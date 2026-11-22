@@ -208,6 +208,17 @@ impl WarmPool {
     pub fn is_empty(&self) -> bool {
         self.free.is_empty()
     }
+
+    /// Release a paused VM back to the warm pool.
+    /// Pauses the VM if it's running, then returns it to the free pool.
+    pub fn release(&mut self, mut vm: PausedVm) -> anyhow::Result<()> {
+        if vm.started {
+            vm.pause()?;
+        }
+        // The VM is now paused and can be reused
+        self.free.push_back(vm);
+        Ok(())
+    }
 }
 
 /// A paused VM restored from the golden snapshot. Carries no per-session
@@ -362,6 +373,23 @@ impl PausedVm {
             "VM resume failed: HTTP {status}"
         );
         self.started = true;
+        Ok(())
+    }
+
+    /// Pause a running VM (pause it) without terminating it.
+    /// Uses PATCH /vm {"state":"Paused"} — the VM can be resumed later with start().
+    pub fn pause(&mut self) -> anyhow::Result<()> {
+        anyhow::ensure!(self.started, "VM not started");
+        let body = serde_json::to_vec(&VmState {
+            state: "Paused".into(),
+        })?;
+        let resp = http_patch(&self.socket_path, "/vm", &body)?;
+        let status = http_status(&resp)?;
+        anyhow::ensure!(
+            status == 200 || status == 204,
+            "VM pause failed: HTTP {status}"
+        );
+        self.started = false;
         Ok(())
     }
 }
