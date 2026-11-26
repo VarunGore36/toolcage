@@ -17,7 +17,7 @@ toolcage-broker = { path = "../broker" }
 toolcage-capability = { path = "../capability" }
 toolcage-backend = { path = "../backend" }
 toolcage-approval = { path = "../approval" }
-notify = { version = "6", optional = true }
+notify = { version = "9", optional = true }
 
 [features]
 default = []
